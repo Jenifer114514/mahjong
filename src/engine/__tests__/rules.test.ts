@@ -1,0 +1,105 @@
+import { describe, expect, it } from 'vitest';
+import { deriveRules, getRoundMetadata, getSeatWind } from '../rules';
+import { TILE_SETS, type RuleConfig, type TileSetId, type TileSetSpec } from '../../types/rule';
+
+describe('deriveRules (RuleConfig)', () => {
+  const cases: Array<{
+    label: string;
+    config: RuleConfig;
+    expectedTotalTiles: number;
+    expectedInitialPoints: number;
+    expectedSeatWinds: readonly string[];
+    expectedTotalRounds: number;
+    expectedRoundLabels: string[];
+  }> = [
+    {
+      label: '4人・東風戦',
+      config: { playerCount: 4, gameLength: 'tonpuu' },
+      expectedTotalTiles: 136,
+      expectedInitialPoints: 25000,
+      expectedSeatWinds: ['E', 'S', 'W', 'N'],
+      expectedTotalRounds: 4,
+      expectedRoundLabels: ['E1', 'E2', 'E3', 'E4'],
+    },
+    {
+      label: '4人・半荘戦',
+      config: { playerCount: 4, gameLength: 'hanchan' },
+      expectedTotalTiles: 136,
+      expectedInitialPoints: 25000,
+      expectedSeatWinds: ['E', 'S', 'W', 'N'],
+      expectedTotalRounds: 8,
+      expectedRoundLabels: ['E1', 'E2', 'E3', 'E4', 'S1', 'S2', 'S3', 'S4'],
+    },
+    {
+      label: '3人・東風戦',
+      config: { playerCount: 3, gameLength: 'tonpuu' },
+      expectedTotalTiles: 108,
+      expectedInitialPoints: 35000,
+      expectedSeatWinds: ['E', 'S', 'W'],
+      expectedTotalRounds: 3,
+      expectedRoundLabels: ['E1', 'E2', 'E3'],
+    },
+    {
+      label: '3人・半荘戦',
+      config: { playerCount: 3, gameLength: 'hanchan' },
+      expectedTotalTiles: 108,
+      expectedInitialPoints: 35000,
+      expectedSeatWinds: ['E', 'S', 'W'],
+      expectedTotalRounds: 6,
+      expectedRoundLabels: ['E1', 'E2', 'E3', 'S1', 'S2', 'S3'],
+    },
+  ];
+
+  it.each(cases)(
+    '$label のルール値をすべて RuleConfig から導出できる',
+    ({
+      config,
+      expectedTotalTiles,
+      expectedInitialPoints,
+      expectedSeatWinds,
+      expectedTotalRounds,
+      expectedRoundLabels,
+    }) => {
+      const rules = deriveRules(config);
+      expect(rules.totalTiles).toBe(expectedTotalTiles);
+      expect(rules.initialPoints).toBe(expectedInitialPoints);
+      expect(rules.seatWinds).toEqual(expectedSeatWinds);
+      expect(rules.totalRounds).toBe(expectedTotalRounds);
+
+      const roundLabels: string[] = [];
+      for (let i = 0; i < rules.totalRounds; i++) {
+        const meta = getRoundMetadata(i, 0, rules);
+        roundLabels.push(`${meta.roundWind}${meta.kyokuNumber}`);
+        expect(meta.dealerIndex).toBe(i % config.playerCount);
+      }
+      expect(roundLabels).toEqual(expectedRoundLabels);
+    },
+  );
+
+  it('席風が親の移動に合わせて人数通りに回転する', () => {
+    expect(
+      [0, 1, 2].map((seat) => getSeatWind(seat, 1, ['E', 'S', 'W'])),
+    ).toEqual(['W', 'E', 'S']);
+
+    expect(
+      [0, 1, 2, 3].map((seat) => getSeatWind(seat, 2, ['E', 'S', 'W', 'N'])),
+    ).toEqual(['W', 'N', 'E', 'S']);
+  });
+
+  it('三麻の牌構成定数を差し替えられる', () => {
+    const customTileSets: Record<TileSetId, TileSetSpec> = {
+      ...TILE_SETS,
+      sanma_no_2m_to_8m_108: {
+        id: 'sanma_no_2m_to_8m_108',
+        copiesPerKind: 4,
+        // もし将来「1m〜9mすべて除外（100枚）」等に変える場合でも差し替え可能
+        excludedKinds: ['1m', '2m', '3m', '4m', '5m', '6m', '7m', '8m', '9m'],
+      },
+    };
+    const rules = deriveRules(
+      { playerCount: 3, gameLength: 'tonpuu' },
+      customTileSets,
+    );
+    expect(rules.totalTiles).toBe(100);
+  });
+});
