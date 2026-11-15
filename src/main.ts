@@ -24,6 +24,8 @@ class MahjongApp {
   private errorBanner: string | null = null;
   private busy = false;
   private actionInFlight = false;
+  private countdownDeadline: number | null = null;
+  private countdownTimerId: ReturnType<typeof setInterval> | null = null;
 
   private readonly formState: LobbyFormState;
 
@@ -58,8 +60,7 @@ class MahjongApp {
       onViewChange: (view) => {
         this.busy = false;
         this.actionInFlight = false;
-        this.currentView = view;
-        this.render();
+        this.applyStateView(view);
       },
       onStatusChange: (status, detail) => {
         if (status === 'ready') {
@@ -109,8 +110,7 @@ class MahjongApp {
       onViewChange: (view) => {
         this.busy = false;
         this.actionInFlight = false;
-        this.currentView = view;
-        this.render();
+        this.applyStateView(view);
       },
       onStatusChange: (status, detail) => {
         if (status === 'connected') {
@@ -137,6 +137,40 @@ class MahjongApp {
     client.connect();
   }
 
+  private applyStateView(view: StateView): void {
+    this.currentView = view;
+    if (view.phase === 'awaiting_responses' && view.responseRemainingMs !== null) {
+      this.countdownDeadline = Date.now() + view.responseRemainingMs;
+      this.startCountdownTicker();
+    } else {
+      this.stopCountdownTicker();
+    }
+    this.render();
+  }
+
+  private startCountdownTicker(): void {
+    if (this.countdownTimerId !== null) return;
+    this.countdownTimerId = setInterval(() => {
+      if (this.countdownDeadline === null) return;
+      const secs = Math.max(
+        0,
+        Math.ceil((this.countdownDeadline - Date.now()) / 1000),
+      );
+      const nodes = this.root.querySelectorAll('[data-countdown-ms]');
+      nodes.forEach((node) => {
+        node.textContent = String(secs);
+      });
+    }, 250);
+  }
+
+  private stopCountdownTicker(): void {
+    this.countdownDeadline = null;
+    if (this.countdownTimerId !== null) {
+      clearInterval(this.countdownTimerId);
+      this.countdownTimerId = null;
+    }
+  }
+
   private handleGameError(err: GameError): void {
     this.actionInFlight = false;
     this.errorBanner = err.message;
@@ -155,9 +189,17 @@ class MahjongApp {
   }
 
   private cleanupSession(): void {
+    this.stopCountdownTicker();
     if (!this.activeSession) return;
     this.activeSession.session.destroy();
     this.activeSession = null;
+  }
+
+  private dispatchAction(fn: (session: HostSession | ClientSession) => void): void {
+    if (!this.activeSession || this.actionInFlight) return;
+    this.actionInFlight = true;
+    this.errorBanner = null;
+    fn(this.activeSession.session);
   }
 
   private render(): void {
@@ -172,7 +214,7 @@ class MahjongApp {
 
     const title = document.createElement('div');
     title.className = 'app-title';
-    title.textContent = 'PeerJS 対戦リーチ麻雀（第1段階）';
+    title.textContent = 'PeerJS 対戦リーチ麻雀（第2段階）';
 
     const rightControls = document.createElement('div');
     rightControls.style.display = 'flex';
@@ -243,12 +285,16 @@ class MahjongApp {
       renderWaitingRoom(content, view, lobbyHandlers);
     } else {
       renderGameTable(content, view, {
-        onDiscardTile: (tileId) => {
-          if (!this.activeSession || this.actionInFlight) return;
-          this.actionInFlight = true;
-          this.errorBanner = null;
-          this.activeSession.session.discardTile(tileId);
-        },
+        onDiscardTile: (tileId) =>
+          this.dispatchAction((s) => s.discardTile(tileId)),
+        onCallResponse: (choice) =>
+          this.dispatchAction((s) => s.respondToCall(choice)),
+        onDeclareAnkan: (kind) =>
+          this.dispatchAction((s) => s.declareAnkan(kind)),
+        onDeclareKakan: (tileId) =>
+          this.dispatchAction((s) => s.declareKakan(tileId)),
+        onDeclareKita: (tileId) =>
+          this.dispatchAction((s) => s.declareKita(tileId)),
         onAdvanceRound: () => {
           if (this.activeSession?.role === 'host' && !this.actionInFlight) {
             this.actionInFlight = true;

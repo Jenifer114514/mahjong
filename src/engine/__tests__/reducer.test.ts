@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { applyAction, createInitialGameState, reduce, validateAction } from '../reducer';
-import { deriveRules, getSeatWind } from '../rules';
 import type { RuleConfig } from '../../types/rule';
 import type { GameState } from '../../types/state';
+import { applyAction, createInitialGameState, reduce, validateAction } from '../reducer';
+import { deriveRules, getSeatWind } from '../rules';
+import { countAllDeadWallTiles } from '../wall';
+import {
+  assertTileConservation,
+  buildSeededTestDeck,
+  passAllPendingResponses,
+} from './testHelpers';
 
 function setupFullLobby(ruleConfig: RuleConfig): GameState {
   let state = createInitialGameState({
@@ -47,7 +53,7 @@ function playUntilExhaustiveDraw(initial: GameState): GameState {
       tileId: tileToDiscard.id,
     });
     expect(result.error).toBeNull();
-    state = result.state;
+    state = passAllPendingResponses(result.state);
   }
   return state;
 }
@@ -107,7 +113,10 @@ describe('reducer: 4通り (3人/4人 × 東風/半荘) の完全フロー検証
       const rules = deriveRules(ruleConfig);
       let state = setupFullLobby(ruleConfig);
 
-      state = reduce(state, { type: 'START_GAME', seed: 20261116 });
+      state = reduce(state, {
+        type: 'START_GAME',
+        shuffledDeck: buildSeededTestDeck(rules, 20261116),
+      });
       expect(state.phase).toBe('playing');
       expect(state.players).toHaveLength(ruleConfig.playerCount);
 
@@ -136,14 +145,8 @@ describe('reducer: 4通り (3人/4人 × 東風/半荘) の完全フロー検証
         ).toBe('E');
 
         // 合計牌数チェック
-        const roundTileCount =
-          state.players.reduce(
-            (sum, p) => sum + p.hand.length + (p.drawnTile ? 1 : 0),
-            0,
-          ) +
-          round.wall.length +
-          round.deadWall.length;
-        expect(roundTileCount).toBe(expectedTotalTiles);
+        assertTileConservation(state, expectedTotalTiles);
+        expect(countAllDeadWallTiles(round.deadWall)).toBe(14);
         expect(round.wall.length).toBe(expectedPlayableDrawsPerRound - 1);
 
         // 山が尽きるまでツモ→打牌を回す
@@ -162,12 +165,13 @@ describe('reducer: 4通り (3人/4人 × 東風/半荘) の完全フロー検証
           expect(p.hand).toHaveLength(13);
           expect(p.drawnTile).toBeNull();
         }
+        assertTileConservation(state, expectedTotalTiles);
 
         // ホストが次局へ進める
         state = reduce(state, {
           type: 'ADVANCE_ROUND',
           playerId: state.hostPlayerId,
-          seed: 5000 + roundIdx,
+          shuffledDeck: buildSeededTestDeck(rules, 5000 + roundIdx),
         });
       }
 
@@ -201,15 +205,20 @@ describe('reducer: 4通り (3人/4人 × 東風/半荘) の完全フロー検証
 
 describe('reducer & validateAction: 合法性検証', () => {
   it('定員未満では開始できず、定員超過の参加は拒否される', () => {
+    const ruleConfig = { playerCount: 3 as const, gameLength: 'tonpuu' as const };
+    const rules = deriveRules(ruleConfig);
     let state = createInitialGameState({
       roomCode: 'ROOM01',
       hostPlayerId: 'host',
       hostName: 'ホスト',
-      ruleConfig: { playerCount: 3, gameLength: 'tonpuu' },
+      ruleConfig,
     });
 
     expect(
-      validateAction(state, { type: 'START_GAME', seed: 1 })?.code,
+      validateAction(state, {
+        type: 'START_GAME',
+        shuffledDeck: buildSeededTestDeck(rules, 1),
+      })?.code,
     ).toBe('NOT_ENOUGH_PLAYERS');
 
     state = reduce(state, { type: 'JOIN_PLAYER', playerId: 'p2', name: 'P2' });
@@ -225,8 +234,13 @@ describe('reducer & validateAction: 合法性検証', () => {
   });
 
   it('手番外打牌・未所持牌の打牌・非ホストによる次局進行を拒否し状態を変更しない', () => {
-    const lobby = setupFullLobby({ playerCount: 4, gameLength: 'tonpuu' });
-    let state = reduce(lobby, { type: 'START_GAME', seed: 42 });
+    const ruleConfig = { playerCount: 4 as const, gameLength: 'tonpuu' as const };
+    const rules = deriveRules(ruleConfig);
+    const lobby = setupFullLobby(ruleConfig);
+    let state = reduce(lobby, {
+      type: 'START_GAME',
+      shuffledDeck: buildSeededTestDeck(rules, 42),
+    });
 
     const round = state.round!;
     const currentPlayer = state.players.find(
@@ -259,26 +273,33 @@ describe('reducer & validateAction: 合法性検証', () => {
     const nonHostAdvance = applyAction(state, {
       type: 'ADVANCE_ROUND',
       playerId: 'guest-1',
-      seed: 99,
+      shuffledDeck: buildSeededTestDeck(rules, 99),
     });
     expect(nonHostAdvance.error?.code).toBe('UNAUTHORIZED_ACTION');
     expect(nonHostAdvance.state).toBe(state);
   });
 
   it('手出しした牌が捨て牌に並び、ツモ牌が手牌に組み込まれて理牌される', () => {
-    const lobby = setupFullLobby({ playerCount: 4, gameLength: 'tonpuu' });
-    const started = reduce(lobby, { type: 'START_GAME', seed: 777 });
+    const ruleConfig = { playerCount: 4 as const, gameLength: 'tonpuu' as const };
+    const rules = deriveRules(ruleConfig);
+    const lobby = setupFullLobby(ruleConfig);
+    const started = reduce(lobby, {
+      type: 'START_GAME',
+      shuffledDeck: buildSeededTestDeck(rules, 777),
+    });
     const dealer = started.players.find(
       (p) => p.seatIndex === started.round!.currentTurnIndex,
     )!;
     const discardTarget = dealer.hand[0]!;
     const drawnBefore = dealer.drawnTile!;
 
-    const after = reduce(started, {
-      type: 'DISCARD_TILE',
-      playerId: dealer.playerId,
-      tileId: discardTarget.id,
-    });
+    const after = passAllPendingResponses(
+      reduce(started, {
+        type: 'DISCARD_TILE',
+        playerId: dealer.playerId,
+        tileId: discardTarget.id,
+      }),
+    );
 
     const updatedDealer = after.players.find(
       (p) => p.playerId === dealer.playerId,

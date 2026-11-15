@@ -1,5 +1,11 @@
 import {
+  DEAD_WALL_DORA_COUNT,
+  DEAD_WALL_RINSHAN_COUNT,
   DEAD_WALL_SIZE_BY_PLAYERS,
+  DEAD_WALL_URA_DORA_COUNT,
+  DEFAULT_KANDORA_TIMING,
+  DEFAULT_MAX_KANS_PER_ROUND,
+  DEFAULT_RESPONSE_TIMEOUT_MS,
   DEFAULT_TILE_SET_BY_PLAYERS,
   HAND_SIZE,
   INITIAL_POINTS_BY_PLAYERS,
@@ -42,6 +48,20 @@ export function deriveRules(
     totalRounds,
     handSize: HAND_SIZE,
     deadWallSize,
+    rinshanSize: DEAD_WALL_RINSHAN_COUNT,
+    doraIndicatorCount: DEAD_WALL_DORA_COUNT,
+    uraDoraIndicatorCount: DEAD_WALL_URA_DORA_COUNT,
+    allowChi: config.allowChi ?? config.playerCount === 4,
+    allowKita: config.allowKita ?? config.playerCount === 3,
+    doubleRon: config.doubleRon ?? true,
+    forbidKuikae: config.forbidKuikae ?? true,
+    responseTimeoutMs: config.responseTimeoutMs ?? DEFAULT_RESPONSE_TIMEOUT_MS,
+    maxKansPerRound: config.maxKansPerRound ?? DEFAULT_MAX_KANS_PER_ROUND,
+    kandoraTiming: {
+      ankan: config.kandoraTiming?.ankan ?? DEFAULT_KANDORA_TIMING.ankan,
+      daiminkan: config.kandoraTiming?.daiminkan ?? DEFAULT_KANDORA_TIMING.daiminkan,
+      kakan: config.kandoraTiming?.kakan ?? DEFAULT_KANDORA_TIMING.kakan,
+    },
   };
 }
 

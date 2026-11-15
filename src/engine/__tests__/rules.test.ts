@@ -11,6 +11,8 @@ describe('deriveRules (RuleConfig)', () => {
     expectedSeatWinds: readonly string[];
     expectedTotalRounds: number;
     expectedRoundLabels: string[];
+    expectedAllowChi: boolean;
+    expectedAllowKita: boolean;
   }> = [
     {
       label: '4人・東風戦',
@@ -20,6 +22,8 @@ describe('deriveRules (RuleConfig)', () => {
       expectedSeatWinds: ['E', 'S', 'W', 'N'],
       expectedTotalRounds: 4,
       expectedRoundLabels: ['E1', 'E2', 'E3', 'E4'],
+      expectedAllowChi: true,
+      expectedAllowKita: false,
     },
     {
       label: '4人・半荘戦',
@@ -29,6 +33,8 @@ describe('deriveRules (RuleConfig)', () => {
       expectedSeatWinds: ['E', 'S', 'W', 'N'],
       expectedTotalRounds: 8,
       expectedRoundLabels: ['E1', 'E2', 'E3', 'E4', 'S1', 'S2', 'S3', 'S4'],
+      expectedAllowChi: true,
+      expectedAllowKita: false,
     },
     {
       label: '3人・東風戦',
@@ -38,6 +44,8 @@ describe('deriveRules (RuleConfig)', () => {
       expectedSeatWinds: ['E', 'S', 'W'],
       expectedTotalRounds: 3,
       expectedRoundLabels: ['E1', 'E2', 'E3'],
+      expectedAllowChi: false,
+      expectedAllowKita: true,
     },
     {
       label: '3人・半荘戦',
@@ -47,6 +55,8 @@ describe('deriveRules (RuleConfig)', () => {
       expectedSeatWinds: ['E', 'S', 'W'],
       expectedTotalRounds: 6,
       expectedRoundLabels: ['E1', 'E2', 'E3', 'S1', 'S2', 'S3'],
+      expectedAllowChi: false,
+      expectedAllowKita: true,
     },
   ];
 
@@ -59,12 +69,25 @@ describe('deriveRules (RuleConfig)', () => {
       expectedSeatWinds,
       expectedTotalRounds,
       expectedRoundLabels,
+      expectedAllowChi,
+      expectedAllowKita,
     }) => {
       const rules = deriveRules(config);
       expect(rules.totalTiles).toBe(expectedTotalTiles);
       expect(rules.initialPoints).toBe(expectedInitialPoints);
       expect(rules.seatWinds).toEqual(expectedSeatWinds);
       expect(rules.totalRounds).toBe(expectedTotalRounds);
+      expect(rules.allowChi).toBe(expectedAllowChi);
+      expect(rules.allowKita).toBe(expectedAllowKita);
+      expect(rules.doubleRon).toBe(true);
+      expect(rules.forbidKuikae).toBe(true);
+      expect(rules.responseTimeoutMs).toBe(15000);
+      expect(rules.maxKansPerRound).toBe(4);
+      expect(rules.kandoraTiming).toEqual({
+        ankan: 'immediate',
+        daiminkan: 'after_discard',
+        kakan: 'after_discard',
+      });
 
       const roundLabels: string[] = [];
       for (let i = 0; i < rules.totalRounds; i++) {
@@ -92,7 +115,6 @@ describe('deriveRules (RuleConfig)', () => {
       sanma_no_2m_to_8m_108: {
         id: 'sanma_no_2m_to_8m_108',
         copiesPerKind: 4,
-        // もし将来「1m〜9mすべて除外（100枚）」等に変える場合でも差し替え可能
         excludedKinds: ['1m', '2m', '3m', '4m', '5m', '6m', '7m', '8m', '9m'],
       },
     };
