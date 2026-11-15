@@ -1,5 +1,7 @@
 import Peer, { type DataConnection } from 'peerjs';
 import type { ClientMessage, GameError, StateView } from '../types/message';
+import type { CallResponseChoice } from '../types/state';
+import type { TileKind } from '../types/tile';
 import {
   PEER_OPTIONS,
   normalizeRoomCode,
@@ -162,6 +164,34 @@ export class ClientSession {
     this.send({
       kind: 'ACTION',
       action: { type: 'DISCARD_TILE', tileId },
+    });
+  }
+
+  respondToCall(choice: CallResponseChoice): void {
+    this.send({
+      kind: 'ACTION',
+      action: { type: 'CALL_RESPONSE', choice },
+    });
+  }
+
+  declareAnkan(kind: TileKind): void {
+    this.send({
+      kind: 'ACTION',
+      action: { type: 'DECLARE_ANKAN', kind },
+    });
+  }
+
+  declareKakan(tileId: string): void {
+    this.send({
+      kind: 'ACTION',
+      action: { type: 'DECLARE_KAKAN', tileId },
+    });
+  }
+
+  declareKita(tileId: string): void {
+    this.send({
+      kind: 'ACTION',
+      action: { type: 'DECLARE_KITA', tileId },
     });
   }
 

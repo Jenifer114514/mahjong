@@ -42,8 +42,11 @@ export function formatTileLabel(kind: TileKind): string {
 
 export interface TileElementOptions {
   clickable?: boolean;
+  disabled?: boolean;
+  disabledReason?: string;
   tsumogiri?: boolean;
   latestDiscard?: boolean;
+  called?: boolean;
   small?: boolean;
   onClick?: () => void;
 }
@@ -52,14 +55,27 @@ export function createTileElement(
   tile: Tile,
   options: TileElementOptions = {},
 ): HTMLElement {
-  const el = document.createElement(options.clickable ? 'button' : 'div');
+  const isButton = Boolean(options.clickable || options.disabled);
+  const el = document.createElement(isButton ? 'button' : 'div');
   if (el instanceof HTMLButtonElement) {
     el.type = 'button';
+    if (options.disabled) {
+      el.disabled = true;
+    }
   }
   el.className = 'mj-tile';
-  if (options.clickable) el.classList.add('mj-tile-clickable');
+  if (options.clickable && !options.disabled) {
+    el.classList.add('mj-tile-clickable');
+  }
+  if (options.disabled) {
+    el.classList.add('mj-tile-disabled');
+    if (options.disabledReason) {
+      el.title = options.disabledReason;
+    }
+  }
   if (options.tsumogiri) el.classList.add('mj-tile-tsumogiri');
   if (options.latestDiscard) el.classList.add('mj-tile-latest');
+  if (options.called) el.classList.add('mj-tile-called');
   if (options.small) el.classList.add('mj-tile-sm');
 
   el.setAttribute('aria-label', formatTileLabel(tile.kind));
@@ -82,7 +98,8 @@ export function createTileElement(
 
     const top = document.createElement('span');
     top.className = 'mj-tile-rank';
-    top.textContent = suit === 'm' ? (KANJI_NUMBERS[rank] ?? String(rank)) : String(rank);
+    top.textContent =
+      suit === 'm' ? (KANJI_NUMBERS[rank] ?? String(rank)) : String(rank);
 
     const bottom = document.createElement('span');
     bottom.className = 'mj-tile-suit';
@@ -101,16 +118,22 @@ export function createTileElement(
     el.append(top, bottom);
   }
 
-  if (options.clickable && options.onClick) {
+  if (options.clickable && !options.disabled && options.onClick) {
     el.addEventListener('click', options.onClick);
   }
 
   return el;
 }
 
-export function createTileBackElement(small = true): HTMLElement {
+export function createTileBackElement(
+  small = true,
+  tileSized = false,
+): HTMLElement {
   const el = document.createElement('div');
-  el.className = small ? 'mj-tile mj-tile-back mj-tile-sm' : 'mj-tile mj-tile-back';
+  const classes = ['mj-tile', 'mj-tile-back'];
+  if (small) classes.push('mj-tile-sm');
+  if (tileSized) classes.push('mj-tile-back-meld');
+  el.className = classes.join(' ');
   el.setAttribute('aria-hidden', 'true');
   return el;
 }

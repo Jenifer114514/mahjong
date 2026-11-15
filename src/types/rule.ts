@@ -5,12 +5,33 @@ export type GameLength = 'tonpuu' | 'hanchan';
 export type Wind = 'E' | 'S' | 'W' | 'N';
 
 export type TileSetId = 'standard_136' | 'sanma_no_2m_to_8m_108';
+export type KandoraRevealTiming = 'immediate' | 'after_discard';
+
+export interface KandoraTimingConfig {
+  ankan: KandoraRevealTiming;
+  daiminkan: KandoraRevealTiming;
+  kakan: KandoraRevealTiming;
+}
 
 export interface RuleConfig {
   playerCount: PlayerCount;
   gameLength: GameLength;
   /** 省略時は DEFAULT_TILE_SET_BY_PLAYERS[playerCount] を使用（将来の差し替え用） */
   tileSetId?: TileSetId;
+  /** チー許可（既定: 4人のみ true、3人は false） */
+  allowChi?: boolean;
+  /** 北抜き許可（既定: 3人のみ true、4人は false） */
+  allowKita?: boolean;
+  /** ダブロン許可（既定: true。false なら頭ハネ） */
+  doubleRon?: boolean;
+  /** 喰い替え禁止（既定: true） */
+  forbidKuikae?: boolean;
+  /** 鳴き応答タイムアウト(ms)（既定: 15000） */
+  responseTimeoutMs?: number;
+  /** 1局あたりの合計カン上限（既定: 4） */
+  maxKansPerRound?: number;
+  /** カンドラ表示牌をめくる時期（既定: 暗槓=即時、大明槓・加槓=打牌後） */
+  kandoraTiming?: Partial<KandoraTimingConfig>;
 }
 
 /** 将来のローカルルール変更に備えて差し替え可能な定数群 */
@@ -31,9 +52,24 @@ export const ROUND_WINDS_BY_LENGTH: Record<GameLength, readonly Wind[]> = {
 
 export const HAND_SIZE = 13;
 
+export const DEAD_WALL_RINSHAN_COUNT = 4;
+export const DEAD_WALL_DORA_COUNT = 5;
+export const DEAD_WALL_URA_DORA_COUNT = 5;
+export const DEAD_WALL_TOTAL_SIZE =
+  DEAD_WALL_RINSHAN_COUNT + DEAD_WALL_DORA_COUNT + DEAD_WALL_URA_DORA_COUNT;
+
 export const DEAD_WALL_SIZE_BY_PLAYERS: Record<PlayerCount, number> = {
-  4: 14,
-  3: 14,
+  4: DEAD_WALL_TOTAL_SIZE,
+  3: DEAD_WALL_TOTAL_SIZE,
+};
+
+export const DEFAULT_RESPONSE_TIMEOUT_MS = 15000;
+export const DEFAULT_MAX_KANS_PER_ROUND = 4;
+
+export const DEFAULT_KANDORA_TIMING: KandoraTimingConfig = {
+  ankan: 'immediate',
+  daiminkan: 'after_discard',
+  kakan: 'after_discard',
 };
 
 export const DEFAULT_TILE_SET_BY_PLAYERS: Record<PlayerCount, TileSetId> = {
@@ -75,4 +111,14 @@ export interface DerivedRules {
   totalRounds: number;
   handSize: number;
   deadWallSize: number;
+  rinshanSize: number;
+  doraIndicatorCount: number;
+  uraDoraIndicatorCount: number;
+  allowChi: boolean;
+  allowKita: boolean;
+  doubleRon: boolean;
+  forbidKuikae: boolean;
+  responseTimeoutMs: number;
+  maxKansPerRound: number;
+  kandoraTiming: KandoraTimingConfig;
 }

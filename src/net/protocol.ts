@@ -1,9 +1,12 @@
 import type { PeerOptions } from 'peerjs';
 import type { ClientMessage, GameError, HostMessage, StateView } from '../types/message';
+import type { CallResponseChoice } from '../types/state';
+import { ALL_TILE_KINDS, type TileKind } from '../types/tile';
 
 export const PEER_ID_PREFIX = 'arena-mj-';
 const ROOM_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const ROOM_CODE_LENGTH = 6;
+const VALID_TILE_KINDS = new Set<string>(ALL_TILE_KINDS);
 
 export const PEER_OPTIONS: PeerOptions = {
   debug: 1,
@@ -41,17 +44,51 @@ export function roomCodeToPeerId(roomCode: string): string {
   return `${PEER_ID_PREFIX}${normalizeRoomCode(roomCode)}`;
 }
 
-export function createRandomSeed(): number {
-  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
-    const buf = new Uint32Array(1);
-    crypto.getRandomValues(buf);
-    return buf[0]! || 1;
-  }
-  return Math.floor(Math.random() * 0xffffffff) || 1;
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0;
+}
+
+function parseTileIdPair(value: unknown): [string, string] | null {
+  if (!Array.isArray(value) || value.length !== 2) {
+    return null;
+  }
+  if (!isNonEmptyString(value[0]) || !isNonEmptyString(value[1])) {
+    return null;
+  }
+  return [value[0], value[1]];
+}
+
+function parseCallResponseChoice(raw: unknown): CallResponseChoice | null {
+  if (!isRecord(raw) || typeof raw.type !== 'string') {
+    return null;
+  }
+  switch (raw.type) {
+    case 'pass':
+      return { type: 'pass' };
+    case 'ron':
+      return { type: 'ron' };
+    case 'daiminkan':
+      return { type: 'daiminkan' };
+    case 'pon': {
+      if (raw.tileIds === undefined) {
+        return { type: 'pon' };
+      }
+      const pair = parseTileIdPair(raw.tileIds);
+      if (!pair) return null;
+      return { type: 'pon', tileIds: pair };
+    }
+    case 'chi': {
+      const pair = parseTileIdPair(raw.tileIds);
+      if (!pair) return null;
+      return { type: 'chi', tileIds: pair };
+    }
+    default:
+      return null;
+  }
 }
 
 export function parseClientMessage(raw: unknown): ClientMessage | null {
@@ -73,25 +110,82 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
     if (!isRecord(raw.action) || typeof raw.action.type !== 'string') {
       return null;
     }
-    if (raw.action.type === 'DISCARD_TILE') {
-      if (typeof raw.action.tileId !== 'string' || raw.action.tileId.length === 0) {
-        return null;
+
+    switch (raw.action.type) {
+      case 'DISCARD_TILE': {
+        if (!isNonEmptyString(raw.action.tileId)) {
+          return null;
+        }
+        return {
+          kind: 'ACTION',
+          action: {
+            type: 'DISCARD_TILE',
+            tileId: raw.action.tileId,
+          },
+        };
       }
-      return {
-        kind: 'ACTION',
-        action: {
-          type: 'DISCARD_TILE',
-          tileId: raw.action.tileId,
-        },
-      };
-    }
-    if (raw.action.type === 'ADVANCE_ROUND') {
-      return {
-        kind: 'ACTION',
-        action: {
-          type: 'ADVANCE_ROUND',
-        },
-      };
+      case 'CALL_RESPONSE': {
+        const choice = parseCallResponseChoice(raw.action.choice);
+        if (!choice) {
+          return null;
+        }
+        return {
+          kind: 'ACTION',
+          action: {
+            type: 'CALL_RESPONSE',
+            choice,
+          },
+        };
+      }
+      case 'DECLARE_ANKAN': {
+        if (
+          typeof raw.action.kind !== 'string' ||
+          !VALID_TILE_KINDS.has(raw.action.kind)
+        ) {
+          return null;
+        }
+        return {
+          kind: 'ACTION',
+          action: {
+            type: 'DECLARE_ANKAN',
+            kind: raw.action.kind as TileKind,
+          },
+        };
+      }
+      case 'DECLARE_KAKAN': {
+        if (!isNonEmptyString(raw.action.tileId)) {
+          return null;
+        }
+        return {
+          kind: 'ACTION',
+          action: {
+            type: 'DECLARE_KAKAN',
+            tileId: raw.action.tileId,
+          },
+        };
+      }
+      case 'DECLARE_KITA': {
+        if (!isNonEmptyString(raw.action.tileId)) {
+          return null;
+        }
+        return {
+          kind: 'ACTION',
+          action: {
+            type: 'DECLARE_KITA',
+            tileId: raw.action.tileId,
+          },
+        };
+      }
+      case 'ADVANCE_ROUND': {
+        return {
+          kind: 'ACTION',
+          action: {
+            type: 'ADVANCE_ROUND',
+          },
+        };
+      }
+      default:
+        return null;
     }
   }
 

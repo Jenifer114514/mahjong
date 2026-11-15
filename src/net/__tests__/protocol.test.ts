@@ -40,6 +40,64 @@ describe('net/protocol', () => {
       action: { type: 'ADVANCE_ROUND' },
     });
 
+    // Stage 2 actions
+    expect(
+      parseClientMessage({
+        kind: 'ACTION',
+        action: { type: 'CALL_RESPONSE', choice: { type: 'pass' } },
+      }),
+    ).toEqual({
+      kind: 'ACTION',
+      action: { type: 'CALL_RESPONSE', choice: { type: 'pass' } },
+    });
+
+    expect(
+      parseClientMessage({
+        kind: 'ACTION',
+        action: {
+          type: 'CALL_RESPONSE',
+          choice: { type: 'chi', tileIds: ['2m-0', '3m-0'] },
+        },
+      }),
+    ).toEqual({
+      kind: 'ACTION',
+      action: {
+        type: 'CALL_RESPONSE',
+        choice: { type: 'chi', tileIds: ['2m-0', '3m-0'] },
+      },
+    });
+
+    expect(
+      parseClientMessage({
+        kind: 'ACTION',
+        action: { type: 'DECLARE_ANKAN', kind: '1m' },
+      }),
+    ).toEqual({
+      kind: 'ACTION',
+      action: { type: 'DECLARE_ANKAN', kind: '1m' },
+    });
+
+    expect(
+      parseClientMessage({
+        kind: 'ACTION',
+        action: { type: 'DECLARE_KAKAN', tileId: '1z-2' },
+      }),
+    ).toEqual({
+      kind: 'ACTION',
+      action: { type: 'DECLARE_KAKAN', tileId: '1z-2' },
+    });
+
+    expect(
+      parseClientMessage({
+        kind: 'ACTION',
+        action: { type: 'DECLARE_KITA', tileId: '4z-0' },
+      }),
+    ).toEqual({
+      kind: 'ACTION',
+      action: { type: 'DECLARE_KITA', tileId: '4z-0' },
+    });
+
+    // Invalid cases
     expect(parseClientMessage(null)).toBeNull();
     expect(parseClientMessage({ kind: 'JOIN', playerName: 123 })).toBeNull();
     expect(
@@ -51,7 +109,19 @@ describe('net/protocol', () => {
     expect(
       parseClientMessage({
         kind: 'ACTION',
-        action: { type: 'START_GAME', seed: 1 },
+        action: { type: 'START_GAME', shuffledDeck: [] },
+      }),
+    ).toBeNull();
+    expect(
+      parseClientMessage({
+        kind: 'ACTION',
+        action: { type: 'DECLARE_ANKAN', kind: '9z' },
+      }),
+    ).toBeNull();
+    expect(
+      parseClientMessage({
+        kind: 'ACTION',
+        action: { type: 'CALL_RESPONSE', choice: { type: 'chi', tileIds: ['only-one'] } },
       }),
     ).toBeNull();
   });
@@ -80,6 +150,10 @@ describe('net/protocol', () => {
           players: [],
           myHand: [],
           myDrawnTile: null,
+          myCallOptions: null,
+          mySelfActions: null,
+          kuikaeForbiddenKinds: [],
+          responseRemainingMs: null,
           round: null,
         },
       }),

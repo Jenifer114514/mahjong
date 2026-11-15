@@ -2,12 +2,13 @@ import Peer, { type DataConnection } from 'peerjs';
 import { toStateView } from '../engine/projection';
 import { applyAction, createInitialGameState } from '../engine/reducer';
 import { deriveRules } from '../engine/rules';
+import { buildTileDeck, shuffleWithCrypto } from '../engine/wall';
 import type { Action, GameError, HostMessage, StateView } from '../types/message';
 import type { RuleConfig } from '../types/rule';
-import type { GameState } from '../types/state';
+import type { CallResponseChoice, GameState } from '../types/state';
+import type { TileKind } from '../types/tile';
 import {
   PEER_OPTIONS,
-  createRandomSeed,
   generateRoomCode,
   parseClientMessage,
   roomCodeToPeerId,
@@ -28,6 +29,7 @@ export class HostSession {
   private readonly callbacks: HostSessionCallbacks;
   private destroyed = false;
   private idRetryCount = 0;
+  private responseTimerId: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     hostName: string,
@@ -195,39 +197,75 @@ export class HostSession {
       let nextState = joinResult.state;
       const rules = deriveRules(nextState.ruleConfig);
 
-      // 設定した人数が揃ったら自動開局
+      // 設定した人数が揃ったら自動開局（CSPRNG で席順と山牌をシャッフル）
       if (
         nextState.phase === 'lobby' &&
         nextState.players.length === rules.playerCount
       ) {
+        const shuffledPlayerIds = shuffleWithCrypto(
+          nextState.players.map((p) => p.playerId),
+        );
+        const shuffledDeck = shuffleWithCrypto(buildTileDeck(rules));
         const startResult = applyAction(nextState, {
           type: 'START_GAME',
-          seed: createRandomSeed(),
+          shuffledDeck,
+          shuffledPlayerIds,
         });
         if (!startResult.error) {
           nextState = startResult.state;
         }
       }
 
-      this.state = nextState;
-      this.broadcastViews();
+      this.commitState(nextState);
       return;
     }
 
-    // message.kind === 'ACTION'
+    const rules = deriveRules(this.state.ruleConfig);
     let engineAction: Action;
-    if (message.action.type === 'DISCARD_TILE') {
-      engineAction = {
-        type: 'DISCARD_TILE',
-        playerId,
-        tileId: message.action.tileId,
-      };
-    } else {
-      engineAction = {
-        type: 'ADVANCE_ROUND',
-        playerId,
-        seed: createRandomSeed(),
-      };
+    switch (message.action.type) {
+      case 'DISCARD_TILE':
+        engineAction = {
+          type: 'DISCARD_TILE',
+          playerId,
+          tileId: message.action.tileId,
+          now: Date.now(),
+        };
+        break;
+      case 'CALL_RESPONSE':
+        engineAction = {
+          type: 'CALL_RESPONSE',
+          playerId,
+          choice: message.action.choice,
+        };
+        break;
+      case 'DECLARE_ANKAN':
+        engineAction = {
+          type: 'DECLARE_ANKAN',
+          playerId,
+          kind: message.action.kind,
+        };
+        break;
+      case 'DECLARE_KAKAN':
+        engineAction = {
+          type: 'DECLARE_KAKAN',
+          playerId,
+          tileId: message.action.tileId,
+        };
+        break;
+      case 'DECLARE_KITA':
+        engineAction = {
+          type: 'DECLARE_KITA',
+          playerId,
+          tileId: message.action.tileId,
+        };
+        break;
+      case 'ADVANCE_ROUND':
+        engineAction = {
+          type: 'ADVANCE_ROUND',
+          playerId,
+          shuffledDeck: shuffleWithCrypto(buildTileDeck(rules)),
+        };
+        break;
     }
 
     const result = applyAction(this.state, engineAction);
@@ -239,8 +277,7 @@ export class HostSession {
       return;
     }
 
-    this.state = result.state;
-    this.broadcastViews();
+    this.commitState(result.state);
   }
 
   private handlePeerDisconnect(playerId: string): void {
@@ -254,54 +291,135 @@ export class HostSession {
 
     const result = applyAction(this.state, action);
     if (!result.error) {
-      this.state = result.state;
-      this.broadcastViews();
+      this.commitState(result.state);
     }
+  }
+
+  private dispatchHostAction(action: Action): void {
+    const result = applyAction(this.state, action);
+    if (result.error) {
+      this.callbacks.onError(result.error);
+      return;
+    }
+    this.commitState(result.state);
   }
 
   discardTile(tileId: string): void {
-    const result = applyAction(this.state, {
+    this.dispatchHostAction({
       type: 'DISCARD_TILE',
       playerId: this.state.hostPlayerId,
       tileId,
+      now: Date.now(),
     });
-    if (result.error) {
-      this.callbacks.onError(result.error);
-      return;
-    }
-    this.state = result.state;
-    this.broadcastViews();
+  }
+
+  respondToCall(choice: CallResponseChoice): void {
+    this.dispatchHostAction({
+      type: 'CALL_RESPONSE',
+      playerId: this.state.hostPlayerId,
+      choice,
+    });
+  }
+
+  declareAnkan(kind: TileKind): void {
+    this.dispatchHostAction({
+      type: 'DECLARE_ANKAN',
+      playerId: this.state.hostPlayerId,
+      kind,
+    });
+  }
+
+  declareKakan(tileId: string): void {
+    this.dispatchHostAction({
+      type: 'DECLARE_KAKAN',
+      playerId: this.state.hostPlayerId,
+      tileId,
+    });
+  }
+
+  declareKita(tileId: string): void {
+    this.dispatchHostAction({
+      type: 'DECLARE_KITA',
+      playerId: this.state.hostPlayerId,
+      tileId,
+    });
   }
 
   advanceRound(): void {
-    const result = applyAction(this.state, {
+    const rules = deriveRules(this.state.ruleConfig);
+    this.dispatchHostAction({
       type: 'ADVANCE_ROUND',
       playerId: this.state.hostPlayerId,
-      seed: createRandomSeed(),
+      shuffledDeck: shuffleWithCrypto(buildTileDeck(rules)),
     });
-    if (result.error) {
-      this.callbacks.onError(result.error);
-      return;
-    }
-    this.state = result.state;
+  }
+
+  private commitState(nextState: GameState): void {
+    this.state = nextState;
+    this.syncResponseTimer();
     this.broadcastViews();
   }
 
+  private clearResponseTimer(): void {
+    if (this.responseTimerId !== null) {
+      clearTimeout(this.responseTimerId);
+      this.responseTimerId = null;
+    }
+  }
+
+  private syncResponseTimer(): void {
+    this.clearResponseTimer();
+    if (
+      this.destroyed ||
+      this.state.phase !== 'awaiting_responses' ||
+      !this.state.round?.pendingResponse
+    ) {
+      return;
+    }
+    const rules = deriveRules(this.state.ruleConfig);
+    if (rules.responseTimeoutMs <= 0) {
+      return;
+    }
+    const pending = this.state.round.pendingResponse;
+    const delayMs = Math.max(
+      0,
+      pending.openedAt + rules.responseTimeoutMs - Date.now(),
+    );
+    const scheduledTurnCount = pending.turnCount;
+
+    this.responseTimerId = setTimeout(() => {
+      this.responseTimerId = null;
+      if (this.destroyed) return;
+      const result = applyAction(this.state, {
+        type: 'RESPONSE_TIMEOUT',
+        playerId: this.state.hostPlayerId,
+        turnCount: scheduledTurnCount,
+      });
+      if (!result.error) {
+        this.commitState(result.state);
+      }
+    }, delayMs);
+  }
+
   private emitHostView(): void {
+    const now = Date.now();
     this.callbacks.onViewChange(
-      toStateView(this.state, this.state.hostPlayerId),
+      toStateView(this.state, this.state.hostPlayerId, now),
     );
   }
 
   private broadcastViews(): void {
-    this.emitHostView();
+    const now = Date.now();
+    this.callbacks.onViewChange(
+      toStateView(this.state, this.state.hostPlayerId, now),
+    );
     for (const player of this.state.players) {
       if (player.playerId === this.state.hostPlayerId) continue;
       const conn = this.connections.get(player.playerId);
       if (conn && conn.open) {
         this.sendToConn(conn, {
           kind: 'STATE_VIEW',
-          payload: toStateView(this.state, player.playerId),
+          payload: toStateView(this.state, player.playerId, now),
         });
       }
     }
@@ -319,6 +437,7 @@ export class HostSession {
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
+    this.clearResponseTimer();
     for (const conn of this.connections.values()) {
       conn.close();
     }

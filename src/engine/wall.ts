@@ -1,33 +1,33 @@
-import type { DerivedRules } from '../types/rule';
+import type { DerivedRules, KandoraRevealTiming } from '../types/rule';
+import type { DeadWallState } from '../types/state';
 import { ALL_TILE_KINDS, type Tile, type TileKind } from '../types/tile';
 
 const TILE_ORDER = new Map<TileKind, number>(
   ALL_TILE_KINDS.map((kind, idx) => [kind, idx]),
 );
 
-/** Mulberry32 決定論的疑似乱数生成器 */
-export function createRng(seed: number): () => number {
-  let state = seed >>> 0;
-  return () => {
-    state = (state + 0x6d2b79f5) >>> 0;
-    let t = Math.imul(state ^ (state >>> 15), 1 | state);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
+function secureRandomIndex(maxExclusive: number): number {
+  if (maxExclusive <= 1) return 0;
+  if (typeof crypto === 'undefined' || typeof crypto.getRandomValues !== 'function') {
+    return Math.floor(Math.random() * maxExclusive);
+  }
+  const range = 0x100000000;
+  const limit = range - (range % maxExclusive);
+  const buf = new Uint32Array(1);
+  while (true) {
+    crypto.getRandomValues(buf);
+    const val = buf[0]!;
+    if (val < limit) {
+      return val % maxExclusive;
+    }
+  }
 }
 
-export function deriveSubSeed(seed: number, salt: number): number {
-  let h = (seed ^ Math.imul(salt + 1, 0x9e3779b1)) >>> 0;
-  h = Math.imul(h ^ (h >>> 16), 0x85ebca6b) >>> 0;
-  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35) >>> 0;
-  return (h ^ (h >>> 16)) >>> 0;
-}
-
-export function shuffleWithSeed<T>(items: readonly T[], seed: number): T[] {
+/** CSPRNG (crypto.getRandomValues) を使った偏りのない Fisher-Yates シャッフル */
+export function shuffleWithCrypto<T>(items: readonly T[]): T[] {
   const result = [...items];
-  const rng = createRng(seed);
   for (let i = result.length - 1; i > 0; i--) {
-    const j = Math.floor(rng() * (i + 1));
+    const j = secureRandomIndex(i + 1);
     const itemI = result[i]!;
     const itemJ = result[j]!;
     result[i] = itemJ;
@@ -61,31 +61,76 @@ export function buildTileDeck(rules: DerivedRules): Tile[] {
   return deck;
 }
 
+export function validateDeckForRules(
+  rules: DerivedRules,
+  deck: readonly Tile[],
+): boolean {
+  if (deck.length !== rules.totalTiles) {
+    return false;
+  }
+  const expected = buildTileDeck(rules);
+  const expectedById = new Map<string, TileKind>(
+    expected.map((t) => [t.id, t.kind]),
+  );
+  const seen = new Set<string>();
+  for (const tile of deck) {
+    if (!tile || typeof tile.id !== 'string' || typeof tile.kind !== 'string') {
+      return false;
+    }
+    if (seen.has(tile.id)) {
+      return false;
+    }
+    const expectedKind = expectedById.get(tile.id);
+    if (expectedKind !== tile.kind) {
+      return false;
+    }
+    seen.add(tile.id);
+  }
+  return seen.size === rules.totalTiles;
+}
+
 export interface DealtRound {
   hands: Tile[][];
   dealerDrawnTile: Tile;
   wall: Tile[];
-  deadWall: Tile[];
+  deadWall: DeadWallState;
 }
 
-export function dealRound(
+/** シャッフル済みの山配列から決定論的に配牌・王牌を構築する */
+export function dealRoundFromDeck(
   rules: DerivedRules,
   dealerIndex: number,
-  seed: number,
+  shuffledDeck: readonly Tile[],
 ): DealtRound {
-  const deck = buildTileDeck(rules);
-  const shuffled = shuffleWithSeed(deck, seed);
-
   const requiredForDeal = rules.playerCount * rules.handSize + 1;
-  if (shuffled.length < requiredForDeal + rules.deadWallSize) {
+  if (shuffledDeck.length < requiredForDeal + rules.deadWallSize) {
     throw new Error(
-      `Insufficient tiles (${shuffled.length}) for ${rules.playerCount} players`,
+      `Insufficient tiles (${shuffledDeck.length}) for ${rules.playerCount} players`,
     );
   }
 
-  const liveEndIndex = shuffled.length - rules.deadWallSize;
-  const liveWall = shuffled.slice(0, liveEndIndex);
-  const deadWall = shuffled.slice(liveEndIndex);
+  const deck = shuffledDeck.map((t) => ({ ...t }));
+  const liveEndIndex = deck.length - rules.deadWallSize;
+  const liveWall = deck.slice(0, liveEndIndex);
+  const deadWallSlice = deck.slice(liveEndIndex);
+
+  const rinshanTiles = deadWallSlice.slice(0, rules.rinshanSize);
+  const doraIndicators = deadWallSlice.slice(
+    rules.rinshanSize,
+    rules.rinshanSize + rules.doraIndicatorCount,
+  );
+  const uraDoraIndicators = deadWallSlice.slice(
+    rules.rinshanSize + rules.doraIndicatorCount,
+    rules.rinshanSize + rules.doraIndicatorCount + rules.uraDoraIndicatorCount,
+  );
+
+  const deadWall: DeadWallState = {
+    rinshanTiles,
+    doraIndicators,
+    uraDoraIndicators,
+    revealedDoraCount: 1,
+    pendingKandoraCount: 0,
+  };
 
   const hands: Tile[][] = Array.from({ length: rules.playerCount }, () => []);
   let cursor = 0;
@@ -120,4 +165,71 @@ export function dealRound(
     wall: remainingWall,
     deadWall,
   };
+}
+
+/** 嶺上牌を1枚引き、牌山の最後尾から1枚を王牌へ補充する */
+export function drawRinshanAndReplenish(
+  wall: readonly Tile[],
+  deadWall: DeadWallState,
+): { drawnTile: Tile; wall: Tile[]; deadWall: DeadWallState } {
+  if (wall.length === 0) {
+    throw new Error('Cannot draw rinshan tile when live wall is empty');
+  }
+  const drawnTile = deadWall.rinshanTiles[0];
+  if (!drawnTile) {
+    throw new Error('Dead wall has no rinshan tiles');
+  }
+  const replenishment = wall[wall.length - 1]!;
+  const nextWall = wall.slice(0, -1);
+  const nextDeadWall: DeadWallState = {
+    ...deadWall,
+    rinshanTiles: [...deadWall.rinshanTiles.slice(1), replenishment],
+  };
+
+  return {
+    drawnTile,
+    wall: nextWall,
+    deadWall: nextDeadWall,
+  };
+}
+
+export function applyKandoraTiming(
+  deadWall: DeadWallState,
+  timing: KandoraRevealTiming,
+): DeadWallState {
+  if (timing === 'immediate') {
+    return {
+      ...deadWall,
+      revealedDoraCount: Math.min(
+        deadWall.doraIndicators.length,
+        deadWall.revealedDoraCount + 1,
+      ),
+    };
+  }
+  return {
+    ...deadWall,
+    pendingKandoraCount: deadWall.pendingKandoraCount + 1,
+  };
+}
+
+export function flushPendingKandora(deadWall: DeadWallState): DeadWallState {
+  if (deadWall.pendingKandoraCount <= 0) {
+    return deadWall;
+  }
+  return {
+    ...deadWall,
+    revealedDoraCount: Math.min(
+      deadWall.doraIndicators.length,
+      deadWall.revealedDoraCount + deadWall.pendingKandoraCount,
+    ),
+    pendingKandoraCount: 0,
+  };
+}
+
+export function countAllDeadWallTiles(deadWall: DeadWallState): number {
+  return (
+    deadWall.rinshanTiles.length +
+    deadWall.doraIndicators.length +
+    deadWall.uraDoraIndicators.length
+  );
 }
