@@ -1,9 +1,12 @@
+import { CPU_PLAYER_ID_PREFIX, maxCpuCount } from '../cpu/player';
 import { deriveRules } from '../engine/rules';
 import type { StateView } from '../types/message';
 import type { GameLength, PlayerCount, RuleConfig } from '../types/rule';
 
 export interface LobbyHandlers {
-  onCreateRoom: (playerName: string, ruleConfig: RuleConfig) => void;
+  onCreateRoom: (playerName: string, ruleConfig: RuleConfig, cpuCount: number) => void;
+  /** 通信を使わず CPU だけで遊ぶローカル対局を開始する */
+  onStartLocalGame: (playerName: string, ruleConfig: RuleConfig, cpuCount: number) => void;
   onJoinRoom: (roomCode: string, playerName: string) => void;
   onLeaveLobby: () => void;
 }
@@ -18,6 +21,8 @@ export interface LobbyFormState {
   allowAtozuke: boolean;
   honbaBonus: boolean;
   joinCode: string;
+  /** 追加する CPU の人数（0 なら従来どおり人間のみ） */
+  cpuCount: number;
 }
 
 function createBooleanToggleField(params: {
@@ -136,6 +141,42 @@ export function renderLobbyEntry(
   const lengthSeg = document.createElement('div');
   lengthSeg.className = 'segmented';
 
+  const cpuField = document.createElement('div');
+  cpuField.className = 'field';
+  const cpuLabel = document.createElement('label');
+  cpuLabel.textContent = 'CPU の人数（ひとりでも対局できます）';
+  const cpuSeg = document.createElement('div');
+  cpuSeg.className = 'segmented segmented-4';
+  cpuField.append(cpuLabel, cpuSeg);
+
+  const renderCpuButtons = () => {
+    cpuSeg.innerHTML = '';
+    const max = maxCpuCount(formState.playerCount);
+    if (formState.cpuCount > max) formState.cpuCount = max;
+    for (let count = 0; count <= max; count++) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = `seg-btn seg-btn-sm${formState.cpuCount === count ? ' is-active' : ''}`;
+      const titleSpan = document.createElement('span');
+      titleSpan.textContent = count === 0 ? 'なし' : `${count}体`;
+      const subSpan = document.createElement('span');
+      subSpan.className = 'seg-sub';
+      subSpan.textContent =
+        count === 0
+          ? '人間のみ'
+          : count === max
+            ? 'CPU のみ'
+            : `人間 ${formState.playerCount - count}人`;
+      btn.append(titleSpan, subSpan);
+      btn.addEventListener('click', () => {
+        formState.cpuCount = count;
+        renderCpuButtons();
+        renderLocalRuleToggles();
+      });
+      cpuSeg.appendChild(btn);
+    }
+  };
+
   const localRuleWrap = document.createElement('div');
   localRuleWrap.className = 'rule-toggle-grid';
 
@@ -225,6 +266,7 @@ export function renderLobbyEntry(
       btn.addEventListener('click', () => {
         formState.playerCount = opt.value;
         renderRuleButtons();
+        renderCpuButtons();
         renderLocalRuleToggles();
       });
       countSeg.appendChild(btn);
@@ -259,6 +301,7 @@ export function renderLobbyEntry(
   };
 
   renderRuleButtons();
+  renderCpuButtons();
   renderLocalRuleToggles();
   countField.append(countLabel, countSeg);
   lengthField.append(lengthLabel, lengthSeg);
@@ -270,18 +313,59 @@ export function renderLobbyEntry(
   createBtn.disabled = busy;
   createBtn.textContent = busy ? '接続中...' : '部屋を作成';
   createBtn.addEventListener('click', () => {
-    handlers.onCreateRoom(formState.playerName, {
-      playerCount: formState.playerCount,
-      gameLength: formState.gameLength,
-      tobi: formState.tobi,
-      tsumoLoss: formState.playerCount === 3 ? formState.tsumoLoss : false,
-      allowKuitan: formState.allowKuitan,
-      allowAtozuke: formState.allowAtozuke,
-      honbaBonus: formState.honbaBonus,
-    });
+    handlers.onCreateRoom(
+      formState.playerName,
+      {
+        playerCount: formState.playerCount,
+        gameLength: formState.gameLength,
+        tobi: formState.tobi,
+        tsumoLoss: formState.playerCount === 3 ? formState.tsumoLoss : false,
+        allowKuitan: formState.allowKuitan,
+        allowAtozuke: formState.allowAtozuke,
+        honbaBonus: formState.honbaBonus,
+      },
+      formState.cpuCount,
+    );
   });
 
-  createCard.append(countField, lengthField, localRuleWrap, createBtn);
+  createCard.append(countField, cpuField, lengthField, localRuleWrap, createBtn);
+
+  // Local (CPU only) game card
+  const localCard = document.createElement('div');
+  localCard.className = 'card card-local';
+
+  const localTitle = document.createElement('h2');
+  localTitle.textContent = 'いますぐCPUと対局（通信なし）';
+
+  const localNote = document.createElement('p');
+  localNote.className = 'hub-sub';
+  localNote.style.margin = '0 0 10px';
+  localNote.textContent =
+    '部屋コードの共有なしで、選んだ人数・ルールのまま CPU を相手に対局します。人払いと同じく横画面に最適化されます。';
+
+  const localBtn = document.createElement('button');
+  localBtn.type = 'button';
+  localBtn.className = 'btn btn-primary';
+  localBtn.style.width = '100%';
+  localBtn.disabled = busy;
+  localBtn.textContent = busy ? '接続中...' : 'CPU対局をはじめる';
+  localBtn.addEventListener('click', () => {
+    handlers.onStartLocalGame(
+      formState.playerName,
+      {
+        playerCount: formState.playerCount,
+        gameLength: formState.gameLength,
+        tobi: formState.tobi,
+        tsumoLoss: formState.playerCount === 3 ? formState.tsumoLoss : false,
+        allowKuitan: formState.allowKuitan,
+        allowAtozuke: formState.allowAtozuke,
+        honbaBonus: formState.honbaBonus,
+      },
+      formState.cpuCount > 0 ? formState.cpuCount : maxCpuCount(formState.playerCount),
+    );
+  });
+
+  localCard.append(localTitle, localNote, localBtn);
 
   // Join room card
   const joinCard = document.createElement('div');
@@ -321,7 +405,7 @@ export function renderLobbyEntry(
 
   joinCard.append(joinTitle, codeField, joinBtn);
 
-  grid.append(createCard, joinCard);
+  grid.append(createCard, joinCard, localCard);
   wrap.appendChild(grid);
   container.appendChild(wrap);
 }
@@ -334,12 +418,18 @@ export function renderWaitingRoom(
   container.innerHTML = '';
   const rules = deriveRules(view.ruleConfig);
   const isHost = view.viewerPlayerId === view.hostPlayerId;
+  // ローカル対局（CPU戦）では部屋コードを表示しない
+  const isLocalGame = view.roomCode === 'LOCAL';
 
   const card = document.createElement('div');
   card.className = 'card';
 
   const title = document.createElement('h2');
-  title.textContent = isHost ? '対局ロビー（ホスト待機中）' : '対局ロビー（待機中）';
+  title.textContent = isLocalGame
+    ? 'ローカル対局（CPU戦）'
+    : isHost
+      ? '対局ロビー（ホスト待機中）'
+      : '対局ロビー（待機中）';
   card.appendChild(title);
 
   // Room code box
@@ -394,7 +484,9 @@ export function renderWaitingRoom(
 
   actions.append(copyCodeBtn, copyUrlBtn);
   codeBox.append(left, actions);
-  card.appendChild(codeBox);
+  if (!isLocalGame) {
+    card.appendChild(codeBox);
+  }
 
   // Rules summary
   const ruleSummary = document.createElement('div');
@@ -432,9 +524,13 @@ export function renderWaitingRoom(
   }
   card.appendChild(slots);
 
+  const cpuPlayers = view.players.filter((p) => p.playerId.startsWith(CPU_PLAYER_ID_PREFIX));
   const info = document.createElement('p');
   info.className = 'hub-sub';
-  info.textContent = `参加人数（${view.players.length} / ${rules.playerCount}人）が揃うと自動的に対局が始まります。`;
+  info.textContent =
+    cpuPlayers.length > 0
+      ? `参加人数（${view.players.length} / ${rules.playerCount}人・うち CPU ${cpuPlayers.length}体）が揃うと自動的に対局が始まります。`
+      : `参加人数（${view.players.length} / ${rules.playerCount}人）が揃うと自動的に対局が始まります。`;
   card.appendChild(info);
 
   const leaveBtn = document.createElement('button');

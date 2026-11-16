@@ -1,4 +1,5 @@
 import './ui/styles.css';
+import { CPU_PLAYER_ID_PREFIX } from './cpu/player';
 import { ClientSession } from './net/client';
 import { HostSession } from './net/host';
 import { normalizeRoomCode } from './net/protocol';
@@ -47,6 +48,7 @@ class MahjongApp {
       allowAtozuke: true,
       honbaBonus: true,
       joinCode: normalizeRoomCode(roomFromUrl),
+      cpuCount: 3,
     };
 
     window.addEventListener('beforeunload', () => {
@@ -56,7 +58,12 @@ class MahjongApp {
     this.render();
   }
 
-  private createRoom(playerName: string, ruleConfig: RuleConfig): void {
+  private createRoom(
+    playerName: string,
+    ruleConfig: RuleConfig,
+    cpuCount = 0,
+    offline = false,
+  ): void {
     this.cleanupSession();
     this.busy = true;
     this.errorBanner = null;
@@ -74,7 +81,9 @@ class MahjongApp {
         if (status === 'ready') {
           this.busy = false;
           this.statusKind = 'ok';
-          this.statusText = `ホスト稼働中 (${host.getRoomCode()})`;
+          this.statusText = host.isOffline()
+            ? 'ローカル対局（CPU戦）'
+            : `ホスト稼働中 (${host.getRoomCode()})`;
         } else if (status === 'error') {
           this.busy = false;
           this.statusKind = 'err';
@@ -93,10 +102,23 @@ class MahjongApp {
       onError: (err) => {
         this.handleGameError(err);
       },
+    }, {
+      cpuCount,
+      cpuDelayMs: 650,
+      offline,
     });
 
     this.activeSession = { role: 'host', session: host };
     host.start();
+  }
+
+  /** 通信なしの CPU 対局を開始する */
+  private startLocalGame(
+    playerName: string,
+    ruleConfig: RuleConfig,
+    cpuCount: number,
+  ): void {
+    this.createRoom(playerName, ruleConfig, cpuCount, true);
   }
 
   private joinRoom(roomCode: string, playerName: string): void {
@@ -273,7 +295,7 @@ class MahjongApp {
 
     const title = document.createElement('div');
     title.className = 'app-title';
-    title.textContent = 'PeerJS 対戦リーチ麻雀（第4段階）';
+    title.textContent = 'PeerJS 対戦リーチ麻雀（第5段階）';
 
     const rightControls = document.createElement('div');
     rightControls.style.display = 'flex';
@@ -291,6 +313,22 @@ class MahjongApp {
     statusPill.textContent = this.statusText;
     rightControls.appendChild(statusPill);
 
+    if (
+      this.currentView &&
+      this.currentView.players.some((p) =>
+        p.playerId.startsWith(CPU_PLAYER_ID_PREFIX),
+      )
+    ) {
+      const cpuPill = document.createElement('div');
+      cpuPill.className = 'status-pill is-cpu';
+      cpuPill.textContent = `CPU ${
+        this.currentView.players.filter((p) =>
+          p.playerId.startsWith(CPU_PLAYER_ID_PREFIX),
+        ).length
+      }体`;
+      rightControls.appendChild(cpuPill);
+    }
+
     if (this.activeSession && this.currentView && this.currentView.phase !== 'lobby') {
       const resetBtn = document.createElement('button');
       resetBtn.type = 'button';
@@ -302,7 +340,11 @@ class MahjongApp {
       rightControls.appendChild(resetBtn);
     }
 
-    topBar.append(title, rightControls);
+    const rotateHint = document.createElement('div');
+    rotateHint.className = 'rotate-hint';
+    rotateHint.textContent = '横画面にすると快適です';
+
+    topBar.append(title, rotateHint, rightControls);
     shell.appendChild(topBar);
 
     // Error banner
@@ -332,9 +374,11 @@ class MahjongApp {
 
     const view = this.currentView;
     const lobbyHandlers = {
-      onCreateRoom: (name: string, ruleConfig: RuleConfig) =>
-        this.createRoom(name, ruleConfig),
+      onCreateRoom: (name: string, ruleConfig: RuleConfig, cpuCount: number) =>
+        this.createRoom(name, ruleConfig, cpuCount),
       onJoinRoom: (code: string, name: string) => this.joinRoom(code, name),
+      onStartLocalGame: (name: string, ruleConfig: RuleConfig, cpuCount: number) =>
+        this.startLocalGame(name, ruleConfig, cpuCount),
       onLeaveLobby: () => this.returnToLobby(),
     };
 

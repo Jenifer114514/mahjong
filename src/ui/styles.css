@@ -971,29 +971,345 @@ input {
   transform: translateY(-4px);
 }
 
-@media (max-width: 780px) {
-  .table-felt {
+
+/* ===================================================================
+   第5段階: 横画面レイアウト / CPU 対戦
+   - 横向き(landscape)を基準に、雀卓 + 右サイドパネルの 2 カラム構成
+   - 縦向き(portrait)ではサイドパネルを卓の下へ回り込ませる
+   =================================================================== */
+
+.app-shell {
+  max-width: 1440px;
+}
+
+.segmented-4 {
+  grid-template-columns: repeat(auto-fit, minmax(86px, 1fr));
+}
+
+.status-pill.is-cpu {
+  background: rgba(107, 196, 235, 0.16);
+  color: #a9e3fb;
+}
+
+.cpu-badge {
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: rgba(107, 196, 235, 0.18);
+  border: 1px solid rgba(107, 196, 235, 0.55);
+  color: #a9e3fb;
+}
+
+/* ---------- 対局ステージ（横画面 2 カラム） ---------- */
+.table-stage {
+  display: grid;
+  gap: 12px;
+  align-items: start;
+}
+
+.table-stage.is-landscape {
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 300px);
+}
+
+@media (orientation: portrait), (max-width: 900px) {
+  .table-stage.is-landscape {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ---------- 雀卓（横画面: 4 方向を外周に配置） ---------- */
+.table-felt.is-landscape {
+  grid-template-areas:
+    'top top top'
+    'left center right'
+    'self self self';
+  grid-template-columns: minmax(0, 1fr) minmax(190px, 260px) minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  padding: 12px;
+  min-height: min(78vh, 720px);
+}
+
+.table-felt.is-landscape .seat-box {
+  min-width: 0;
+}
+
+.table-felt.is-landscape .seat-top,
+.table-felt.is-landscape .seat-empty {
+  align-items: center;
+  text-align: center;
+}
+
+.table-felt.is-landscape .seat-top .opponent-back-row {
+  justify-content: center;
+}
+
+.table-felt.is-landscape .seat-center {
+  min-width: 0;
+}
+
+/* 右パネル ---------- */
+.side-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-gold);
+  border-radius: 12px;
+  padding: 12px;
+  max-height: min(78vh, 720px);
+  overflow-y: auto;
+}
+
+.side-panel-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.side-panel-title {
+  font-size: 1.15rem;
+  font-weight: 800;
+  color: var(--accent-gold);
+}
+
+.side-status {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.side-turn {
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.side-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.side-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.side-block-title {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--accent-gold);
+  letter-spacing: 0.04em;
+}
+
+.side-panel .score-table th,
+.side-panel .score-table td {
+  padding: 5px 6px;
+  font-size: 0.82rem;
+}
+
+.side-river-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px 0;
+  border-bottom: 1px dashed rgba(255, 255, 255, 0.1);
+}
+
+.side-river-row:last-child {
+  border-bottom: none;
+}
+
+.side-river-name {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+
+.discard-river-compact {
+  grid-template-columns: repeat(9, max-content);
+  min-height: 0;
+}
+
+/* 自分の捨て牌と手牌の並び ---------- */
+.self-river-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.table-felt.is-landscape .hand-area {
+  gap: 3px;
+  justify-content: center;
+  padding: 4px 2px 0;
+}
+
+.table-felt.is-landscape .mj-tile {
+  width: 36px;
+  height: 51px;
+}
+
+.table-felt.is-landscape .mj-tile-sm {
+  width: 26px;
+  height: 37px;
+}
+
+.table-felt.is-landscape .mj-tile-back.mj-tile-back-meld {
+  width: 26px;
+  height: 37px;
+}
+
+.table-felt.is-landscape .opponent-back-row {
+  gap: 1px;
+}
+
+/* 横画面では手牌を 1 段に固定（折り返すと卓が縦に伸びるため） */
+.table-felt.is-landscape .hand-area {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  justify-content: center;
+  padding-bottom: 4px;
+  scrollbar-width: thin;
+}
+
+.table-felt.is-landscape .hand-area::-webkit-scrollbar {
+  height: 4px;
+}
+
+.table-felt.is-landscape .hand-area::-webkit-scrollbar-thumb {
+  background: rgba(240, 201, 92, 0.4);
+  border-radius: 2px;
+}
+
+/* 縦向き（スマホ縦持ち）では折り返しを許可 */
+@media (orientation: portrait), (max-width: 900px) {
+  .table-felt.is-landscape .hand-area {
+    flex-wrap: wrap;
+    overflow: visible;
+  }
+}
+
+/* 横画面推奨ヒント（縦向きのみ表示） */
+.rotate-hint {
+  display: none;
+  font-size: 0.78rem;
+  color: var(--accent-gold);
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(240, 201, 92, 0.12);
+  border: 1px solid rgba(240, 201, 92, 0.4);
+}
+
+@media (orientation: portrait) and (max-width: 900px) {
+  .rotate-hint {
+    display: inline-block;
+  }
+}
+
+/* ---------- 縦向き（スマホ縦持ち）: 卓を 1 カラムに積む ---------- */
+@media (orientation: portrait), (max-width: 900px) {
+  .table-felt.is-landscape {
     grid-template-areas:
       'center'
       'top'
       'left'
       'right'
       'self';
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto;
+    min-height: 0;
   }
 
-  .mj-tile {
-    width: 32px;
-    height: 46px;
+  .side-panel {
+    max-height: none;
+    overflow: visible;
   }
 
-  .mj-tile-sm {
-    width: 24px;
-    height: 34px;
+  .discard-river-compact {
+    grid-template-columns: repeat(6, max-content);
+  }
+}
+
+@media (max-width: 560px) {
+  .app-shell {
+    padding: 8px;
+    gap: 8px;
   }
 
-  .mj-tile-back.mj-tile-back-meld {
-    width: 24px;
-    height: 34px;
+  .app-title {
+    font-size: 0.9rem;
+  }
+
+  .table-felt.is-landscape .mj-tile {
+    width: 30px;
+    height: 43px;
+  }
+
+  .table-felt.is-landscape .mj-tile-sm {
+    width: 22px;
+    height: 31px;
+  }
+
+  .table-felt.is-landscape .mj-tile-back.mj-tile-back-meld {
+    width: 22px;
+    height: 31px;
+  }
+
+  .mj-tile-honor {
+    font-size: 1rem;
+  }
+
+  .mj-tile-sm .mj-tile-honor {
+    font-size: 0.78rem;
+  }
+}
+
+/* 低い横画面（スマホ横持ち）ではさらに圧縮 */
+@media (orientation: landscape) and (max-height: 520px) {
+  .table-felt.is-landscape {
+    min-height: 0;
+    padding: 8px;
+    gap: 6px;
+  }
+
+  .table-felt.is-landscape .mj-tile {
+    width: 30px;
+    height: 42px;
+  }
+
+  .table-felt.is-landscape .mj-tile-sm {
+    width: 22px;
+    height: 31px;
+  }
+
+  .table-felt.is-landscape .mj-tile-back.mj-tile-back-meld {
+    width: 22px;
+    height: 31px;
+  }
+
+  .side-panel {
+    max-height: calc(100vh - 90px);
+  }
+
+  .center-hub {
+    padding: 8px;
+    gap: 4px;
+  }
+
+  .round-label {
+    font-size: 1.1rem;
+  }
+
+  .app-shell {
+    padding: 6px;
+    gap: 6px;
   }
 }
