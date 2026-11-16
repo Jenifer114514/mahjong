@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { toStateView } from '../../engine/projection';
 import { createInitialGameState, reduce } from '../../engine/reducer';
 import { deriveRules } from '../../engine/rules';
@@ -9,6 +9,8 @@ import type { GameState } from '../../types/state';
 import { decideCpuAction } from '../../cpu/player';
 import { applyAction } from '../../engine/reducer';
 import { renderGameTable, type TableHandlers } from '../tableView';
+
+const onLeaveGameSpy = vi.fn();
 
 const noopHandlers: TableHandlers = {
   onDiscardTile: () => {},
@@ -68,12 +70,17 @@ describe('renderGameTable（横画面レイアウト）', () => {
     expect(root.querySelector('.seat-right')).not.toBeNull();
     expect(root.querySelector('.seat-self')).not.toBeNull();
 
-    // 右サイドパネル（局情報・スコア・捨て牌）
-    const panel = root.querySelector('.side-panel')!;
-    expect(panel).not.toBeNull();
-    expect(panel.querySelector('.side-panel-title')?.textContent).toContain('東1局');
-    expect(panel.querySelectorAll('.score-table tbody tr')).toHaveLength(4);
-    expect(panel.querySelectorAll('.side-river-row')).toHaveLength(4);
+    // 対局中は雀卓だけ（サイドパネルは出さない）
+    expect(root.querySelector('.side-panel')).toBeNull();
+
+    // ドラ表示は卓の左上にまとめる（中央の「場」からは外す）
+    const doraPanel = root.querySelector('.table-felt > .dora-panel');
+    expect(doraPanel).not.toBeNull();
+    // 山に伏せられている分は裏向きの牌で枠だけ示す
+    expect(
+      doraPanel!.querySelectorAll('.dora-panel-tiles .mj-tile').length,
+    ).toBeGreaterThanOrEqual(view.round!.doraIndicators.length);
+    expect(root.querySelector('.center-hub .dora-strip')).toBeNull();
 
     // 自分の手牌 13 枚 + ツモ牌
     const handTiles = root.querySelectorAll('.seat-self .hand-area .mj-tile');
@@ -88,7 +95,8 @@ describe('renderGameTable（横画面レイアウト）', () => {
     expect(root.querySelectorAll('.seat-top.seat-empty')).toHaveLength(1);
     expect(root.querySelector('.seat-left')).not.toBeNull();
     expect(root.querySelector('.seat-right')).not.toBeNull();
-    expect(root.querySelectorAll('.side-river-row')).toHaveLength(3);
+    // 河は各席の卓上に描かれる（3人麻雀なので 3 席ぶん）
+    expect(root.querySelectorAll('.seat-box .river-zone')).toHaveLength(3);
   });
 
   it('CPU 席には CPU バッジを表示する', () => {
@@ -190,6 +198,93 @@ describe('renderGameTable（横画面レイアウト）', () => {
     const compass = root.querySelector('.table-compass')!;
     expect(compass).not.toBeNull();
     expect(compass.querySelectorAll('.compass-slot')).toHaveLength(4);
+  });
+
+  it('対局中は雀卓だけを表示し、退出ボタンと左上のドラ表示を出す', () => {
+    const view = toStateView(state4, 'p0', 0);
+    const root = document.createElement('div');
+    const handlers: TableHandlers = {
+      ...noopHandlers,
+      canLeaveGame: true,
+      onLeaveGame: onLeaveGameSpy,
+    };
+    onLeaveGameSpy.mockClear();
+    renderGameTable(root, view, handlers);
+
+    // 卓以外のパネルは出さない
+    expect(root.querySelector('.side-panel')).toBeNull();
+
+    // 卓の上に退出ボタン
+    const leave = root.querySelector<HTMLButtonElement>('.table-chrome-leave');
+    expect(leave).not.toBeNull();
+    expect(leave!.textContent).toBe('退出');
+    leave!.click();
+    expect(onLeaveGameSpy).toHaveBeenCalledTimes(1);
+
+    // ドラ表示は卓の左上（中央ハブには入れない）
+    const felt = root.querySelector('.table-felt')!;
+    expect(felt.querySelector(':scope > .dora-panel')).not.toBeNull();
+    expect(root.querySelector('.center-hub .dora-strip')).toBeNull();
+
+    // 対局中はトップバー相当の要素も出さない（canLeaveGame 無しなら退出ボタンも無し）
+    const root2 = document.createElement('div');
+    renderGameTable(root2, view, noopHandlers);
+    expect(root2.querySelector('.table-chrome-leave')).toBeNull();
+  });
+
+  it('局と局の間は和了役をまとめて表示する', () => {
+    const view = toStateView(state4, 'p0', 0);
+    const round = view.round!;
+    const roundEndView: StateView = {
+      ...view,
+      phase: 'round_end',
+      round: {
+        ...round,
+        agariResults: [
+          {
+            winType: 'ron',
+            playerId: view.players[1]!.playerId,
+            seatIndex: view.players[1]!.seatIndex,
+            fromSeatIndex: view.players[0]!.seatIndex,
+            winningTile: { id: 'w1', kind: '1m', isRed: false },
+            hand: [...view.myHand],
+            melds: [],
+            kitaTiles: [],
+            yaku: [
+              { id: 'riichi', name: 'リーチ', han: 1 },
+              { id: 'pinfu', name: '平和', han: 1 },
+            ],
+            doraCount: 1,
+            uraDoraCount: 0,
+            kitaCount: 0,
+            han: 3,
+            fu: 30,
+            isYakuman: false,
+            scoreLabel: '3900',
+            pointsAwarded: 3900,
+            honbaPointsAwarded: 0,
+            scoreDeltas: {},
+          },
+        ],
+      },
+    };
+
+    const root = document.createElement('div');
+    renderGameTable(root, roundEndView, noopHandlers);
+
+    const summary = root.querySelector('.round-yaku-summary')!;
+    expect(summary).not.toBeNull();
+    expect(summary.querySelector('.round-yaku-title')?.textContent).toBe('和了役');
+
+    const chips = [...summary.querySelectorAll('.round-yaku-chip')].map(
+      (c) => c.textContent,
+    );
+    expect(chips).toContain('リーチ 1翻');
+    expect(chips).toContain('平和 1翻');
+    expect(chips).toContain('ドラ 1翻');
+    expect(summary.querySelector('.round-yaku-total')?.textContent).toContain(
+      '3翻 30符',
+    );
   });
 
   it('局終了時はオーバーレイにスコア表と次局ボタンを描画する（ホストのみ）', () => {

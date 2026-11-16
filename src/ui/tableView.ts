@@ -44,6 +44,10 @@ export interface TableHandlers {
   onToggleAutoTsumogiri?: (enabled: boolean) => void;
   onAdvanceRound: () => void;
   onReturnToLobby: () => void;
+  /** 対局中に卓上から部屋を離れる（トップバーを出さないため） */
+  onLeaveGame?: () => void;
+  /** 卓上に離脱ボタンを出すか */
+  canLeaveGame?: boolean;
 }
 
 export interface TableUiState {
@@ -170,11 +174,17 @@ export function renderGameTable(
     felt.appendChild(renderSelfSeat(view, selfPlayer, handlers, uiState));
   }
 
+  // 対局中は雀卓だけを表示する（局情報・スコア・ドラは卓の中に集約）
+  if (handlers.canLeaveGame && handlers.onLeaveGame) {
+    felt.appendChild(renderTableChrome(handlers));
+  }
+
+  const doraPanel = renderDoraPanel(view);
+  if (doraPanel) {
+    felt.appendChild(doraPanel);
+  }
+
   wrapper.appendChild(felt);
-
-  // 右側パネル（対局情報・スコア・捨て牌一覧）
-  wrapper.appendChild(renderSidePanel(view, handlers));
-
   container.appendChild(wrapper);
 
   // 局終了オーバーレイ（和了 / 流局）
@@ -300,6 +310,12 @@ function renderRoundEndOverlay(
     cardsWrap.className = 'agari-cards-list';
     for (const agari of round.agariResults) {
       cardsWrap.appendChild(renderAgariWinnerCard(agari, view.players, round.dealerIndex));
+    }
+
+    // 局と局の間は「何の役で和了ったか」を最上段で大きく見せる
+    const yakuSummary = renderRoundYakuSummary(round, view.players);
+    if (yakuSummary) {
+      overlay.appendChild(yakuSummary);
     }
 
     if (round.uraDoraIndicators.length > 0) {
@@ -566,6 +582,81 @@ function renderKitaGroup(kitaTiles: readonly { id: string; kind: TileKind }[], s
   return group;
 }
 
+/**
+ * 局間（和了と次局のあいだ）に表示する役のまとめ。
+ * どの役で和了ったかを一目で確認できるよう、和了者ごとに 1 行で並べる。
+ */
+function renderRoundYakuSummary(
+  round: RoundView,
+  players: readonly PublicPlayerView[],
+): HTMLElement | null {
+  if (round.agariResults.length === 0) return null;
+
+  const box = document.createElement('div');
+  box.className = 'round-yaku-summary';
+
+  const title = document.createElement('div');
+  title.className = 'round-yaku-title';
+  title.textContent = '和了役';
+  box.appendChild(title);
+
+  for (const agari of round.agariResults) {
+    const winner = players.find((p) => p.playerId === agari.playerId);
+    const isOya = agari.seatIndex === round.dealerIndex;
+
+    const row = document.createElement('div');
+    row.className = 'round-yaku-row';
+
+    const who = document.createElement('div');
+    who.className = 'round-yaku-who';
+    who.textContent = `${winner?.name ?? agari.playerId}（${isOya ? '親' : '子'}）`;
+
+    const chips = document.createElement('div');
+    chips.className = 'yaku-list round-yaku-chips';
+
+    for (const y of agari.yaku) {
+      const chip = document.createElement('span');
+      chip.className = `yaku-chip round-yaku-chip${y.isYakuman ? ' is-yakuman' : ''}`;
+      chip.textContent = y.isYakuman
+        ? (y.yakumanMultiplier ?? 1) >= 2
+          ? `${y.name} ダブル役満`
+          : `${y.name} 役満`
+        : `${y.name} ${y.han}翻`;
+      chips.appendChild(chip);
+    }
+
+    if (!agari.isYakuman && agari.doraCount > 0) {
+      const chip = document.createElement('span');
+      chip.className = 'yaku-chip round-yaku-chip is-dora';
+      chip.textContent = `ドラ ${agari.doraCount}翻`;
+      chips.appendChild(chip);
+    }
+    if (!agari.isYakuman && agari.uraDoraCount > 0) {
+      const chip = document.createElement('span');
+      chip.className = 'yaku-chip round-yaku-chip is-dora';
+      chip.textContent = `裏ドラ ${agari.uraDoraCount}翻`;
+      chips.appendChild(chip);
+    }
+    if (!agari.isYakuman && agari.kitaCount > 0) {
+      const chip = document.createElement('span');
+      chip.className = 'yaku-chip round-yaku-chip is-dora';
+      chip.textContent = `抜北 ${agari.kitaCount}翻`;
+      chips.appendChild(chip);
+    }
+
+    const total = document.createElement('div');
+    total.className = 'round-yaku-total';
+    total.textContent = agari.isYakuman
+      ? `${agari.scoreLabel} / ${agari.pointsAwarded.toLocaleString()}点`
+      : `${agari.han}翻 ${agari.fu}符 ・ ${agari.scoreLabel} / ${agari.pointsAwarded.toLocaleString()}点`;
+
+    row.append(who, chips, total);
+    box.appendChild(row);
+  }
+
+  return box;
+}
+
 function renderAgariWinnerCard(
   agari: RoundAgariWinner,
   players: readonly PublicPlayerView[],
@@ -683,6 +774,63 @@ function renderAgariWinnerCard(
   return card;
 }
 
+/**
+ * 卓の左上に固定するドラ表示。
+ * 実物の雀卓でもドラ表示牌は卓の隅にまとまって置かれるため、
+ * 中央の「場」から切り離して常に見える位置に出す。
+ */
+function renderDoraPanel(view: StateView): HTMLElement | null {
+  const round = view.round;
+  if (!round) return null;
+  const rules = deriveRules(view.ruleConfig);
+
+  const panel = document.createElement('div');
+  panel.className = 'dora-panel';
+
+  const head = document.createElement('div');
+  head.className = 'dora-panel-head';
+
+  const label = document.createElement('span');
+  label.className = 'dora-panel-label';
+  label.textContent = 'ドラ表示';
+
+  const count = document.createElement('span');
+  count.className = 'dora-panel-count';
+  count.textContent = `${round.doraIndicators.length} / ${rules.doraIndicatorCount}`;
+
+  head.append(label, count);
+
+  const tiles = document.createElement('div');
+  tiles.className = 'dora-panel-tiles';
+  for (let i = 0; i < rules.doraIndicatorCount; i++) {
+    const indicator = round.doraIndicators[i];
+    if (indicator) {
+      tiles.appendChild(createTileElement(indicator, { small: true }));
+    } else {
+      tiles.appendChild(createTileBackElement(true, true));
+    }
+  }
+
+  panel.append(head, tiles);
+  return panel;
+}
+
+/** 卓の上に置く最小限の操作（対局中はトップバーを出さないため） */
+function renderTableChrome(handlers: TableHandlers): HTMLElement {
+  const bar = document.createElement('div');
+  bar.className = 'table-chrome';
+
+  const leave = document.createElement('button');
+  leave.type = 'button';
+  leave.className = 'table-chrome-leave';
+  leave.textContent = '退出';
+  leave.title = '対局を離れてロビーに戻る';
+  leave.addEventListener('click', () => handlers.onLeaveGame?.());
+
+  bar.appendChild(leave);
+  return bar;
+}
+
 function renderCenterHub(view: StateView): HTMLElement {
   const wrap = document.createElement('div');
   wrap.className = 'seat-center';
@@ -717,27 +865,6 @@ function renderCenterHub(view: StateView): HTMLElement {
   }
 
   if (round) {
-    const doraWrap = document.createElement('div');
-    doraWrap.className = 'dora-strip';
-
-    const doraTitle = document.createElement('div');
-    doraTitle.className = 'hub-sub';
-    doraTitle.textContent = `ドラ表示 (${round.doraIndicators.length} / ${rules.doraIndicatorCount})`;
-
-    const doraTiles = document.createElement('div');
-    doraTiles.className = 'dora-tiles-row';
-    for (let i = 0; i < rules.doraIndicatorCount; i++) {
-      const indicator = round.doraIndicators[i];
-      if (indicator) {
-        doraTiles.appendChild(createTileElement(indicator, { small: true }));
-      } else {
-        doraTiles.appendChild(createTileBackElement(true, true));
-      }
-    }
-
-    doraWrap.append(doraTitle, doraTiles);
-    hub.appendChild(doraWrap);
-
     const kyotakuBadge = document.createElement('div');
     kyotakuBadge.className = 'kyotaku-badge';
     kyotakuBadge.textContent = `供託: ${view.kyotakuCount}本 (${(view.kyotakuCount * rules.riichiStickPoints).toLocaleString()}点)`;
@@ -1504,112 +1631,6 @@ function rankPlayersByScore<T extends { seatIndex: number; score: number }>(
     const distB = ((b.seatIndex - initialDealerIndex) % count + count) % count;
     return distA - distB;
   });
-}
-
-/** 右側パネル: 局情報・他家の捨て牌・スコア一覧 */
-function renderSidePanel(view: StateView, _handlers: TableHandlers): HTMLElement {
-  const panel = document.createElement('aside');
-  panel.className = 'side-panel';
-  applyOrientationClass(panel);
-
-  const round = view.round;
-  const rules = deriveRules(view.ruleConfig);
-
-  const head = document.createElement('div');
-  head.className = 'side-panel-head';
-
-  const title = document.createElement('div');
-  title.className = 'side-panel-title';
-  title.textContent = round
-    ? formatRoundName(round.roundWind, round.kyokuNumber, round.honba)
-    : '待機中';
-
-  const meta = document.createElement('div');
-  meta.className = 'hub-sub';
-  const lengthJa = view.ruleConfig.gameLength === 'tonpuu' ? '東風戦' : '半荘戦';
-  meta.textContent = round
-    ? `${view.ruleConfig.playerCount}人 ${lengthJa} ${round.roundIndex + 1}/${round.totalRounds}局 ・ 残り${round.remainingWallCount}枚`
-    : `${view.ruleConfig.playerCount}人 ${lengthJa}`;
-
-  head.append(title, meta);
-  panel.appendChild(head);
-
-  if (round) {
-    const status = document.createElement('div');
-    status.className = 'side-status';
-
-    const turnPlayer = view.players.find((p) => p.isCurrentTurn);
-    const turnText =
-      turnPlayer?.playerId === view.viewerPlayerId
-        ? 'あなたの手番'
-        : turnPlayer
-          ? `${turnPlayer.name} の手番`
-          : '待機中';
-
-    const doraRow = document.createElement('div');
-    doraRow.className = 'dora-tiles-row';
-    for (const indicator of round.doraIndicators) {
-      doraRow.appendChild(createTileElement(indicator, { small: true }));
-    }
-
-    const doraBox = document.createElement('div');
-    doraBox.className = 'side-row';
-    const doraLabel = document.createElement('span');
-    doraLabel.className = 'hub-sub';
-    doraLabel.textContent = 'ドラ表示';
-    doraBox.append(doraLabel, doraRow);
-
-    status.append(buildStatusLine(turnText), doraBox);
-    panel.appendChild(status);
-  }
-
-  const scoreBox = document.createElement('div');
-  scoreBox.className = 'side-block';
-  const scoreTitle = document.createElement('div');
-  scoreTitle.className = 'side-block-title';
-  scoreTitle.textContent = 'スコア';
-  scoreBox.appendChild(scoreTitle);
-  const compact = view.players.map((p) => ({
-    ...p,
-    score: p.score,
-  }));
-  scoreBox.appendChild(
-    buildScoreTable(compact, rules.initialPoints, false, undefined, view.initialDealerIndex),
-  );
-  panel.appendChild(scoreBox);
-
-  // 全員の河（卓の表示を補う一覧。直近の捨て牌を強調）
-  const rivers = document.createElement('div');
-  rivers.className = 'side-block side-rivers';
-  const riversTitle = document.createElement('div');
-  riversTitle.className = 'side-block-title';
-  riversTitle.textContent = '河（捨て牌）';
-  rivers.appendChild(riversTitle);
-
-  for (const p of view.players) {
-    const row = document.createElement('div');
-    row.className = 'side-river-row';
-
-    const name = document.createElement('span');
-    name.className = 'side-river-name';
-    const stateLabel = p.isRiichi ? 'リーチ' : '';
-    name.textContent = `${p.playerId === view.viewerPlayerId ? `${p.name}（あなた）` : p.name}${
-      stateLabel ? ` ・${stateLabel}` : ''
-    }`;
-
-    row.append(name, renderDiscardRiver(p, { side: 'self', compact: true }));
-    rivers.appendChild(row);
-  }
-  panel.appendChild(rivers);
-
-  return panel;
-}
-
-function buildStatusLine(text: string): HTMLElement {
-  const el = document.createElement('div');
-  el.className = 'side-turn';
-  el.textContent = text;
-  return el;
 }
 
 function renderFinishedScreen(
