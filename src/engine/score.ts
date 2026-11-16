@@ -26,6 +26,16 @@ export interface ScoreEvaluationParams {
   roundWind: Wind;
   seatWind: Wind;
   doraIndicators: readonly Tile[];
+  uraDoraIndicators?: readonly Tile[];
+  isRiichi?: boolean;
+  isDoubleRiichi?: boolean;
+  isIppatsu?: boolean;
+  isRinshan?: boolean;
+  isChankan?: boolean;
+  isHaitei?: boolean;
+  isHoutei?: boolean;
+  isTenhou?: boolean;
+  isChiihou?: boolean;
   winnerSeatIndex: number;
   fromSeatIndex: number | null;
   rules: DerivedRules;
@@ -41,6 +51,7 @@ export interface AgariScoreResult {
   yaku: YakuEntry[];
   yakuHan: number;
   doraCount: number;
+  uraDoraCount: number;
   kitaCount: number;
   totalHan: number;
   fu: number;
@@ -127,11 +138,24 @@ export function resolveBasePoints(
   fu: number,
   isYakuman: boolean,
   rules: DerivedRules,
+  yakumanMultiplier?: number,
 ): ScoreLimitDetail {
   const limits = rules.scoreLimits;
 
   if (isYakuman) {
-    return { basePoints: limits.yakuman, scoreLabel: '役満' };
+    const mult = Math.max(
+      1,
+      yakumanMultiplier ?? Math.floor(totalHan / 13),
+    );
+    const scoreLabel =
+      mult === 1
+        ? '役満'
+        : mult === 2
+          ? 'ダブル役満'
+          : mult === 3
+            ? 'トリプル役満'
+            : `${mult}倍役満`;
+    return { basePoints: limits.yakuman * mult, scoreLabel };
   }
   if (rules.allowKazoeYakuman && totalHan >= 13) {
     return { basePoints: limits.yakuman, scoreLabel: '数え役満' };
@@ -293,6 +317,16 @@ export function evaluateBestAgari(
     roundWind,
     seatWind,
     doraIndicators,
+    uraDoraIndicators = [],
+    isRiichi = false,
+    isDoubleRiichi = false,
+    isIppatsu = false,
+    isRinshan = false,
+    isChankan = false,
+    isHaitei = false,
+    isHoutei = false,
+    isTenhou = false,
+    isChiihou = false,
     dealerIndex,
     winnerSeatIndex,
     fromSeatIndex,
@@ -314,18 +348,38 @@ export function evaluateBestAgari(
     roundWind,
     seatWind,
     rules,
+    isRiichi,
+    isDoubleRiichi,
+    isIppatsu,
+    isRinshan,
+    isChankan,
+    isHaitei,
+    isHoutei,
+    isTenhou,
+    isChiihou,
   };
 
-  if (!passesAtozukeCheck(hand, melds, ctx)) {
+  // 後付けなし判定は偶然役・一発を除いた本質手役のみで評価する
+  const atozukeCtx: YakuContext = {
+    isTsumo,
+    roundWind,
+    seatWind,
+    rules,
+    isRiichi,
+    isDoubleRiichi,
+  };
+
+  if (!passesAtozukeCheck(hand, melds, atozukeCtx)) {
     return null;
   }
 
-  const { doraCount, kitaCount } = countDoraAndKita({
+  const { doraCount, uraDoraCount, kitaCount } = countDoraAndKita({
     hand,
     winningTile,
     melds,
     kitaTiles,
     doraIndicators,
+    uraDoraIndicators: isRiichi ? uraDoraIndicators : [],
     rules,
   });
 
@@ -339,16 +393,18 @@ export function evaluateBestAgari(
 
     const fu = calculateFu(decomp, yakuEval, ctx);
     const effectiveDora = yakuEval.isYakuman ? 0 : doraCount;
+    const effectiveUraDora = yakuEval.isYakuman || !isRiichi ? 0 : uraDoraCount;
     const effectiveKita = yakuEval.isYakuman ? 0 : kitaCount;
     const totalHan = yakuEval.isYakuman
       ? yakuEval.yakuHan
-      : yakuEval.yakuHan + effectiveDora + effectiveKita;
+      : yakuEval.yakuHan + effectiveDora + effectiveUraDora + effectiveKita;
 
     const { basePoints, scoreLabel } = resolveBasePoints(
       totalHan,
       fu,
       yakuEval.isYakuman,
       rules,
+      yakuEval.isYakuman ? yakuEval.yakumanMultiplier : undefined,
     );
 
     const payment = calculatePaymentDeltas({
@@ -367,6 +423,7 @@ export function evaluateBestAgari(
       yaku: yakuEval.yaku,
       yakuHan: yakuEval.yakuHan,
       doraCount: effectiveDora,
+      uraDoraCount: effectiveUraDora,
       kitaCount: effectiveKita,
       totalHan,
       fu,

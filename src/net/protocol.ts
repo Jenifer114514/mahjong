@@ -145,6 +145,18 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
           },
         };
       }
+      case 'DECLARE_RIICHI': {
+        if (!isNonEmptyString(raw.action.tileId)) {
+          return null;
+        }
+        return {
+          kind: 'ACTION',
+          action: {
+            type: 'DECLARE_RIICHI',
+            tileId: raw.action.tileId,
+          },
+        };
+      }
       case 'DECLARE_ANKAN': {
         if (
           typeof raw.action.kind !== 'string' ||
@@ -181,6 +193,14 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
           action: {
             type: 'DECLARE_KITA',
             tileId: raw.action.tileId,
+          },
+        };
+      }
+      case 'DECLARE_KYUUSHU_KYUUHAI': {
+        return {
+          kind: 'ACTION',
+          action: {
+            type: 'DECLARE_KYUUSHU_KYUUHAI',
           },
         };
       }

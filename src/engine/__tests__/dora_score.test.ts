@@ -485,10 +485,10 @@ describe('第3A段階: 役判定・符計算・高点法・喰いタン・後付
     ]);
     expect(sanshokuJunchan.totalHan).toBe(5);
 
-    // 小三元 + 混老頭 + 対々和 + 役牌白・發
+    // 小三元 + 混老頭 + 対々和 + 役牌白・發 + 三暗刻（9pは明刻にして四暗刻単騎にしない）
     const shousangenHonrou = evaluateBestAgari({
-      hand: makeTiles(['5z', '5z', '5z', '6z', '6z', '6z', '1m', '1m', '1m', '9p', '9p', '9p', '7z']),
-      melds: [],
+      hand: makeTiles(['5z', '5z', '5z', '6z', '6z', '6z', '1m', '1m', '1m', '7z']),
+      melds: [makeMeld('pon', ['9p', '9p', '9p'])],
       kitaTiles: [],
       winningTile: { id: 'w-7z', kind: '7z', isRed: false },
       isTsumo: true,
@@ -536,12 +536,12 @@ describe('第3A段階: 役判定・符計算・高点法・喰いタン・後付
     // 20 + 32(9m暗槓) + 16(9p明槓) + 16(9s加槓) + 2(単騎) = 86 -> 90符
     expect(sankantsu.fu).toBe(90);
 
-    // 国士無双（ドラが乗っても数えではなく役満13）
+    // 国士無双単面待ち（ドラが乗っても数えではなく役満13）
     const kokushi = evaluateBestAgari({
-      hand: makeTiles(['1m', '9m', '1p', '9p', '1s', '9s', '1z', '2z', '3z', '4z', '5z', '6z', '7z']),
+      hand: makeTiles(['1m', '9m', '1p', '9p', '1s', '9s', '1z', '2z', '3z', '4z', '5z', '6z', '6z']),
       melds: [],
       kitaTiles: [],
-      winningTile: { id: 'w-1m', kind: '1m', isRed: false },
+      winningTile: { id: 'w-7z', kind: '7z', isRed: false },
       isTsumo: false,
       isDealer: false,
       dealerIndex: 0,

@@ -17,6 +17,7 @@ import {
   DEFAULT_TSUMO_LOSS,
   HAND_SIZE,
   INITIAL_POINTS_BY_PLAYERS,
+  RIICHI_STICK_POINTS,
   ROUND_WINDS_BY_LENGTH,
   SCORE_LIMIT_BASE_POINTS,
   SEAT_WINDS_BY_PLAYERS,
@@ -82,6 +83,7 @@ export function deriveRules(
     allowKazoeYakuman: DEFAULT_ALLOW_KAZOE_YAKUMAN,
     doubleWindPairFu: DEFAULT_DOUBLE_WIND_PAIR_FU,
     kitaCountsAsIndicatorDora: DEFAULT_KITA_COUNTS_AS_INDICATOR_DORA,
+    riichiStickPoints: RIICHI_STICK_POINTS,
     scoreLimits: { ...SCORE_LIMIT_BASE_POINTS },
   };
 }

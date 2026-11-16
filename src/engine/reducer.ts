@@ -1,6 +1,7 @@
 import type { Action, GameError } from '../types/message';
-import type { RuleConfig } from '../types/rule';
+import type { DerivedRules, RuleConfig } from '../types/rule';
 import type {
+  AbortiveDrawReason,
   CallResponseChoice,
   GameState,
   PendingResponseState,
@@ -10,15 +11,23 @@ import type {
 } from '../types/state';
 import type { Tile } from '../types/tile';
 import {
+  canAnkanPreserveRiichiWaits,
+  getCanRiichiDiscardTileIds,
+} from './agari';
+import {
   buildPendingCallOptions,
+  buildPendingChankanOptions,
+  canDeclareKyuushuKyuuhai,
   computeChiKuikaeKinds,
   DEFAULT_ENGINE_HOOKS,
   type EngineHooks,
   evaluateRonForPlayer,
   evaluateTsumoFromRound,
+  isSuukanzuTriggered,
   validateChiTilePair,
   validatePonTilePair,
 } from './calls';
+import { getRevealedUraDoraIndicators } from './dora';
 import { deriveRules, getRoundMetadata } from './rules';
 import type { AgariScoreResult } from './score';
 import {
@@ -123,6 +132,7 @@ function buildAgariWinnerRecord(params: {
     kitaTiles: [...winner.kitaTiles],
     yaku: evalResult.yaku.map((y) => ({ ...y })),
     doraCount: evalResult.doraCount,
+    uraDoraCount: evalResult.uraDoraCount,
     kitaCount: evalResult.kitaCount,
     han: evalResult.totalHan,
     fu: evalResult.fu,
@@ -145,6 +155,12 @@ export function createInitialGameState(params: CreateInitialGameParams): GameSta
     discards: [],
     discardedKinds: [],
     sameTurnFuriten: false,
+    isRiichiFuriten: false,
+    isRiichi: false,
+    isDoubleRiichi: false,
+    ippatsuEligible: false,
+    pendingRiichiSideways: false,
+    isRinshanDraw: false,
     melds: [],
     kitaTiles: [],
     connected: true,
@@ -156,6 +172,7 @@ export function createInitialGameState(params: CreateInitialGameParams): GameSta
     ruleConfig: { ...params.ruleConfig },
     phase: 'lobby',
     players: [hostPlayer],
+    kyotakuCount: 0,
     round: null,
   };
 }
@@ -273,6 +290,12 @@ export function validateAction(
           message: '指定した牌が手牌にありません。',
         };
       }
+      if (player.isRiichi && action.tileId !== player.drawnTile?.id) {
+        return {
+          code: 'TSUMOGIRI_ONLY',
+          message: 'リーチ後はツモ切りしかできません。',
+        };
+      }
       if (
         rules.forbidKuikae &&
         state.round.kuikaeForbiddenKinds.includes(handMatch.kind)
@@ -280,6 +303,81 @@ export function validateAction(
         return {
           code: 'FORBIDDEN_KUIKAE',
           message: '喰い替えとなる牌は切れません。',
+        };
+      }
+      return null;
+    }
+
+    case 'DECLARE_RIICHI': {
+      if (state.phase !== 'playing' || state.round === null) {
+        return {
+          code: 'INVALID_PHASE',
+          message: 'リーチ宣言できる状態ではありません。',
+        };
+      }
+      const player = state.players.find((p) => p.playerId === action.playerId);
+      if (!player) {
+        return {
+          code: 'PLAYER_NOT_FOUND',
+          message: 'プレイヤーが見つかりません。',
+        };
+      }
+      if (player.seatIndex !== state.round.currentTurnIndex) {
+        return {
+          code: 'NOT_YOUR_TURN',
+          message: 'あなたの手番ではありません。',
+        };
+      }
+      if (player.isRiichi) {
+        return {
+          code: 'INVALID_RIICHI',
+          message: 'すでにリーチ宣言済みです。',
+        };
+      }
+      if (!player.melds.every((m) => m.type === 'ankan')) {
+        return {
+          code: 'INVALID_RIICHI',
+          message: '門前でないためリーチできません。',
+        };
+      }
+      if (player.drawnTile === null) {
+        return {
+          code: 'INVALID_RIICHI',
+          message: 'ツモ直後のみリーチ宣言できます。',
+        };
+      }
+      if (player.score < rules.riichiStickPoints) {
+        return {
+          code: 'INVALID_RIICHI',
+          message: `リーチには持ち点${rules.riichiStickPoints}点以上が必要です。`,
+        };
+      }
+      if (state.round.wall.length < rules.playerCount) {
+        return {
+          code: 'INVALID_RIICHI',
+          message: 'ツモ山が残り人数未満のためリーチできません。',
+        };
+      }
+      const drawnMatch =
+        player.drawnTile.id === action.tileId ? player.drawnTile : null;
+      const handMatch =
+        drawnMatch ?? player.hand.find((t) => t.id === action.tileId) ?? null;
+      if (!handMatch) {
+        return {
+          code: 'TILE_NOT_IN_HAND',
+          message: '指定した牌が手牌にありません。',
+        };
+      }
+      const legalIds = getCanRiichiDiscardTileIds(
+        player.hand,
+        player.drawnTile,
+        player.melds,
+        rules,
+      );
+      if (!legalIds.includes(action.tileId)) {
+        return {
+          code: 'INVALID_RIICHI',
+          message: 'その牌を切っても聴牌にならないためリーチできません。',
         };
       }
       return null;
@@ -497,6 +595,21 @@ export function validateAction(
           message: '同じ牌が4枚揃っていないため暗槓できません。',
         };
       }
+      if (
+        player.isRiichi &&
+        !canAnkanPreserveRiichiWaits(
+          player.hand,
+          player.drawnTile,
+          player.melds,
+          action.kind,
+          rules,
+        )
+      ) {
+        return {
+          code: 'INVALID_CALL',
+          message: 'リーチ後は待ちが変わる暗槓はできません。',
+        };
+      }
       return null;
     }
 
@@ -518,6 +631,12 @@ export function validateAction(
         return {
           code: 'NOT_YOUR_TURN',
           message: 'あなたの手番ではありません。',
+        };
+      }
+      if (player.isRiichi) {
+        return {
+          code: 'INVALID_CALL',
+          message: 'リーチ後は加槓できません。',
         };
       }
       if (player.drawnTile === null) {
@@ -608,6 +727,41 @@ export function validateAction(
           message: '指定した牌が北(4z)ではありません。',
         };
       }
+      if (player.isRiichi && action.tileId !== player.drawnTile.id) {
+        return {
+          code: 'INVALID_CALL',
+          message: 'リーチ後はツモってきた北のみ抜けます。',
+        };
+      }
+      return null;
+    }
+
+    case 'DECLARE_KYUUSHU_KYUUHAI': {
+      if (state.phase !== 'playing' || state.round === null) {
+        return {
+          code: 'INVALID_PHASE',
+          message: '九種九牌を宣言できる状態ではありません。',
+        };
+      }
+      const player = state.players.find((p) => p.playerId === action.playerId);
+      if (!player) {
+        return {
+          code: 'PLAYER_NOT_FOUND',
+          message: 'プレイヤーが見つかりません。',
+        };
+      }
+      if (player.seatIndex !== state.round.currentTurnIndex) {
+        return {
+          code: 'NOT_YOUR_TURN',
+          message: 'あなたの手番ではありません。',
+        };
+      }
+      if (!canDeclareKyuushuKyuuhai(player, state.round)) {
+        return {
+          code: 'INVALID_ABORTIVE_DRAW',
+          message: '九種九牌の条件（第1ツモ時・鳴きなし・么九牌9種以上）を満たしていません。',
+        };
+      }
       return null;
     }
 
@@ -665,8 +819,116 @@ function markSameTurnFuritenForMissedRons(
     return [...players];
   }
   return players.map((p) =>
-    missedRonIds.has(p.playerId) ? { ...p, sameTurnFuriten: true } : p,
+    missedRonIds.has(p.playerId)
+      ? {
+          ...p,
+          sameTurnFuriten: true,
+          isRiichiFuriten: p.isRiichi ? true : p.isRiichiFuriten,
+        }
+      : p,
   );
+}
+
+function clearIppatsuForAllPlayers(players: readonly PlayerState[]): PlayerState[] {
+  return players.map((p) =>
+    p.ippatsuEligible ? { ...p, ippatsuEligible: false } : p,
+  );
+}
+
+function commitPendingRiichiIfAny(
+  players: readonly PlayerState[],
+  kyotakuCount: number,
+  pending: PendingResponseState,
+  riichiStickPoints: number,
+  calledDiscard: boolean,
+): { players: PlayerState[]; kyotakuCount: number } {
+  if (!pending.riichiDeclaration) {
+    return { players: [...players], kyotakuCount };
+  }
+  const { playerId, isDoubleRiichi } = pending.riichiDeclaration;
+  return {
+    players: players.map((p) =>
+      p.playerId === playerId
+        ? {
+            ...p,
+            score: p.score - riichiStickPoints,
+            isRiichi: true,
+            isDoubleRiichi,
+            ippatsuEligible: !calledDiscard,
+            pendingRiichiSideways: calledDiscard,
+          }
+        : p,
+    ),
+    kyotakuCount: kyotakuCount + 1,
+  };
+}
+
+function enterAbortiveDrawRound(
+  state: GameState,
+  reason: AbortiveDrawReason,
+  options?: {
+    playerId?: string;
+    revealedHands?: Record<string, Tile[]>;
+  },
+): GameState {
+  const round = state.round!;
+  return {
+    ...state,
+    phase: 'round_end',
+    round: {
+      ...round,
+      pendingResponse: null,
+      ronWinners: [],
+      agariResults: [],
+      uraDoraIndicators: [],
+      abortiveDrawReason: reason,
+      abortiveDrawPlayerId: options?.playerId ?? null,
+      revealedHands: options?.revealedHands ?? {},
+      kyotakuWinnerPlayerId: null,
+      kyotakuPointsAwarded: 0,
+      roundScoreDeltas: {},
+      isTobiEnded: false,
+      turnCount: round.turnCount + 1,
+    },
+  };
+}
+
+function isSuufonRendaTriggered(
+  state: GameState,
+  rules: DerivedRules,
+): boolean {
+  const round = state.round;
+  if (!round || rules.playerCount !== 4) return false;
+  if (!round.firstTurnUninterrupted) return false;
+  if (state.players.some((p) => p.isRiichi || p.discards.length !== 1)) {
+    return false;
+  }
+  const firstKind = state.players[0]!.discards[0]!.tile.kind;
+  if (
+    firstKind !== '1z' &&
+    firstKind !== '2z' &&
+    firstKind !== '3z' &&
+    firstKind !== '4z'
+  ) {
+    return false;
+  }
+  return state.players.every((p) => p.discards[0]!.tile.kind === firstKind);
+}
+
+function resolveAbortiveDrawOrAdvanceTurn(
+  state: GameState,
+  rules: DerivedRules,
+): GameState {
+  if (rules.playerCount === 4 && state.players.every((p) => p.isRiichi)) {
+    return enterAbortiveDrawRound(state, 'suucha_riichi');
+  }
+  if (isSuufonRendaTriggered(state, rules)) {
+    return enterAbortiveDrawRound(state, 'suufon_renda');
+  }
+  if (isSuukanzuTriggered(state)) {
+    return enterAbortiveDrawRound(state, 'suukanzu');
+  }
+  return advanceTurnAfterClearDiscard(state);
 }
 
 function advanceTurnAfterClearDiscard(state: GameState): GameState {
@@ -695,13 +957,127 @@ function advanceTurnAfterClearDiscard(state: GameState): GameState {
     ...state,
     phase: 'playing',
     players: state.players.map((p) =>
-      p.seatIndex === nextTurnIndex ? { ...p, drawnTile: nextDrawnTile } : p,
+      p.seatIndex === nextTurnIndex
+        ? { ...p, drawnTile: nextDrawnTile, isRinshanDraw: false }
+        : { ...p, isRinshanDraw: false },
     ),
     round: {
       ...round,
       currentTurnIndex: nextTurnIndex,
       wall: nextWall,
       deadWall: flushedDeadWall,
+      pendingResponse: null,
+      turnCount: round.turnCount + 1,
+    },
+  };
+}
+
+function commitAnkan(
+  state: GameState,
+  basePlayers: readonly PlayerState[],
+  playerId: string,
+  kind: Tile['kind'],
+): GameState {
+  const rules = deriveRules(state.ruleConfig);
+  const round = state.round!;
+  const activePlayer = basePlayers.find((p) => p.playerId === playerId)!;
+  const allTiles = [...activePlayer.hand, activePlayer.drawnTile!];
+  const kanTiles = sortTiles(allTiles.filter((t) => t.kind === kind));
+  const nextHand = sortTiles(allTiles.filter((t) => t.kind !== kind));
+
+  const afterKanTiming = applyKandoraTiming(
+    round.deadWall,
+    rules.kandoraTiming.ankan,
+  );
+  const rinshan = drawRinshanAndReplenish(round.wall, afterKanTiming);
+
+  return {
+    ...state,
+    phase: 'playing',
+    players: clearIppatsuForAllPlayers(basePlayers).map((p) =>
+      p.playerId === activePlayer.playerId
+        ? {
+            ...p,
+            hand: nextHand,
+            drawnTile: rinshan.drawnTile,
+            isRinshanDraw: true,
+            melds: [
+              ...p.melds,
+              {
+                type: 'ankan',
+                tiles: kanTiles,
+                calledTile: null,
+                fromSeatIndex: null,
+                addedTile: null,
+              },
+            ],
+          }
+        : { ...p, isRinshanDraw: false },
+    ),
+    round: {
+      ...round,
+      wall: rinshan.wall,
+      deadWall: rinshan.deadWall,
+      kanCount: round.kanCount + 1,
+      firstTurnUninterrupted: false,
+      pendingResponse: null,
+      turnCount: round.turnCount + 1,
+    },
+  };
+}
+
+function commitKakan(
+  state: GameState,
+  basePlayers: readonly PlayerState[],
+  playerId: string,
+  tileId: string,
+): GameState {
+  const rules = deriveRules(state.ruleConfig);
+  const round = state.round!;
+  const activePlayer = basePlayers.find((p) => p.playerId === playerId)!;
+  const extracted = extractTileFromHandOrDrawn(activePlayer, tileId)!;
+  const addedTile = extracted.extracted;
+
+  let upgraded = false;
+  const nextMelds = activePlayer.melds.map((m) => {
+    if (!upgraded && m.type === 'pon' && m.tiles[0]?.kind === addedTile.kind) {
+      upgraded = true;
+      return {
+        ...m,
+        type: 'kakan' as const,
+        tiles: sortTiles([...m.tiles, addedTile]),
+        addedTile,
+      };
+    }
+    return m;
+  });
+
+  const afterKanTiming = applyKandoraTiming(
+    round.deadWall,
+    rules.kandoraTiming.kakan,
+  );
+  const rinshan = drawRinshanAndReplenish(round.wall, afterKanTiming);
+
+  return {
+    ...state,
+    phase: 'playing',
+    players: clearIppatsuForAllPlayers(basePlayers).map((p) =>
+      p.playerId === activePlayer.playerId
+        ? {
+            ...p,
+            hand: extracted.nextHand,
+            drawnTile: rinshan.drawnTile,
+            isRinshanDraw: true,
+            melds: nextMelds,
+          }
+        : { ...p, isRinshanDraw: false },
+    ),
+    round: {
+      ...round,
+      wall: rinshan.wall,
+      deadWall: rinshan.deadWall,
+      kanCount: round.kanCount + 1,
+      firstTurnUninterrupted: false,
       pendingResponse: null,
       turnCount: round.turnCount + 1,
     },
@@ -750,13 +1126,16 @@ function resolvePendingResponses(
         seatDistance(pending.discarderSeatIndex, b.seatIndex, rules.playerCount),
     );
 
-  // 1. ロン最優先（頭ハネ / ダブロン設定に従う）
+  // 1. ロン最優先（4人麻雀ダブロンありで3人同時ロンなら三家和で途中流局）
   const ronPlayers = eligiblePlayers.filter(
     (p) =>
       responses[p.playerId]?.type === 'ron' &&
       pending.optionsByPlayerId[p.playerId]?.canRon,
   );
   if (ronPlayers.length > 0) {
+    if (rules.playerCount === 4 && rules.doubleRon && ronPlayers.length >= 3) {
+      return enterAbortiveDrawRound(state, 'sancha_hou');
+    }
     const chosen = rules.doubleRon ? ronPlayers : [ronPlayers[0]!];
     const discarder = state.players.find(
       (p) => p.seatIndex === pending.discarderSeatIndex,
@@ -775,12 +1154,18 @@ function resolvePendingResponses(
       roundScoreDeltas[p.playerId] = 0;
     }
 
+    const chankanKind =
+      pending.kind === 'kakan' || pending.kind === 'ankan'
+        ? pending.kind
+        : undefined;
+
     for (const winner of chosen) {
       const evalResult = evaluateRonForPlayer(
         state,
         winner,
         pending.discardedTile,
         discarder,
+        chankanKind ? { chankanKind } : undefined,
       );
       if (evalResult !== null) {
         const winnerRecord = buildAgariWinnerRecord({
@@ -798,6 +1183,19 @@ function resolvePendingResponses(
       }
     }
 
+    const kyotakuPointsAwarded = state.kyotakuCount * rules.riichiStickPoints;
+    const kyotakuWinnerPlayerId =
+      kyotakuPointsAwarded > 0 ? chosen[0]!.playerId : null;
+    if (kyotakuWinnerPlayerId) {
+      roundScoreDeltas[kyotakuWinnerPlayerId] =
+        (roundScoreDeltas[kyotakuWinnerPlayerId] ?? 0) + kyotakuPointsAwarded;
+    }
+
+    const anyWinnerIsRiichi = chosen.some((p) => p.isRiichi);
+    const uraDoraIndicators = anyWinnerIsRiichi
+      ? getRevealedUraDoraIndicators(round.deadWall, true)
+      : [];
+
     const nextPlayers = state.players.map((p) => ({
       ...p,
       score: p.score + (roundScoreDeltas[p.playerId] ?? 0),
@@ -809,24 +1207,49 @@ function resolvePendingResponses(
       ...state,
       phase: 'round_end',
       players: nextPlayers,
+      kyotakuCount: 0,
       round: {
         ...round,
         pendingResponse: null,
         ronWinners,
         agariResults,
-        roundScoreDeltas: agariResults.length > 0 ? roundScoreDeltas : {},
+        uraDoraIndicators,
+        kyotakuWinnerPlayerId,
+        kyotakuPointsAwarded,
+        roundScoreDeltas:
+          agariResults.length > 0 || kyotakuPointsAwarded > 0
+            ? roundScoreDeltas
+            : {},
         isTobiEnded,
         turnCount: round.turnCount + 1,
       },
     };
   }
 
-  // ロン以外で終了する場合、ロンを見逃したプレイヤーに同巡フリテンを付与
+  // ロン以外で終了する場合、ロンを見逃したプレイヤーに同巡フリテン・リーチ後フリテンを付与
   const playersWithFuriten = markSameTurnFuritenForMissedRons(
     state.players,
     pending,
     responses,
   );
+
+  // 加槓 / 暗槓の槍槓チェックで全員パスの場合はカンを実行して嶺上ツモへ
+  if (pending.kind === 'kakan' && pending.kakanTarget) {
+    return commitKakan(
+      state,
+      playersWithFuriten,
+      pending.kakanTarget.playerId,
+      pending.kakanTarget.addedTile.id,
+    );
+  }
+  if (pending.kind === 'ankan' && pending.ankanTarget) {
+    return commitAnkan(
+      state,
+      playersWithFuriten,
+      pending.ankanTarget.playerId,
+      pending.ankanTarget.kind,
+    );
+  }
 
   // 2. ポン / 大明槓（ロンに次ぐ優先度）
   const ponOrKanPlayer = eligiblePlayers.find((p) => {
@@ -835,10 +1258,17 @@ function resolvePendingResponses(
   });
 
   if (ponOrKanPlayer) {
+    const riichiCommitted = commitPendingRiichiIfAny(
+      playersWithFuriten,
+      state.kyotakuCount,
+      pending,
+      rules.riichiStickPoints,
+      true,
+    );
     const choice = responses[ponOrKanPlayer.playerId]!;
     const flushedDeadWall = flushPendingKandora(round.deadWall);
     const playersWithoutDiscard = removeLastDiscardFromDiscarder(
-      playersWithFuriten,
+      clearIppatsuForAllPlayers(riichiCommitted.players),
       pending.discarderSeatIndex,
       pending.discardedTile.id,
     );
@@ -865,6 +1295,7 @@ function resolvePendingResponses(
               ...p,
               hand: nextHand,
               drawnTile: null,
+              isRinshanDraw: false,
               melds: [
                 ...p.melds,
                 {
@@ -876,17 +1307,19 @@ function resolvePendingResponses(
                 },
               ],
             }
-          : p,
+          : { ...p, isRinshanDraw: false },
       );
 
       return {
         ...state,
         phase: 'playing',
         players: nextPlayers,
+        kyotakuCount: riichiCommitted.kyotakuCount,
         round: {
           ...round,
           currentTurnIndex: ponOrKanPlayer.seatIndex,
           deadWall: flushedDeadWall,
+          firstTurnUninterrupted: false,
           kuikaeForbiddenKinds: forbiddenKinds,
           pendingResponse: null,
           turnCount: round.turnCount + 1,
@@ -916,6 +1349,7 @@ function resolvePendingResponses(
             ...p,
             hand: nextHand,
             drawnTile: rinshan.drawnTile,
+            isRinshanDraw: true,
             melds: [
               ...p.melds,
               {
@@ -927,19 +1361,21 @@ function resolvePendingResponses(
               },
             ],
           }
-        : p,
+        : { ...p, isRinshanDraw: false },
     );
 
     return {
       ...state,
       phase: 'playing',
       players: nextPlayers,
+      kyotakuCount: riichiCommitted.kyotakuCount,
       round: {
         ...round,
         currentTurnIndex: ponOrKanPlayer.seatIndex,
         wall: rinshan.wall,
         deadWall: rinshan.deadWall,
         kanCount: round.kanCount + 1,
+        firstTurnUninterrupted: false,
         kuikaeForbiddenKinds: [],
         pendingResponse: null,
         turnCount: round.turnCount + 1,
@@ -952,13 +1388,20 @@ function resolvePendingResponses(
     (p) => responses[p.playerId]?.type === 'chi',
   );
   if (chiPlayer) {
+    const riichiCommitted = commitPendingRiichiIfAny(
+      playersWithFuriten,
+      state.kyotakuCount,
+      pending,
+      rules.riichiStickPoints,
+      true,
+    );
     const choice = responses[chiPlayer.playerId] as {
       type: 'chi';
       tileIds: [string, string];
     };
     const flushedDeadWall = flushPendingKandora(round.deadWall);
     const playersWithoutDiscard = removeLastDiscardFromDiscarder(
-      playersWithFuriten,
+      clearIppatsuForAllPlayers(riichiCommitted.players),
       pending.discarderSeatIndex,
       pending.discardedTile.id,
     );
@@ -987,6 +1430,7 @@ function resolvePendingResponses(
             ...p,
             hand: nextHand,
             drawnTile: null,
+            isRinshanDraw: false,
             melds: [
               ...p.melds,
               {
@@ -998,17 +1442,19 @@ function resolvePendingResponses(
               },
             ],
           }
-        : p,
+        : { ...p, isRinshanDraw: false },
     );
 
     return {
       ...state,
       phase: 'playing',
       players: nextPlayers,
+      kyotakuCount: riichiCommitted.kyotakuCount,
       round: {
         ...round,
         currentTurnIndex: chiPlayer.seatIndex,
         deadWall: flushedDeadWall,
+        firstTurnUninterrupted: false,
         kuikaeForbiddenKinds: forbiddenKinds,
         pendingResponse: null,
         turnCount: round.turnCount + 1,
@@ -1017,10 +1463,21 @@ function resolvePendingResponses(
   }
 
   // 4. 全員パス
-  return advanceTurnAfterClearDiscard({
-    ...state,
-    players: playersWithFuriten,
-  });
+  const riichiCommitted = commitPendingRiichiIfAny(
+    playersWithFuriten,
+    state.kyotakuCount,
+    pending,
+    rules.riichiStickPoints,
+    false,
+  );
+  return resolveAbortiveDrawOrAdvanceTurn(
+    {
+      ...state,
+      players: riichiCommitted.players,
+      kyotakuCount: riichiCommitted.kyotakuCount,
+    },
+    rules,
+  );
 }
 
 export function reduce(
@@ -1047,6 +1504,12 @@ export function reduce(
         discards: [],
         discardedKinds: [],
         sameTurnFuriten: false,
+        isRiichiFuriten: false,
+        isRiichi: false,
+        isDoubleRiichi: false,
+        ippatsuEligible: false,
+        pendingRiichiSideways: false,
+        isRinshanDraw: false,
         melds: [],
         kitaTiles: [],
         connected: true,
@@ -1092,6 +1555,12 @@ export function reduce(
         discards: [],
         discardedKinds: [],
         sameTurnFuriten: false,
+        isRiichiFuriten: false,
+        isRiichi: false,
+        isDoubleRiichi: false,
+        ippatsuEligible: false,
+        pendingRiichiSideways: false,
+        isRinshanDraw: false,
         melds: [],
         kitaTiles: [],
       }));
@@ -1100,6 +1569,7 @@ export function reduce(
         ...state,
         phase: 'playing',
         players,
+        kyotakuCount: 0,
         round: {
           roundIndex: 0,
           roundWind: roundMeta.roundWind,
@@ -1111,10 +1581,17 @@ export function reduce(
           deadWall: deal.deadWall,
           turnCount: 0,
           kanCount: 0,
+          firstTurnUninterrupted: true,
           kuikaeForbiddenKinds: [],
           pendingResponse: null,
           ronWinners: [],
           agariResults: [],
+          uraDoraIndicators: [],
+          abortiveDrawReason: null,
+          abortiveDrawPlayerId: null,
+          revealedHands: {},
+          kyotakuWinnerPlayerId: null,
+          kyotakuPointsAwarded: 0,
           roundScoreDeltas: {},
           isTobiEnded: false,
         },
@@ -1134,17 +1611,32 @@ export function reduce(
       }
 
       const discardedTile = extracted.extracted;
+      const missedTsumoInRiichi =
+        activePlayer.isRiichi &&
+        evaluateTsumoFromRound(activePlayer, round, rules) !== null;
+
       const nextPlayers = state.players.map((p) =>
         p.playerId === activePlayer.playerId
           ? {
               ...p,
               hand: extracted.nextHand,
               drawnTile: null,
-              discards: [...p.discards, { tile: discardedTile, isTsumogiri }],
+              discards: [
+                ...p.discards,
+                {
+                  tile: discardedTile,
+                  isTsumogiri,
+                  ...(p.pendingRiichiSideways ? { isRiichiDeclaration: true } : {}),
+                },
+              ],
               discardedKinds: [...p.discardedKinds, discardedTile.kind],
               sameTurnFuriten: false,
+              isRiichiFuriten: p.isRiichiFuriten || missedTsumoInRiichi,
+              ippatsuEligible: false,
+              pendingRiichiSideways: false,
+              isRinshanDraw: false,
             }
-          : p,
+          : { ...p, isRinshanDraw: false },
       );
 
       const stateAfterDiscard: GameState = {
@@ -1184,7 +1676,107 @@ export function reduce(
         };
       }
 
-      return advanceTurnAfterClearDiscard(stateAfterDiscard);
+      return resolveAbortiveDrawOrAdvanceTurn(stateAfterDiscard, rules);
+    }
+
+    case 'DECLARE_RIICHI': {
+      const round = state.round!;
+      const activePlayer = state.players.find(
+        (p) => p.playerId === action.playerId,
+      )!;
+      const isTsumogiri = activePlayer.drawnTile?.id === action.tileId;
+      const isDoubleRiichi =
+        round.firstTurnUninterrupted && activePlayer.discards.length === 0;
+
+      const extracted = extractTileFromHandOrDrawn(activePlayer, action.tileId);
+      if (!extracted) {
+        return state;
+      }
+
+      const discardedTile = extracted.extracted;
+      const nextPlayers = state.players.map((p) =>
+        p.playerId === activePlayer.playerId
+          ? {
+              ...p,
+              hand: extracted.nextHand,
+              drawnTile: null,
+              discards: [
+                ...p.discards,
+                {
+                  tile: discardedTile,
+                  isTsumogiri,
+                  isRiichiDeclaration: true,
+                },
+              ],
+              discardedKinds: [...p.discardedKinds, discardedTile.kind],
+              sameTurnFuriten: false,
+              isRinshanDraw: false,
+            }
+          : { ...p, isRinshanDraw: false },
+      );
+
+      const stateAfterDiscard: GameState = {
+        ...state,
+        players: nextPlayers,
+        round: {
+          ...round,
+          kuikaeForbiddenKinds: [],
+        },
+      };
+
+      const optionsByPlayerId = buildPendingCallOptions(
+        stateAfterDiscard,
+        stateAfterDiscard.players.find(
+          (p) => p.playerId === activePlayer.playerId,
+        )!,
+        discardedTile,
+        rules,
+        hooks,
+      );
+
+      if (Object.keys(optionsByPlayerId).length > 0) {
+        return {
+          ...stateAfterDiscard,
+          phase: 'awaiting_responses',
+          round: {
+            ...stateAfterDiscard.round!,
+            pendingResponse: {
+              discarderSeatIndex: activePlayer.seatIndex,
+              discardedTile,
+              turnCount: round.turnCount,
+              openedAt: action.now ?? 0,
+              optionsByPlayerId,
+              responses: {},
+              riichiDeclaration: {
+                playerId: activePlayer.playerId,
+                isDoubleRiichi,
+              },
+            },
+          },
+        };
+      }
+
+      // 誰もロン・鳴きできない場合は即時にリーチ成立・供託加算
+      const committedPlayers = stateAfterDiscard.players.map((p) =>
+        p.playerId === activePlayer.playerId
+          ? {
+              ...p,
+              score: p.score - rules.riichiStickPoints,
+              isRiichi: true,
+              isDoubleRiichi,
+              ippatsuEligible: true,
+            }
+          : p,
+      );
+
+      return resolveAbortiveDrawOrAdvanceTurn(
+        {
+          ...stateAfterDiscard,
+          players: committedPlayers,
+          kyotakuCount: state.kyotakuCount + 1,
+        },
+        rules,
+      );
     }
 
     case 'CALL_RESPONSE': {
@@ -1244,6 +1836,18 @@ export function reduce(
       });
 
       const roundScoreDeltas = { ...winnerRecord.scoreDeltas };
+      const kyotakuPointsAwarded = state.kyotakuCount * rules.riichiStickPoints;
+      const kyotakuWinnerPlayerId =
+        kyotakuPointsAwarded > 0 ? activePlayer.playerId : null;
+      if (kyotakuWinnerPlayerId) {
+        roundScoreDeltas[kyotakuWinnerPlayerId] =
+          (roundScoreDeltas[kyotakuWinnerPlayerId] ?? 0) + kyotakuPointsAwarded;
+      }
+
+      const uraDoraIndicators = activePlayer.isRiichi
+        ? getRevealedUraDoraIndicators(round.deadWall, true)
+        : [];
+
       const nextPlayers = state.players.map((p) => ({
         ...p,
         score: p.score + (roundScoreDeltas[p.playerId] ?? 0),
@@ -1255,9 +1859,13 @@ export function reduce(
         ...state,
         phase: 'round_end',
         players: nextPlayers,
+        kyotakuCount: 0,
         round: {
           ...round,
           agariResults: [winnerRecord],
+          uraDoraIndicators,
+          kyotakuWinnerPlayerId,
+          kyotakuPointsAwarded,
           roundScoreDeltas,
           isTobiEnded,
           turnCount: round.turnCount + 1,
@@ -1271,48 +1879,40 @@ export function reduce(
         (p) => p.playerId === action.playerId,
       )!;
       const allTiles = [...activePlayer.hand, activePlayer.drawnTile!];
-      const kanTiles = sortTiles(
-        allTiles.filter((t) => t.kind === action.kind),
-      );
-      const nextHand = sortTiles(
-        allTiles.filter((t) => t.kind !== action.kind),
-      );
+      const sampleTile = allTiles.find((t) => t.kind === action.kind)!;
 
-      const afterKanTiming = applyKandoraTiming(
-        round.deadWall,
-        rules.kandoraTiming.ankan,
+      // 暗槓に対する国士無双のみの槍槓チェック
+      const optionsByPlayerId = buildPendingChankanOptions(
+        state,
+        activePlayer,
+        sampleTile,
+        'ankan',
+        hooks,
       );
-      const rinshan = drawRinshanAndReplenish(round.wall, afterKanTiming);
+      if (Object.keys(optionsByPlayerId).length > 0) {
+        return {
+          ...state,
+          phase: 'awaiting_responses',
+          round: {
+            ...round,
+            pendingResponse: {
+              kind: 'ankan',
+              discarderSeatIndex: activePlayer.seatIndex,
+              discardedTile: sampleTile,
+              turnCount: round.turnCount,
+              openedAt: action.now ?? 0,
+              optionsByPlayerId,
+              responses: {},
+              ankanTarget: {
+                playerId: activePlayer.playerId,
+                kind: action.kind,
+              },
+            },
+          },
+        };
+      }
 
-      return {
-        ...state,
-        players: state.players.map((p) =>
-          p.playerId === activePlayer.playerId
-            ? {
-                ...p,
-                hand: nextHand,
-                drawnTile: rinshan.drawnTile,
-                melds: [
-                  ...p.melds,
-                  {
-                    type: 'ankan',
-                    tiles: kanTiles,
-                    calledTile: null,
-                    fromSeatIndex: null,
-                    addedTile: null,
-                  },
-                ],
-              }
-            : p,
-        ),
-        round: {
-          ...round,
-          wall: rinshan.wall,
-          deadWall: rinshan.deadWall,
-          kanCount: round.kanCount + 1,
-          turnCount: round.turnCount + 1,
-        },
-      };
+      return commitAnkan(state, state.players, activePlayer.playerId, action.kind);
     }
 
     case 'DECLARE_KAKAN': {
@@ -1320,49 +1920,43 @@ export function reduce(
       const activePlayer = state.players.find(
         (p) => p.playerId === action.playerId,
       )!;
-      const extracted = extractTileFromHandOrDrawn(activePlayer, action.tileId)!;
-      const addedTile = extracted.extracted;
+      const addedTile =
+        activePlayer.drawnTile?.id === action.tileId
+          ? activePlayer.drawnTile
+          : activePlayer.hand.find((t) => t.id === action.tileId)!;
 
-      let upgraded = false;
-      const nextMelds = activePlayer.melds.map((m) => {
-        if (!upgraded && m.type === 'pon' && m.tiles[0]?.kind === addedTile.kind) {
-          upgraded = true;
-          return {
-            ...m,
-            type: 'kakan' as const,
-            tiles: sortTiles([...m.tiles, addedTile]),
-            addedTile,
-          };
-        }
-        return m;
-      });
-
-      const afterKanTiming = applyKandoraTiming(
-        round.deadWall,
-        rules.kandoraTiming.kakan,
+      // 加槓に対する通常の槍槓チェック
+      const optionsByPlayerId = buildPendingChankanOptions(
+        state,
+        activePlayer,
+        addedTile,
+        'kakan',
+        hooks,
       );
-      const rinshan = drawRinshanAndReplenish(round.wall, afterKanTiming);
+      if (Object.keys(optionsByPlayerId).length > 0) {
+        return {
+          ...state,
+          phase: 'awaiting_responses',
+          round: {
+            ...round,
+            pendingResponse: {
+              kind: 'kakan',
+              discarderSeatIndex: activePlayer.seatIndex,
+              discardedTile: addedTile,
+              turnCount: round.turnCount,
+              openedAt: action.now ?? 0,
+              optionsByPlayerId,
+              responses: {},
+              kakanTarget: {
+                playerId: activePlayer.playerId,
+                addedTile,
+              },
+            },
+          },
+        };
+      }
 
-      return {
-        ...state,
-        players: state.players.map((p) =>
-          p.playerId === activePlayer.playerId
-            ? {
-                ...p,
-                hand: extracted.nextHand,
-                drawnTile: rinshan.drawnTile,
-                melds: nextMelds,
-              }
-            : p,
-        ),
-        round: {
-          ...round,
-          wall: rinshan.wall,
-          deadWall: rinshan.deadWall,
-          kanCount: round.kanCount + 1,
-          turnCount: round.turnCount + 1,
-        },
-      };
+      return commitKakan(state, state.players, activePlayer.playerId, action.tileId);
     }
 
     case 'DECLARE_KITA': {
@@ -1382,9 +1976,10 @@ export function reduce(
                 ...p,
                 hand: extracted.nextHand,
                 drawnTile: rinshan.drawnTile,
+                isRinshanDraw: true,
                 kitaTiles: [...p.kitaTiles, kitaTile],
               }
-            : p,
+            : { ...p, isRinshanDraw: false },
         ),
         round: {
           ...round,
@@ -1393,6 +1988,22 @@ export function reduce(
           turnCount: round.turnCount + 1,
         },
       };
+    }
+
+    case 'DECLARE_KYUUSHU_KYUUHAI': {
+      const activePlayer = state.players.find(
+        (p) => p.playerId === action.playerId,
+      )!;
+      const fullHand = sortTiles([
+        ...activePlayer.hand,
+        ...(activePlayer.drawnTile ? [activePlayer.drawnTile] : []),
+      ]);
+      return enterAbortiveDrawRound(state, 'kyuushu_kyuuhai', {
+        playerId: activePlayer.playerId,
+        revealedHands: {
+          [activePlayer.playerId]: fullHand,
+        },
+      });
     }
 
     case 'ADVANCE_ROUND': {
@@ -1407,6 +2018,12 @@ export function reduce(
           discards: [],
           discardedKinds: [],
           sameTurnFuriten: false,
+          isRiichiFuriten: false,
+          isRiichi: false,
+          isDoubleRiichi: false,
+          ippatsuEligible: false,
+          pendingRiichiSideways: false,
+          isRinshanDraw: false,
           melds: [],
           kitaTiles: [],
         }));
@@ -1437,6 +2054,12 @@ export function reduce(
         discards: [],
         discardedKinds: [],
         sameTurnFuriten: false,
+        isRiichiFuriten: false,
+        isRiichi: false,
+        isDoubleRiichi: false,
+        ippatsuEligible: false,
+        pendingRiichiSideways: false,
+        isRinshanDraw: false,
         melds: [],
         kitaTiles: [],
       }));
@@ -1456,10 +2079,17 @@ export function reduce(
           deadWall: deal.deadWall,
           turnCount: 0,
           kanCount: 0,
+          firstTurnUninterrupted: true,
           kuikaeForbiddenKinds: [],
           pendingResponse: null,
           ronWinners: [],
           agariResults: [],
+          uraDoraIndicators: [],
+          abortiveDrawReason: null,
+          abortiveDrawPlayerId: null,
+          revealedHands: {},
+          kyotakuWinnerPlayerId: null,
+          kyotakuPointsAwarded: 0,
           roundScoreDeltas: {},
           isTobiEnded: false,
         },

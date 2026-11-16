@@ -81,6 +81,7 @@ export const DEAD_WALL_SIZE_BY_PLAYERS: Record<PlayerCount, number> = {
 
 export const DEFAULT_RESPONSE_TIMEOUT_MS = 15000;
 export const DEFAULT_MAX_KANS_PER_ROUND = 4;
+export const RIICHI_STICK_POINTS = 1000;
 
 export const DEFAULT_KANDORA_TIMING: KandoraTimingConfig = {
   ankan: 'immediate',
@@ -164,5 +165,6 @@ export interface DerivedRules {
   allowKazoeYakuman: boolean;
   doubleWindPairFu: number;
   kitaCountsAsIndicatorDora: boolean;
+  riichiStickPoints: number;
   scoreLimits: ScoreLimitBasePoints;
 }

@@ -12,7 +12,7 @@ import {
 
 describe('第3A段階: ツモ和了・ロン・ダブロン・フリテン・トビ・三麻ツモ損', () => {
   it('ツモ和了で点棒移動・和了者のみ手牌開示・他家手牌隠蔽・親回転が行われる', () => {
-    // p0(親): 234m 456m 345p 678s 55p + 2m(ツモ) -> 平和+門前ツモ+断幺九 (20符3翻 = 1300オール = 3900)
+    // p0(親): 234m 456m 345p 678s 55p + 2m(2巡目ツモ) -> 平和+門前ツモ+断幺九 (20符3翻 = 1300オール = 3900)
     let state = createStartedCustomGame(4, {
       hands: {
         0: ['3m', '4m', '4m', '5m', '6m', '3p', '4p', '5p', '6s', '7s', '8s', '5p', '5p'],
@@ -20,9 +20,24 @@ describe('第3A段階: ツモ和了・ロン・ダブロン・フリテン・ト
         2: ['2z', '2z', '3z', '3z', '4z', '4z', '5z', '5z', '6z', '6z', '7z', '7z', '8s'],
         3: ['1p', '2p', '3p', '7p', '8p', '9p', '1s', '2s', '3s', '4s', '5s', '7p', '8p'],
       },
-      dealerDrawnKind: '2m',
+      dealerDrawnKind: '9s',
+      liveWallHeadKinds: ['7z', '4m', '6z', '2m'],
       doraIndicatorKinds: ['1z', '2z', '3z', '4z', '5z'],
     });
+
+    // 1巡目を鳴きなしで回して天和を回避し、2巡目に p0 が 2m をツモる
+    for (let i = 0; i < 4; i++) {
+      const cur = state.players.find(
+        (p) => p.seatIndex === state.round!.currentTurnIndex,
+      )!;
+      state = passAllPendingResponses(
+        reduce(state, {
+          type: 'DISCARD_TILE',
+          playerId: cur.playerId,
+          tileId: cur.drawnTile!.id,
+        }),
+      );
+    }
 
     const p0View = toStateView(state, 'p0');
     expect(p0View.mySelfActions?.canTsumo).toBe(true);
@@ -337,11 +352,11 @@ describe('第3A段階: ツモ和了・ロン・ダブロン・フリテン・ト
   });
 
   it('トビ終了: tobi=true で0点未満になると即終局し、tobi=false は続行する', () => {
-    // 親(p0)の国士無双(48000)を p1(初期25000 -> -23000) が振り込む
+    // 親(p0)の国士無双単面待ち(48000)を p1(初期25000 -> -23000) が振り込む
     // ※ p0 の第1打は国士牌以外の 8p にすることで捨て牌フリテンを回避
     const kokushiSpec = {
       hands: {
-        0: ['1m', '9m', '1p', '9p', '1s', '9s', '1z', '2z', '3z', '4z', '5z', '6z', '7z'],
+        0: ['9m', '1p', '9p', '1s', '9s', '1z', '2z', '3z', '4z', '5z', '6z', '7z', '7z'],
         1: ['1m', '2m', '2m', '3m', '3m', '4m', '4m', '5m', '5m', '6m', '6m', '7m', '7m'],
         2: ['2p', '2p', '3p', '3p', '4p', '4p', '5p', '5p', '6p', '6p', '7p', '7p', '9p'],
         3: ['2s', '2s', '3s', '3s', '4s', '4s', '5s', '5s', '6s', '6s', '7s', '7s', '8s'],
@@ -506,7 +521,8 @@ describe('第3A段階: ツモ和了・ロン・ダブロン・フリテン・ト
           2: ['2p', '2p', '3p', '3p', '4p', '4p', '5p', '5p', '6p', '6p', '7p', '7p', '2z'],
         },
         dealerDrawnKind: '9p',
-        rinshanKinds: ['9p', '1z', '2z', '3z'],
+        rinshanKinds: ['2z', '1z', '2z', '3z'],
+        liveWallHeadKinds: ['1s', '3s', '9p'],
         doraIndicatorKinds: ['9m', '1z', '2z', '3z', '5z'],
       },
       { tsumoLoss: false },
@@ -515,6 +531,30 @@ describe('第3A段階: ツモ和了・ロン・ダブロン・フリテン・ト
     const kitaId = s3.players[0]!.hand.find((t) => t.kind === '4z')!.id;
     s3 = reduce(s3, { type: 'DECLARE_KITA', playerId: 'p0', tileId: kitaId });
     expect(s3.players[0]!.kitaTiles).toHaveLength(1);
+    expect(s3.players[0]!.drawnTile!.kind).toBe('2z');
+
+    // 1巡目 p0 が嶺上ツモの 2z を切って天和・嶺上開花を回避し、2巡目に通常ツモ 9p で和了
+    s3 = passAllPendingResponses(
+      reduce(s3, {
+        type: 'DISCARD_TILE',
+        playerId: 'p0',
+        tileId: s3.players[0]!.drawnTile!.id,
+      }),
+    );
+    s3 = passAllPendingResponses(
+      reduce(s3, {
+        type: 'DISCARD_TILE',
+        playerId: 'p1',
+        tileId: s3.players[1]!.drawnTile!.id,
+      }),
+    );
+    s3 = passAllPendingResponses(
+      reduce(s3, {
+        type: 'DISCARD_TILE',
+        playerId: 'p2',
+        tileId: s3.players[2]!.drawnTile!.id,
+      }),
+    );
     expect(s3.players[0]!.drawnTile!.kind).toBe('9p');
 
     const res = applyAction(s3, { type: 'DECLARE_TSUMO', playerId: 'p0' });

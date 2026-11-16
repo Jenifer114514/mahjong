@@ -8,12 +8,22 @@ export interface YakuContext {
   roundWind: Wind;
   seatWind: Wind;
   rules: DerivedRules;
+  isRiichi?: boolean;
+  isDoubleRiichi?: boolean;
+  isIppatsu?: boolean;
+  isRinshan?: boolean;
+  isChankan?: boolean;
+  isHaitei?: boolean;
+  isHoutei?: boolean;
+  isTenhou?: boolean;
+  isChiihou?: boolean;
 }
 
 export interface YakuEvaluation {
   yaku: YakuEntry[];
   yakuHan: number;
   isYakuman: boolean;
+  yakumanMultiplier: number;
   hasPinfu: boolean;
 }
 
@@ -31,8 +41,18 @@ const WIND_JA: Record<Wind, string> = {
   N: '北',
 };
 
+const GREEN_KINDS = new Set<TileKind>(['2s', '3s', '4s', '6s', '8s', '6z']);
+const WIND_KINDS: readonly TileKind[] = ['1z', '2z', '3z', '4z'];
+const DRAGON_KINDS: readonly TileKind[] = ['5z', '6z', '7z'];
+
 export function isTerminalOrHonorKind(kind: TileKind): boolean {
   if (kind.endsWith('z')) return true;
+  const rank = Number(kind[0]);
+  return rank === 1 || rank === 9;
+}
+
+export function isTerminalKind(kind: TileKind): boolean {
+  if (kind.endsWith('z')) return false;
   const rank = Number(kind[0]);
   return rank === 1 || rank === 9;
 }
@@ -130,37 +150,140 @@ function addFlushYaku(
   }
 }
 
+function makeYakumanEntry(
+  id: string,
+  name: string,
+  multiplier: 1 | 2 = 1,
+): YakuEntry {
+  return {
+    id,
+    name,
+    han: multiplier * 13,
+    isYakuman: true,
+    yakumanMultiplier: multiplier,
+  };
+}
+
+function finalizeYakumanResult(yakumanList: YakuEntry[]): YakuEvaluation {
+  const yakumanMultiplier = yakumanList.reduce(
+    (sum, y) => sum + (y.yakumanMultiplier ?? 1),
+    0,
+  );
+  return {
+    yaku: yakumanList,
+    yakuHan: yakumanMultiplier * 13,
+    isYakuman: true,
+    yakumanMultiplier,
+    hasPinfu: false,
+  };
+}
+
+function detectChuurenYakuman(
+  decomp: Extract<AgariDecomposition, { form: 'standard' }>,
+): YakuEntry | null {
+  if (!decomp.isMenzen) return null;
+  if (decomp.mentsu.some((m) => m.type === 'kantsu')) return null;
+
+  const allKinds: TileKind[] = [
+    decomp.pairKind,
+    decomp.pairKind,
+    ...decomp.mentsu.flatMap((m) => m.kinds),
+  ];
+  const suit = getSuit(allKinds[0]!);
+  if (suit === 'z') return null;
+  if (!allKinds.every((k) => getSuit(k) === suit)) return null;
+
+  const rankCounts = Array(10).fill(0) as number[];
+  for (const k of allKinds) {
+    rankCounts[Number(k[0])] = (rankCounts[Number(k[0])] ?? 0) + 1;
+  }
+
+  if ((rankCounts[1] ?? 0) < 3 || (rankCounts[9] ?? 0) < 3) {
+    return null;
+  }
+  for (let r = 2; r <= 8; r++) {
+    if ((rankCounts[r] ?? 0) < 1) {
+      return null;
+    }
+  }
+
+  // 和了牌1枚を除いて 1112345678999 なら純正九蓮宝燈（9面待ち）
+  const winRank = Number(decomp.winningKind[0]);
+  const baseCounts = [...rankCounts];
+  baseCounts[winRank] = (baseCounts[winRank] ?? 0) - 1;
+  const isJunsei =
+    baseCounts[1] === 3 &&
+    baseCounts[9] === 3 &&
+    [2, 3, 4, 5, 6, 7, 8].every((r) => baseCounts[r] === 1);
+
+  return isJunsei
+    ? makeYakumanEntry('junsei_chuuren', '純正九蓮宝燈', 2)
+    : makeYakumanEntry('chuuren_poutou', '九蓮宝燈', 1);
+}
+
+function addSituationalYaku(yaku: YakuEntry[], ctx: YakuContext): void {
+  if (ctx.isRinshan && ctx.isTsumo) {
+    yaku.push({ id: 'rinshan_kaihou', name: '嶺上開花', han: 1 });
+  }
+  if (ctx.isChankan && !ctx.isTsumo) {
+    yaku.push({ id: 'chankan', name: '槍槓', han: 1 });
+  }
+  if (ctx.isHaitei && ctx.isTsumo && !ctx.isRinshan) {
+    yaku.push({ id: 'haitei_tsumo', name: '海底摸月', han: 1 });
+  }
+  if (ctx.isHoutei && !ctx.isTsumo && !ctx.isChankan) {
+    yaku.push({ id: 'houtei_ron', name: '河底撈魚', han: 1 });
+  }
+}
+
 export function evaluateYaku(
   decomp: AgariDecomposition,
   ctx: YakuContext,
 ): YakuEvaluation {
-  if (decomp.form === 'kokushi') {
-    const yaku: YakuEntry[] = [
-      {
-        id: 'kokushi',
-        name: '国士無双',
-        han: 13,
-        isYakuman: true,
-      },
-    ];
-    return {
-      yaku,
-      yakuHan: 13,
-      isYakuman: true,
-      hasPinfu: false,
-    };
+  const yakuman: YakuEntry[] = [];
+
+  if (ctx.isTenhou && ctx.isTsumo) {
+    yakuman.push(makeYakumanEntry('tenhou', '天和', 1));
+  } else if (ctx.isChiihou && ctx.isTsumo) {
+    yakuman.push(makeYakumanEntry('chiihou', '地和', 1));
   }
 
-  const yaku: YakuEntry[] = [];
+  if (decomp.form === 'kokushi') {
+    yakuman.push(
+      decomp.is13Wait
+        ? makeYakumanEntry('kokushi_13', '国士無双十三面待ち', 2)
+        : makeYakumanEntry('kokushi', '国士無双', 1),
+    );
+    return finalizeYakumanResult(yakuman);
+  }
 
   if (decomp.form === 'chiitoitsu') {
+    const allKinds = decomp.pairKinds;
+    if (allKinds.every((k) => isHonorKind(k))) {
+      yakuman.push(makeYakumanEntry('tsuuiisou', '字一色', 1));
+    }
+    if (yakuman.length > 0) {
+      return finalizeYakumanResult(yakuman);
+    }
+
+    const yaku: YakuEntry[] = [];
+    if (ctx.isDoubleRiichi) {
+      yaku.push({ id: 'double_riichi', name: 'ダブルリーチ', han: 2 });
+    } else if (ctx.isRiichi) {
+      yaku.push({ id: 'riichi', name: 'リーチ', han: 1 });
+    }
+    if (ctx.isIppatsu && (ctx.isRiichi || ctx.isDoubleRiichi)) {
+      yaku.push({ id: 'ippatsu', name: '一発', han: 1 });
+    }
+
     yaku.push({ id: 'chiitoitsu', name: '七対子', han: 2 });
 
     if (ctx.isTsumo) {
       yaku.push({ id: 'menzen_tsumo', name: '門前清自摸和', han: 1 });
     }
 
-    const allKinds = decomp.pairKinds;
+    addSituationalYaku(yaku, ctx);
+
     if (allKinds.every((k) => !isTerminalOrHonorKind(k))) {
       yaku.push({ id: 'tanyao', name: '断幺九', han: 1 });
     } else if (
@@ -177,25 +300,101 @@ export function evaluateYaku(
       yaku,
       yakuHan: yaku.reduce((s, e) => s + e.han, 0),
       isYakuman: false,
+      yakumanMultiplier: 0,
       hasPinfu: false,
     };
   }
 
-  // 通常形 (4面子1雀頭)
+  // 通常形 (4面子1雀頭): まず役満判定
   const { isMenzen, mentsu, pairKind, machi } = decomp;
   const allKinds: TileKind[] = [
     pairKind,
+    pairKind,
     ...mentsu.flatMap((m) => m.kinds),
   ];
+  const shuntsuList = mentsu.filter((m) => m.type === 'shuntsu');
+  const koutsuOrKantsuList = mentsu.filter((m) => m.type !== 'shuntsu');
+  const kantsuCount = mentsu.filter((m) => m.type === 'kantsu').length;
+
+  // 四暗刻 / 四暗刻単騎
+  const closedTripletCount = koutsuOrKantsuList.filter((m) => !m.isOpen).length;
+  if (closedTripletCount === 4) {
+    yakuman.push(
+      machi === 'tanki'
+        ? makeYakumanEntry('suuankou_tanki', '四暗刻単騎', 2)
+        : makeYakumanEntry('suuankou', '四暗刻', 1),
+    );
+  }
+
+  // 大三元
+  const dragonTripletCount = koutsuOrKantsuList.filter((m) =>
+    DRAGON_KINDS.includes(m.kinds[0]!),
+  ).length;
+  if (dragonTripletCount === 3) {
+    yakuman.push(makeYakumanEntry('daisangen', '大三元', 1));
+  }
+
+  // 小四喜 / 大四喜
+  const windTripletCount = koutsuOrKantsuList.filter((m) =>
+    WIND_KINDS.includes(m.kinds[0]!),
+  ).length;
+  if (windTripletCount === 4) {
+    yakuman.push(makeYakumanEntry('daisuushii', '大四喜', 2));
+  } else if (windTripletCount === 3 && WIND_KINDS.includes(pairKind)) {
+    yakuman.push(makeYakumanEntry('shousuushii', '小四喜', 1));
+  }
+
+  // 字一色
+  if (allKinds.every((k) => isHonorKind(k))) {
+    yakuman.push(makeYakumanEntry('tsuuiisou', '字一色', 1));
+  }
+
+  // 緑一色（發なしも有効）
+  if (allKinds.every((k) => GREEN_KINDS.has(k))) {
+    yakuman.push(makeYakumanEntry('ryuuiisou', '緑一色', 1));
+  }
+
+  // 清老頭
+  if (allKinds.every((k) => isTerminalKind(k))) {
+    yakuman.push(makeYakumanEntry('chinroutou', '清老頭', 1));
+  }
+
+  // 九蓮宝燈 / 純正九蓮宝燈
+  const chuuren = detectChuurenYakuman(decomp);
+  if (chuuren) {
+    yakuman.push(chuuren);
+  }
+
+  // 四槓子
+  if (kantsuCount === 4) {
+    yakuman.push(makeYakumanEntry('suukantsu', '四槓子', 1));
+  }
+
+  if (yakuman.length > 0) {
+    return finalizeYakumanResult(yakuman);
+  }
+
+  // 通常役
+  const yaku: YakuEntry[] = [];
+
+  if (ctx.isDoubleRiichi) {
+    yaku.push({ id: 'double_riichi', name: 'ダブルリーチ', han: 2 });
+  } else if (ctx.isRiichi) {
+    yaku.push({ id: 'riichi', name: 'リーチ', han: 1 });
+  }
+
+  if (ctx.isIppatsu && (ctx.isRiichi || ctx.isDoubleRiichi)) {
+    yaku.push({ id: 'ippatsu', name: '一発', han: 1 });
+  }
 
   // 門前清自摸和
   if (isMenzen && ctx.isTsumo) {
     yaku.push({ id: 'menzen_tsumo', name: '門前清自摸和', han: 1 });
   }
 
+  addSituationalYaku(yaku, ctx);
+
   // 平和（門前・全順子・非役牌雀頭・両面待ち）
-  const shuntsuList = mentsu.filter((m) => m.type === 'shuntsu');
-  const koutsuOrKantsuList = mentsu.filter((m) => m.type !== 'shuntsu');
   const hasPinfu =
     isMenzen &&
     shuntsuList.length === 4 &&
@@ -287,8 +486,7 @@ export function evaluateYaku(
   }
 
   // 三暗刻（2翻）
-  const closedTriplets = koutsuOrKantsuList.filter((m) => !m.isOpen).length;
-  if (closedTriplets >= 3) {
+  if (closedTripletCount >= 3) {
     yaku.push({ id: 'sanankou', name: '三暗刻', han: 2 });
   }
 
@@ -314,7 +512,6 @@ export function evaluateYaku(
   }
 
   // 三槓子（2翻）
-  const kantsuCount = mentsu.filter((m) => m.type === 'kantsu').length;
   if (kantsuCount >= 3) {
     yaku.push({ id: 'sankantsu', name: '三槓子', han: 2 });
   }
@@ -348,12 +545,11 @@ export function evaluateYaku(
   }
 
   // 小三元（2翻）
-  const dragonKinds: readonly TileKind[] = ['5z', '6z', '7z'];
-  if (dragonKinds.includes(pairKind)) {
-    const dragonTripletCount = koutsuOrKantsuList.filter((m) =>
-      dragonKinds.includes(m.kinds[0]!),
+  if (DRAGON_KINDS.includes(pairKind)) {
+    const shousangenDragons = koutsuOrKantsuList.filter((m) =>
+      DRAGON_KINDS.includes(m.kinds[0]!),
     ).length;
-    if (dragonTripletCount === 2) {
+    if (shousangenDragons === 2) {
       yaku.push({ id: 'shousangen', name: '小三元', han: 2 });
     }
   }
@@ -365,6 +561,7 @@ export function evaluateYaku(
     yaku,
     yakuHan: yaku.reduce((s, e) => s + e.han, 0),
     isYakuman: false,
+    yakumanMultiplier: 0,
     hasPinfu,
   };
 }

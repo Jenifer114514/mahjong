@@ -8,16 +8,26 @@ import type {
   RoundState,
 } from '../types/state';
 import type { Tile, TileKind } from '../types/tile';
-import { getTenpaiWaitKinds } from './agari';
-import { getRevealedDoraIndicators } from './dora';
+import {
+  canAnkanPreserveRiichiWaits,
+  enumerateAgariDecompositions,
+  getCanRiichiDiscardTileIds,
+  getTenpaiWaitKinds,
+} from './agari';
+import {
+  getRevealedDoraIndicators,
+  getRevealedUraDoraIndicators,
+} from './dora';
 import { deriveRules, getSeatWind } from './rules';
 import { type AgariScoreResult, evaluateBestAgari } from './score';
+import { isTerminalOrHonorKind } from './yaku';
 
 export interface CanRonParams {
   state: GameState;
   player: PlayerState;
   discardedTile: Tile;
   discarder: PlayerState;
+  chankanKind?: 'kakan' | 'ankan';
 }
 
 export interface EngineHooks {
@@ -34,7 +44,7 @@ export function isPlayerFuriten(
   player: PlayerState,
   rules: DerivedRules,
 ): boolean {
-  if (player.sameTurnFuriten) {
+  if (player.sameTurnFuriten || player.isRiichiFuriten) {
     return true;
   }
   if (player.discardedKinds.length === 0) {
@@ -57,13 +67,14 @@ export function evaluateRonForPlayer(
   player: PlayerState,
   discardedTile: Tile,
   discarder: PlayerState,
+  options?: { chankanKind?: 'kakan' | 'ankan' },
 ): AgariScoreResult | null {
   const round = state.round;
   if (!round) return null;
   if (player.playerId === discarder.playerId) return null;
 
   const rules = deriveRules(state.ruleConfig);
-  if (player.sameTurnFuriten) {
+  if (player.sameTurnFuriten || player.isRiichiFuriten) {
     return null;
   }
 
@@ -77,6 +88,19 @@ export function evaluateRonForPlayer(
     return null;
   }
 
+  const chankanKind = options?.chankanKind;
+  if (chankanKind === 'ankan') {
+    const canKokushi = enumerateAgariDecompositions(
+      player.hand,
+      player.melds,
+      discardedTile.kind,
+      false,
+    ).some((d) => d.form === 'kokushi');
+    if (!canKokushi) {
+      return null;
+    }
+  }
+
   return evaluateBestAgari({
     hand: player.hand,
     melds: player.melds,
@@ -88,6 +112,12 @@ export function evaluateRonForPlayer(
     roundWind: round.roundWind,
     seatWind: getSeatWind(player.seatIndex, round.dealerIndex, rules.seatWinds),
     doraIndicators: getRevealedDoraIndicators(round.deadWall),
+    uraDoraIndicators: getRevealedUraDoraIndicators(round.deadWall, player.isRiichi),
+    isRiichi: player.isRiichi,
+    isDoubleRiichi: player.isDoubleRiichi,
+    isIppatsu: player.ippatsuEligible,
+    isChankan: chankanKind === 'kakan',
+    isHoutei: chankanKind === undefined && round.wall.length === 0,
     winnerSeatIndex: player.seatIndex,
     fromSeatIndex: discarder.seatIndex,
     rules,
@@ -102,6 +132,11 @@ export function evaluateTsumoFromRound(
   if (player.drawnTile === null) {
     return null;
   }
+  const isFirstDraw =
+    player.discards.length === 0 &&
+    player.melds.length === 0 &&
+    round.firstTurnUninterrupted;
+
   return evaluateBestAgari({
     hand: player.hand,
     melds: player.melds,
@@ -113,6 +148,14 @@ export function evaluateTsumoFromRound(
     roundWind: round.roundWind,
     seatWind: getSeatWind(player.seatIndex, round.dealerIndex, rules.seatWinds),
     doraIndicators: getRevealedDoraIndicators(round.deadWall),
+    uraDoraIndicators: getRevealedUraDoraIndicators(round.deadWall, player.isRiichi),
+    isRiichi: player.isRiichi,
+    isDoubleRiichi: player.isDoubleRiichi,
+    isIppatsu: player.ippatsuEligible,
+    isRinshan: player.isRinshanDraw,
+    isHaitei: !player.isRinshanDraw && round.wall.length === 0,
+    isTenhou: isFirstDraw && player.seatIndex === round.dealerIndex,
+    isChiihou: isFirstDraw && player.seatIndex !== round.dealerIndex,
     winnerSeatIndex: player.seatIndex,
     fromSeatIndex: null,
     rules,
@@ -120,8 +163,10 @@ export function evaluateTsumoFromRound(
 }
 
 export const DEFAULT_ENGINE_HOOKS: Required<EngineHooks> = {
-  canRon: ({ state, player, discardedTile, discarder }) =>
-    evaluateRonForPlayer(state, player, discardedTile, discarder) !== null,
+  canRon: ({ state, player, discardedTile, discarder, chankanKind }) =>
+    evaluateRonForPlayer(state, player, discardedTile, discarder, {
+      chankanKind,
+    }) !== null,
 };
 
 function parseNumberTile(
@@ -297,6 +342,33 @@ export function canCallDaiminkan(
   return hand.filter((t) => t.kind === discardedTile.kind).length >= 3;
 }
 
+export function isSuukanzuTriggered(state: GameState): boolean {
+  const round = state.round;
+  if (!round || round.kanCount < 4) return false;
+  const playersWithKan = state.players.filter((p) =>
+    p.melds.some(
+      (m) => m.type === 'ankan' || m.type === 'kakan' || m.type === 'daiminkan',
+    ),
+  ).length;
+  return playersWithKan >= 2;
+}
+
+export function canDeclareKyuushuKyuuhai(
+  player: PlayerState,
+  round: RoundState,
+): boolean {
+  if (player.drawnTile === null) return false;
+  if (player.discards.length > 0 || player.melds.length > 0) return false;
+  if (!round.firstTurnUninterrupted) return false;
+  const yaochuKinds = new Set<TileKind>();
+  for (const tile of [...player.hand, player.drawnTile]) {
+    if (isTerminalOrHonorKind(tile.kind)) {
+      yaochuKinds.add(tile.kind);
+    }
+  }
+  return yaochuKinds.size >= 9;
+}
+
 export function buildPendingCallOptions(
   stateAfterDiscard: GameState,
   discarder: PlayerState,
@@ -306,6 +378,7 @@ export function buildPendingCallOptions(
 ): Record<string, CallOptions> {
   const round = stateAfterDiscard.round!;
   const isHoutei = round.wall.length === 0;
+  const suppressCalls = isSuukanzuTriggered(stateAfterDiscard);
   const canRonFn = hooks.canRon ?? DEFAULT_ENGINE_HOOKS.canRon;
   const nextSeatIndex = (discarder.seatIndex + 1) % rules.playerCount;
   const optionsByPlayerId: Record<string, CallOptions> = {};
@@ -320,16 +393,22 @@ export function buildPendingCallOptions(
       discarder,
     });
 
-    const canPon = isHoutei
-      ? false
-      : canCallPon(player.hand, discardedTile, rules.forbidKuikae);
+    const canPon =
+      player.isRiichi || isHoutei || suppressCalls
+        ? false
+        : canCallPon(player.hand, discardedTile, rules.forbidKuikae);
 
-    const canDaiminkan = isHoutei
-      ? false
-      : canCallDaiminkan(player.hand, discardedTile, round, rules);
+    const canDaiminkan =
+      player.isRiichi || isHoutei || suppressCalls
+        ? false
+        : canCallDaiminkan(player.hand, discardedTile, round, rules);
 
     const chiOptions =
-      !isHoutei && rules.allowChi && player.seatIndex === nextSeatIndex
+      !player.isRiichi &&
+      !isHoutei &&
+      !suppressCalls &&
+      rules.allowChi &&
+      player.seatIndex === nextSeatIndex
         ? findChiOptions(player.hand, discardedTile, rules.forbidKuikae)
         : [];
 
@@ -348,6 +427,42 @@ export function buildPendingCallOptions(
   return optionsByPlayerId;
 }
 
+export function buildPendingChankanOptions(
+  stateBeforeKan: GameState,
+  kanPlayer: PlayerState,
+  targetTile: Tile,
+  chankanKind: 'kakan' | 'ankan',
+  hooks: EngineHooks,
+): Record<string, CallOptions> {
+  const canRonFn = hooks.canRon ?? DEFAULT_ENGINE_HOOKS.canRon;
+  const optionsByPlayerId: Record<string, CallOptions> = {};
+
+  for (const player of stateBeforeKan.players) {
+    if (player.playerId === kanPlayer.playerId) continue;
+
+    const canRon = canRonFn({
+      state: stateBeforeKan,
+      player,
+      discardedTile: targetTile,
+      discarder: kanPlayer,
+      chankanKind,
+    });
+
+    if (canRon) {
+      optionsByPlayerId[player.playerId] = {
+        discardedTile: targetTile,
+        discarderSeatIndex: kanPlayer.seatIndex,
+        canRon: true,
+        canPon: false,
+        canDaiminkan: false,
+        chiOptions: [],
+      };
+    }
+  }
+
+  return optionsByPlayerId;
+}
+
 export function getSelfTurnActions(
   player: PlayerState,
   round: RoundState,
@@ -356,14 +471,17 @@ export function getSelfTurnActions(
   const canTsumo =
     player.drawnTile !== null &&
     evaluateTsumoFromRound(player, round, rules) !== null;
+  const canKyuushuKyuuhai = canDeclareKyuushuKyuuhai(player, round);
 
-  // カン・北抜きはツモ直後かつ山残りがある場合のみ（ポン・チー直後の打牌前、または海底では不可）
+  // カン・北抜き・リーチはツモ直後かつ山残りがある場合のみ
   if (player.drawnTile === null || round.wall.length === 0) {
     return {
       canTsumo,
+      canRiichiTileIds: [],
       canAnkanKinds: [],
       canKakanTileIds: [],
       canKitaTileIds: [],
+      canKyuushuKyuuhai,
     };
   }
 
@@ -377,14 +495,25 @@ export function getSelfTurnActions(
       counts.set(tile.kind, (counts.get(tile.kind) ?? 0) + 1);
     }
     for (const [kind, count] of counts) {
-      if (count === 4) {
-        canAnkanKinds.push(kind);
+      if (count !== 4) continue;
+      if (
+        player.isRiichi &&
+        !canAnkanPreserveRiichiWaits(
+          player.hand,
+          player.drawnTile,
+          player.melds,
+          kind,
+          rules,
+        )
+      ) {
+        continue;
       }
+      canAnkanKinds.push(kind);
     }
   }
 
   const canKakanTileIds: string[] = [];
-  if (canKan) {
+  if (canKan && !player.isRiichi) {
     const ponKinds = new Set<TileKind>();
     for (const meld of player.melds) {
       if (meld.type === 'pon' && meld.tiles[0]) {
@@ -398,14 +527,34 @@ export function getSelfTurnActions(
     }
   }
 
+  // リーチ後は引いた北のみ抜け、リーチ前は手牌・ツモ牌どちらの北も抜ける
   const canKitaTileIds: string[] = rules.allowKita
-    ? allTiles.filter((t) => t.kind === '4z').map((t) => t.id)
+    ? player.isRiichi
+      ? player.drawnTile.kind === '4z'
+        ? [player.drawnTile.id]
+        : []
+      : allTiles.filter((t) => t.kind === '4z').map((t) => t.id)
     : [];
+
+  const canRiichiTileIds =
+    !player.isRiichi &&
+    player.melds.every((m) => m.type === 'ankan') &&
+    player.score >= rules.riichiStickPoints &&
+    round.wall.length >= rules.playerCount
+      ? getCanRiichiDiscardTileIds(
+          player.hand,
+          player.drawnTile,
+          player.melds,
+          rules,
+        )
+      : [];
 
   return {
     canTsumo,
+    canRiichiTileIds,
     canAnkanKinds,
     canKakanTileIds,
     canKitaTileIds,
+    canKyuushuKyuuhai,
   };
 }

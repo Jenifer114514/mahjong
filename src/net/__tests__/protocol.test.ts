@@ -108,6 +108,32 @@ describe('net/protocol', () => {
       action: { type: 'DECLARE_TSUMO' },
     });
 
+    // Stage 3B action
+    expect(
+      parseClientMessage({
+        kind: 'ACTION',
+        action: { type: 'DECLARE_RIICHI', tileId: '1z-0' },
+      }),
+    ).toEqual({
+      kind: 'ACTION',
+      action: { type: 'DECLARE_RIICHI', tileId: '1z-0' },
+    });
+    expect(
+      parseClientMessage({
+        kind: 'ACTION',
+        action: { type: 'DECLARE_RIICHI', tileId: '' },
+      }),
+    ).toBeNull();
+    expect(
+      parseClientMessage({
+        kind: 'ACTION',
+        action: { type: 'DECLARE_KYUUSHU_KYUUHAI' },
+      }),
+    ).toEqual({
+      kind: 'ACTION',
+      action: { type: 'DECLARE_KYUUSHU_KYUUHAI' },
+    });
+
     // Invalid cases
     expect(parseClientMessage(null)).toBeNull();
     expect(parseClientMessage({ kind: 'JOIN', playerName: 123 })).toBeNull();

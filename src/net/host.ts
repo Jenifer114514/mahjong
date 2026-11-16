@@ -244,11 +244,20 @@ export class HostSession {
           playerId,
         };
         break;
+      case 'DECLARE_RIICHI':
+        engineAction = {
+          type: 'DECLARE_RIICHI',
+          playerId,
+          tileId: message.action.tileId,
+          now: Date.now(),
+        };
+        break;
       case 'DECLARE_ANKAN':
         engineAction = {
           type: 'DECLARE_ANKAN',
           playerId,
           kind: message.action.kind,
+          now: Date.now(),
         };
         break;
       case 'DECLARE_KAKAN':
@@ -256,6 +265,7 @@ export class HostSession {
           type: 'DECLARE_KAKAN',
           playerId,
           tileId: message.action.tileId,
+          now: Date.now(),
         };
         break;
       case 'DECLARE_KITA':
@@ -263,6 +273,12 @@ export class HostSession {
           type: 'DECLARE_KITA',
           playerId,
           tileId: message.action.tileId,
+        };
+        break;
+      case 'DECLARE_KYUUSHU_KYUUHAI':
+        engineAction = {
+          type: 'DECLARE_KYUUSHU_KYUUHAI',
+          playerId,
         };
         break;
       case 'ADVANCE_ROUND':
@@ -334,11 +350,21 @@ export class HostSession {
     });
   }
 
+  declareRiichi(tileId: string): void {
+    this.dispatchHostAction({
+      type: 'DECLARE_RIICHI',
+      playerId: this.state.hostPlayerId,
+      tileId,
+      now: Date.now(),
+    });
+  }
+
   declareAnkan(kind: TileKind): void {
     this.dispatchHostAction({
       type: 'DECLARE_ANKAN',
       playerId: this.state.hostPlayerId,
       kind,
+      now: Date.now(),
     });
   }
 
@@ -347,6 +373,7 @@ export class HostSession {
       type: 'DECLARE_KAKAN',
       playerId: this.state.hostPlayerId,
       tileId,
+      now: Date.now(),
     });
   }
 
@@ -355,6 +382,13 @@ export class HostSession {
       type: 'DECLARE_KITA',
       playerId: this.state.hostPlayerId,
       tileId,
+    });
+  }
+
+  declareKyuushuKyuuhai(): void {
+    this.dispatchHostAction({
+      type: 'DECLARE_KYUUSHU_KYUUHAI',
+      playerId: this.state.hostPlayerId,
     });
   }
 

@@ -6,6 +6,14 @@ export function getRevealedDoraIndicators(deadWall: DeadWallState): Tile[] {
   return deadWall.doraIndicators.slice(0, deadWall.revealedDoraCount);
 }
 
+export function getRevealedUraDoraIndicators(
+  deadWall: DeadWallState,
+  isRiichi: boolean,
+): Tile[] {
+  if (!isRiichi) return [];
+  return deadWall.uraDoraIndicators.slice(0, deadWall.revealedDoraCount);
+}
+
 const WIND_DORA_CYCLE: readonly TileKind[] = ['1z', '2z', '3z', '4z'];
 const DRAGON_DORA_CYCLE: readonly TileKind[] = ['5z', '6z', '7z'];
 
@@ -51,10 +59,20 @@ export function countDoraAndKita(params: {
   melds: readonly Meld[];
   kitaTiles: readonly Tile[];
   doraIndicators: readonly Tile[];
+  uraDoraIndicators?: readonly Tile[];
   rules: DerivedRules;
-}): { doraCount: number; kitaCount: number } {
-  const { hand, winningTile, melds, kitaTiles, doraIndicators, rules } = params;
+}): { doraCount: number; uraDoraCount: number; kitaCount: number } {
+  const {
+    hand,
+    winningTile,
+    melds,
+    kitaTiles,
+    doraIndicators,
+    uraDoraIndicators = [],
+    rules,
+  } = params;
   const activeDoraKinds = getActiveDoraKinds(doraIndicators, rules);
+  const activeUraDoraKinds = getActiveDoraKinds(uraDoraIndicators, rules);
 
   const countTargets: Tile[] = [
     ...hand,
@@ -72,6 +90,15 @@ export function countDoraAndKita(params: {
     }
   }
 
+  let uraDoraCount = 0;
+  for (const uraKind of activeUraDoraKinds) {
+    for (const tile of countTargets) {
+      if (tile.kind === uraKind) {
+        uraDoraCount++;
+      }
+    }
+  }
+
   const kitaCount = rules.allowKita ? kitaTiles.length : 0;
-  return { doraCount, kitaCount };
+  return { doraCount, uraDoraCount, kitaCount };
 }

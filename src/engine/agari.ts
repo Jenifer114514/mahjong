@@ -364,3 +364,76 @@ export function getTenpaiWaitKinds(
   }
   return waits;
 }
+
+/** リーチ宣言時に切って聴牌を維持できる牌ID一覧を返す */
+export function getCanRiichiDiscardTileIds(
+  hand: readonly Tile[],
+  drawnTile: Tile | null,
+  melds: readonly Meld[],
+  rules: DerivedRules,
+): string[] {
+  if (drawnTile === null) return [];
+  if (!melds.every((m) => m.type === 'ankan')) return [];
+
+  const allTiles = [...hand, drawnTile];
+  const expectedAfterDiscard = (4 - melds.length) * 3 + 1;
+  if (allTiles.length - 1 !== expectedAfterDiscard) {
+    return [];
+  }
+
+  const result: string[] = [];
+  const checkedKinds = new Map<TileKind, boolean>();
+
+  for (let i = 0; i < allTiles.length; i++) {
+    const candidate = allTiles[i]!;
+    const cached = checkedKinds.get(candidate.kind);
+    if (cached !== undefined) {
+      if (cached) result.push(candidate.id);
+      continue;
+    }
+
+    const remaining = allTiles.filter((_, idx) => idx !== i);
+    const isTenpai = getTenpaiWaitKinds(remaining, melds, rules).length > 0;
+    checkedKinds.set(candidate.kind, isTenpai);
+    if (isTenpai) {
+      result.push(candidate.id);
+    }
+  }
+
+  return result;
+}
+
+/** リーチ後の暗槓で待ち牌の集合が変わらないかを判定する */
+export function canAnkanPreserveRiichiWaits(
+  hand: readonly Tile[],
+  drawnTile: Tile | null,
+  melds: readonly Meld[],
+  ankanKind: TileKind,
+  rules: DerivedRules,
+): boolean {
+  if (drawnTile === null) return false;
+  if (drawnTile.kind !== ankanKind) return false;
+  const matchingInHand = hand.filter((t) => t.kind === ankanKind);
+  if (matchingInHand.length !== 3) return false;
+
+  const beforeWaits = getTenpaiWaitKinds(hand, melds, rules);
+  if (beforeWaits.length === 0) return false;
+
+  const nextHand = hand.filter((t) => t.kind !== ankanKind);
+  const nextMelds: Meld[] = [
+    ...melds,
+    {
+      type: 'ankan',
+      tiles: [...matchingInHand, drawnTile],
+      calledTile: null,
+      fromSeatIndex: null,
+      addedTile: null,
+    },
+  ];
+  const afterWaits = getTenpaiWaitKinds(nextHand, nextMelds, rules);
+  return (
+    afterWaits.length > 0 &&
+    afterWaits.length === beforeWaits.length &&
+    afterWaits.every((k, idx) => k === beforeWaits[idx])
+  );
+}

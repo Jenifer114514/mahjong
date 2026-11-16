@@ -1,5 +1,6 @@
 import type { RuleConfig, Wind } from './rule';
 import type {
+  AbortiveDrawReason,
   CallOptions,
   CallResponseChoice,
   DiscardEntry,
@@ -51,19 +52,34 @@ export type Action =
       playerId: string;
     }
   | {
+      type: 'DECLARE_RIICHI';
+      playerId: string;
+      tileId: string;
+      /** 応答タイマー基準時刻 (epoch ms、省略時は 0) */
+      now?: number;
+    }
+  | {
       type: 'DECLARE_ANKAN';
       playerId: string;
       kind: TileKind;
+      /** 槍槓応答タイマー基準時刻 (epoch ms、省略時は 0) */
+      now?: number;
     }
   | {
       type: 'DECLARE_KAKAN';
       playerId: string;
       tileId: string;
+      /** 槍槓応答タイマー基準時刻 (epoch ms、省略時は 0) */
+      now?: number;
     }
   | {
       type: 'DECLARE_KITA';
       playerId: string;
       tileId: string;
+    }
+  | {
+      type: 'DECLARE_KYUUSHU_KYUUHAI';
+      playerId: string;
     }
   | {
       type: 'ADVANCE_ROUND';
@@ -90,6 +106,8 @@ export interface PublicPlayerView {
   kitaTiles: Tile[];
   isDealer: boolean;
   isCurrentTurn: boolean;
+  isRiichi: boolean;
+  isDoubleRiichi: boolean;
   connected: boolean;
 }
 
@@ -103,18 +121,27 @@ export interface RoundView {
   remainingWallCount: number; // 残り枚数のみ（牌山の中身は送らない）
   /** めくり済みの表ドラ表示牌のみ */
   doraIndicators: Tile[];
+  /** リーチ者の和了時（round_end）のみ公開される裏ドラ表示牌 */
+  uraDoraIndicators: Tile[];
   kanCount: number;
   ronWinners: RoundRonWinner[];
   agariResults: RoundAgariWinner[];
+  abortiveDrawReason: AbortiveDrawReason | null;
+  abortiveDrawPlayerId: string | null;
+  revealedHands: Record<string, Tile[]>;
+  kyotakuWinnerPlayerId: string | null;
+  kyotakuPointsAwarded: number;
   roundScoreDeltas: Record<string, number>;
   isTobiEnded: boolean;
 }
 
 export interface SelfTurnActionsView {
   canTsumo: boolean;
+  canRiichiTileIds: string[];
   canAnkanKinds: TileKind[];
   canKakanTileIds: string[];
   canKitaTileIds: string[];
+  canKyuushuKyuuhai: boolean;
 }
 
 export interface StateView {
@@ -125,6 +152,8 @@ export interface StateView {
   ruleConfig: RuleConfig;
   phase: GamePhase;
   players: PublicPlayerView[];
+  /** 場に出ている供託リーチ棒の本数 */
+  kyotakuCount: number;
   /** 受信者本人の手牌のみ */
   myHand: Tile[];
   /** 受信者本人のツモ牌のみ */
@@ -154,6 +183,9 @@ export type ErrorCode =
   | 'FORBIDDEN_KUIKAE'
   | 'INVALID_CALL'
   | 'INVALID_AGARI'
+  | 'INVALID_RIICHI'
+  | 'INVALID_ABORTIVE_DRAW'
+  | 'TSUMOGIRI_ONLY'
   | 'FURITEN'
   | 'INVALID_DECK'
   | 'KAN_LIMIT_REACHED'
@@ -178,9 +210,11 @@ export type ClientMessage =
         | { type: 'DISCARD_TILE'; tileId: string }
         | { type: 'CALL_RESPONSE'; choice: CallResponseChoice }
         | { type: 'DECLARE_TSUMO' }
+        | { type: 'DECLARE_RIICHI'; tileId: string }
         | { type: 'DECLARE_ANKAN'; kind: TileKind }
         | { type: 'DECLARE_KAKAN'; tileId: string }
         | { type: 'DECLARE_KITA'; tileId: string }
+        | { type: 'DECLARE_KYUUSHU_KYUUHAI' }
         | { type: 'ADVANCE_ROUND' };
     };
 

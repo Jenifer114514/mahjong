@@ -46,6 +46,8 @@ export interface TileElementOptions {
   disabledReason?: string;
   tsumogiri?: boolean;
   latestDiscard?: boolean;
+  riichiDeclaration?: boolean;
+  riichiCandidate?: boolean;
   called?: boolean;
   small?: boolean;
   onClick?: () => void;
@@ -75,6 +77,8 @@ export function createTileElement(
   }
   if (options.tsumogiri) el.classList.add('mj-tile-tsumogiri');
   if (options.latestDiscard) el.classList.add('mj-tile-latest');
+  if (options.riichiDeclaration) el.classList.add('mj-tile-riichi');
+  if (options.riichiCandidate) el.classList.add('mj-tile-riichi-candidate');
   if (options.called) el.classList.add('mj-tile-called');
   if (options.small) el.classList.add('mj-tile-sm');
 
