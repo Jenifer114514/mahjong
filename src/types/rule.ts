@@ -48,6 +48,8 @@ export interface RuleConfig {
   allowKuitan?: boolean;
   /** 後付けあり/なし（既定: true） */
   allowAtozuke?: boolean;
+  /** 本場加算あり/なし（既定: true。なしでも本場数のカウント・表示は行う） */
+  honbaBonus?: boolean;
 }
 
 /** 将来のローカルルール変更に備えて差し替え可能な定数群 */
@@ -82,6 +84,12 @@ export const DEAD_WALL_SIZE_BY_PLAYERS: Record<PlayerCount, number> = {
 export const DEFAULT_RESPONSE_TIMEOUT_MS = 15000;
 export const DEFAULT_MAX_KANS_PER_ROUND = 4;
 export const RIICHI_STICK_POINTS = 1000;
+export const DEFAULT_HONBA_BONUS = true;
+export const HONBA_POINTS_BY_PLAYERS: Record<PlayerCount, number> = {
+  4: 300,
+  3: 1000,
+};
+export const NOTEN_PENALTY_TOTAL = 3000;
 
 export const DEFAULT_KANDORA_TIMING: KandoraTimingConfig = {
   ankan: 'immediate',
@@ -161,6 +169,9 @@ export interface DerivedRules {
   tsumoLoss: boolean;
   allowKuitan: boolean;
   allowAtozuke: boolean;
+  honbaBonus: boolean;
+  honbaPointsPerStick: number;
+  notenPenaltyTotal: number;
   kiriageMangan: boolean;
   allowKazoeYakuman: boolean;
   doubleWindPairFu: number;

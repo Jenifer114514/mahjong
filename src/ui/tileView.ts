@@ -26,8 +26,13 @@ export function windToJa(wind: Wind): string {
   }
 }
 
-export function formatRoundName(roundWind: Wind, kyokuNumber: number): string {
-  return `${windToJa(roundWind)}${kyokuNumber}局`;
+export function formatRoundName(
+  roundWind: Wind,
+  kyokuNumber: number,
+  honba?: number,
+): string {
+  const base = `${windToJa(roundWind)}${kyokuNumber}局`;
+  return honba !== undefined ? `${base} ${honba}本場` : base;
 }
 
 export function formatTileLabel(kind: TileKind): string {

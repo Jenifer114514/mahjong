@@ -16,6 +16,7 @@ export interface LobbyFormState {
   tsumoLoss: boolean;
   allowKuitan: boolean;
   allowAtozuke: boolean;
+  honbaBonus: boolean;
   joinCode: string;
 }
 
@@ -183,6 +184,20 @@ export function renderLobbyEntry(
       }),
     );
 
+    localRuleWrap.appendChild(
+      createBooleanToggleField({
+        label: '本場加算（積み棒ボーナス）',
+        value: formState.honbaBonus,
+        trueLabel: 'あり',
+        trueSub: formState.playerCount === 3 ? '1本場 1,000点' : '1本場 300点',
+        falseLabel: 'なし',
+        falseSub: '本場表示のみ',
+        onChange: (v) => {
+          formState.honbaBonus = v;
+        },
+      }),
+    );
+
     if (formState.playerCount === 3) {
       localRuleWrap.appendChild(
         createBooleanToggleField({
@@ -262,6 +277,7 @@ export function renderLobbyEntry(
       tsumoLoss: formState.playerCount === 3 ? formState.tsumoLoss : false,
       allowKuitan: formState.allowKuitan,
       allowAtozuke: formState.allowAtozuke,
+      honbaBonus: formState.honbaBonus,
     });
   });
 
@@ -388,6 +404,7 @@ export function renderWaitingRoom(
     `トビ:${rules.tobi ? 'あり' : 'なし'}`,
     `喰いタン:${rules.allowKuitan ? 'あり' : 'なし'}`,
     `後付け:${rules.allowAtozuke ? 'あり' : 'なし'}`,
+    `本場加算:${rules.honbaBonus ? `あり(${rules.honbaPointsPerStick}点)` : 'なし(表示のみ)'}`,
     ...(rules.playerCount === 3
       ? [`ツモ損:${rules.tsumoLoss ? 'あり' : 'なし'}`]
       : []),

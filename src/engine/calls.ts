@@ -67,7 +67,7 @@ export function evaluateRonForPlayer(
   player: PlayerState,
   discardedTile: Tile,
   discarder: PlayerState,
-  options?: { chankanKind?: 'kakan' | 'ankan' },
+  options?: { chankanKind?: 'kakan' | 'ankan'; applyHonba?: boolean },
 ): AgariScoreResult | null {
   const round = state.round;
   if (!round) return null;
@@ -120,6 +120,7 @@ export function evaluateRonForPlayer(
     isHoutei: chankanKind === undefined && round.wall.length === 0,
     winnerSeatIndex: player.seatIndex,
     fromSeatIndex: discarder.seatIndex,
+    honba: options?.applyHonba === false ? 0 : round.honba,
     rules,
   });
 }
@@ -158,6 +159,7 @@ export function evaluateTsumoFromRound(
     isChiihou: isFirstDraw && player.seatIndex !== round.dealerIndex,
     winnerSeatIndex: player.seatIndex,
     fromSeatIndex: null,
+    honba: round.honba,
     rules,
   });
 }

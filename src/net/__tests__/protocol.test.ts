@@ -182,8 +182,10 @@ describe('net/protocol', () => {
           hostPlayerId: 'h1',
           viewerPlayerId: 'h1',
           viewerSeatIndex: 0,
-          ruleConfig: { playerCount: 4, gameLength: 'tonpuu' },
+          ruleConfig: { playerCount: 4, gameLength: 'tonpuu', honbaBonus: true },
           phase: 'lobby',
+          initialDealerIndex: 0,
+          finalKyotakuAward: null,
           players: [],
           myHand: [],
           myDrawnTile: null,
@@ -195,6 +197,35 @@ describe('net/protocol', () => {
         },
       }),
     ).not.toBeNull();
+
+    expect(
+      parseHostMessage({
+        kind: 'STATE_VIEW',
+        payload: {
+          roomCode: 'ABC123',
+          hostPlayerId: 'h1',
+          viewerPlayerId: 'h1',
+          viewerSeatIndex: 0,
+          ruleConfig: { playerCount: 4, gameLength: 'tonpuu', honbaBonus: true },
+          phase: 'finished',
+          initialDealerIndex: 0,
+          finalKyotakuAward: { playerId: 'h1', points: 1000 },
+          players: [],
+          myHand: [],
+          myDrawnTile: null,
+          myCallOptions: null,
+          mySelfActions: null,
+          kuikaeForbiddenKinds: [],
+          responseRemainingMs: null,
+          round: null,
+        },
+      }),
+    ).toMatchObject({
+      kind: 'STATE_VIEW',
+      payload: {
+        finalKyotakuAward: { playerId: 'h1', points: 1000 },
+      },
+    });
 
     expect(parseHostMessage({ kind: 'UNKNOWN' })).toBeNull();
     expect(parseHostMessage({ kind: 'ERROR', payload: { code: 1 } })).toBeNull();
