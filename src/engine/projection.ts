@@ -98,6 +98,11 @@ export function toStateView(
           : pending.discarderSeatIndex;
   }
 
+  const maskedTurnPlayer = state.round
+    ? state.players.find((p) => p.seatIndex === maskedTurnIndex)
+    : undefined;
+  const maskedTurnPlayerId = maskedTurnPlayer?.playerId ?? null;
+
   const orderedPlayers = [...state.players].sort(
     (a, b) => a.seatIndex - b.seatIndex,
   );
@@ -144,6 +149,8 @@ export function toStateView(
         kyokuNumber: state.round.kyokuNumber,
         dealerIndex: state.round.dealerIndex,
         currentTurnIndex: maskedTurnIndex,
+        actingPlayerId: maskedTurnPlayerId,
+        turnCount: state.round.turnCount,
         remainingWallCount: state.round.wall.length,
         doraIndicators: state.round.deadWall.doraIndicators
           .slice(0, state.round.deadWall.revealedDoraCount)

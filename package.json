@@ -14,6 +14,7 @@
     "peerjs": "^1.5.5"
   },
   "devDependencies": {
+    "jsdom": "^31.0.1",
     "typescript": "^5.8.2",
     "vite": "^8.3.8",
     "vitest": "^5.1.0"

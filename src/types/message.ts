@@ -121,6 +121,10 @@ export interface RoundView {
   kyokuNumber: number;
   dealerIndex: number;
   currentTurnIndex: number;
+  /** 現在操作すべきプレイヤーID（応答待ちの秘匿中も自然な手番表示に使う） */
+  actingPlayerId: string | null;
+  /** 現在の巡目カウント（CPU の決定論的な思考シードに利用） */
+  turnCount: number;
   remainingWallCount: number; // 残り枚数のみ（牌山の中身は送らない）
   /** めくり済みの表ドラ表示牌のみ */
   doraIndicators: Tile[];

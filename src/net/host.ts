@@ -1,4 +1,11 @@
 import Peer, { type DataConnection } from 'peerjs';
+import {
+  CPU_PLAYER_ID_PREFIX,
+  cpuDisplayName,
+  decideCpuAction,
+  toEngineAction,
+  type CpuAction,
+} from '../cpu/player';
 import { toStateView } from '../engine/projection';
 import { applyAction, createInitialGameState } from '../engine/reducer';
 import { deriveRules } from '../engine/rules';
@@ -22,6 +29,20 @@ export interface HostSessionCallbacks {
   onError: (error: GameError) => void;
 }
 
+export interface HostSessionOptions {
+  /** 追加する CPU の数（ホスト + CPU で規定人数に達すると自動開局） */
+  cpuCount?: number;
+  /** CPU の思考時間(ms)。0 にすると即座に打牌する（テスト用） */
+  cpuDelayMs?: number;
+  /** CPU 操作の遅延スケジュール（テスト用に差し替え可能） */
+  cpuScheduler?: (fn: () => void, delayMs: number) => void;
+  /**
+   * オンライン化せず CPU だけで遊ぶローカル対局モード。
+   * PeerJS へ接続しないため、オフライン環境でも対局できる。
+   */
+  offline?: boolean;
+}
+
 export class HostSession {
   private peer: Peer | null = null;
   private state: GameState;
@@ -30,13 +51,25 @@ export class HostSession {
   private destroyed = false;
   private idRetryCount = 0;
   private responseTimerId: ReturnType<typeof setTimeout> | null = null;
+  private readonly offline: boolean;
+  private readonly cpuCount: number;
+  private readonly cpuDelayMs: number;
+  private readonly cpuScheduler: (fn: () => void, delayMs: number) => void;
+  private cpuToken = 0;
 
   constructor(
     hostName: string,
     ruleConfig: RuleConfig,
     callbacks: HostSessionCallbacks,
+    options: HostSessionOptions = {},
   ) {
     this.callbacks = callbacks;
+    this.offline = options.offline ?? false;
+    this.cpuCount = options.cpuCount ?? 0;
+    this.cpuDelayMs = options.cpuDelayMs ?? 700;
+    this.cpuScheduler = options.cpuScheduler ?? ((fn, delay) => {
+      setTimeout(fn, delay);
+    });
     const roomCode = generateRoomCode();
     const hostPeerId = roomCodeToPeerId(roomCode);
     this.state = createInitialGameState({
@@ -48,13 +81,75 @@ export class HostSession {
   }
 
   getRoomCode(): string {
-    return this.state.roomCode;
+    return this.offline ? 'LOCAL' : this.state.roomCode;
+  }
+
+  /** ローカル対局（CPU戦）かどうか */
+  isOffline(): boolean {
+    return this.offline;
   }
 
   start(): void {
     if (this.destroyed) return;
+    if (this.offline) {
+      // ローカル対局: 通信を張らずに CPU 席だけ用意する
+      this.callbacks.onStatusChange('ready', 'ローカル対局（CPU戦）');
+      this.bootstrapCpuSeats();
+      return;
+    }
     this.callbacks.onStatusChange('initializing', 'PeerJS サーバーに接続中...');
     this.openPeerWithCurrentRoomCode();
+    this.bootstrapCpuSeats();
+  }
+
+  /** 設定された人数分の CPU 席をロビーに追加し、揃っていれば開局する */
+  private bootstrapCpuSeats(): void {
+    if (this.cpuCount <= 0 || this.destroyed) return;
+    let next = this.state;
+    const rules = deriveRules(next.ruleConfig);
+    for (let i = 0; i < this.cpuCount; i++) {
+      const cpuId = cpuPlayerId(i);
+      if (next.players.some((p) => p.playerId === cpuId)) continue;
+      if (next.players.length >= rules.playerCount) break;
+      const result = applyAction(next, {
+        type: 'JOIN_PLAYER',
+        playerId: cpuId,
+        name: cpuName(i),
+      });
+      if (result.error) break;
+      next = result.state;
+    }
+    if (next !== this.state) {
+      this.commitState(this.maybeAutoStart(next));
+    }
+  }
+
+  /** ロビーで人数が揃っていれば自動開局する */
+  private maybeAutoStart(nextState: GameState): GameState {
+    const rules = deriveRules(nextState.ruleConfig);
+    if (
+      nextState.phase !== 'lobby' ||
+      nextState.players.length !== rules.playerCount
+    ) {
+      return nextState;
+    }
+    const shuffledPlayerIds = shuffleWithCrypto(
+      nextState.players.map((p) => p.playerId),
+    );
+    const shuffledDeck = shuffleWithCrypto(buildTileDeck(rules));
+    const startResult = applyAction(nextState, {
+      type: 'START_GAME',
+      shuffledDeck,
+      shuffledPlayerIds,
+    });
+    return startResult.error ? nextState : startResult.state;
+  }
+
+  private isCpuPlayer(playerId: string): boolean {
+    for (let i = 0; i < this.cpuCount; i++) {
+      if (cpuPlayerId(i) === playerId) return true;
+    }
+    return false;
   }
 
   private openPeerWithCurrentRoomCode(): void {
@@ -194,29 +289,8 @@ export class HostSession {
         return;
       }
 
-      let nextState = joinResult.state;
-      const rules = deriveRules(nextState.ruleConfig);
-
       // 設定した人数が揃ったら自動開局（CSPRNG で席順と山牌をシャッフル）
-      if (
-        nextState.phase === 'lobby' &&
-        nextState.players.length === rules.playerCount
-      ) {
-        const shuffledPlayerIds = shuffleWithCrypto(
-          nextState.players.map((p) => p.playerId),
-        );
-        const shuffledDeck = shuffleWithCrypto(buildTileDeck(rules));
-        const startResult = applyAction(nextState, {
-          type: 'START_GAME',
-          shuffledDeck,
-          shuffledPlayerIds,
-        });
-        if (!startResult.error) {
-          nextState = startResult.state;
-        }
-      }
-
-      this.commitState(nextState);
+      this.commitState(this.maybeAutoStart(joinResult.state));
       return;
     }
 
@@ -405,6 +479,139 @@ export class HostSession {
     this.state = nextState;
     this.syncResponseTimer();
     this.broadcastViews();
+    this.scheduleCpuTick();
+  }
+
+  /** CPU の手番・応答待ちが残っていれば次の一手を予約する */
+  private scheduleCpuTick(): void {
+    if (this.destroyed || this.cpuCount <= 0) return;
+    const phase = this.state.phase;
+    if (phase === 'finished') return;
+
+    const token = ++this.cpuToken;
+    // 鳴き・ロンの応答は打牌より短く待ってテンポよく進める
+    const delayMs =
+      phase === 'awaiting_responses'
+        ? Math.round(this.cpuDelayMs * 0.45)
+        : this.cpuDelayMs;
+    this.cpuScheduler(() => {
+      if (this.destroyed || token !== this.cpuToken) return;
+      const progressed = this.runCpuStepOnce();
+      if (progressed) {
+        this.scheduleCpuTick();
+      }
+    }, delayMs);
+  }
+
+  /**
+   * CPU の操作を 1 手だけ適用する（適用したら true）。
+   * タイマー経由の自動進行のほか、テストから決定的に駆動する場合にも使う。
+   */
+  runCpuStepOnce(): boolean {
+    if (this.destroyed || this.cpuCount <= 0) return false;
+    const phase = this.state.phase;
+
+    if (phase === 'lobby') {
+      const missing = this.missingCpuIds();
+      if (missing.length === 0) {
+        // CPU 席は揃っているが未開局（人間の参加待ちなど）
+        const started = this.maybeAutoStart(this.state);
+        if (started !== this.state) {
+          this.commitState(started);
+          return true;
+        }
+        return false;
+      }
+      const result = applyAction(this.state, {
+        type: 'JOIN_PLAYER',
+        playerId: missing[0]!,
+        name: cpuName(cpuIndexOf(missing[0]!, this.cpuCount)),
+      });
+      if (result.error) return false;
+      this.commitState(this.maybeAutoStart(result.state));
+      return true;
+    }
+
+    if (phase === 'awaiting_responses') {
+      const pending = this.state.round?.pendingResponse;
+      if (!pending) return false;
+      for (const pid of Object.keys(pending.optionsByPlayerId)) {
+        if (pid in pending.responses) continue;
+        if (!this.isCpuPlayer(pid)) continue;
+        const view = toStateView(this.state, pid, Date.now());
+        if (!view.myCallOptions) continue;
+        const decision =
+          decideCpuAction(view) ?? {
+            type: 'CALL_RESPONSE' as const,
+            choice: { type: 'pass' as const },
+          };
+        return this.applyCpuDecision(pid, decision);
+      }
+      return false;
+    }
+
+    if (phase !== 'playing') return false;
+
+    const current = this.state.players.find(
+      (p) => p.seatIndex === this.state.round?.currentTurnIndex,
+    );
+    if (!current || !this.isCpuPlayer(current.playerId)) return false;
+    if (this.state.round?.pendingResponse) return false;
+
+    const view = toStateView(this.state, current.playerId, Date.now());
+    const decision =
+      decideCpuAction(view) ??
+      (view.myDrawnTile
+        ? { type: 'DISCARD_TILE' as const, tileId: view.myDrawnTile.id }
+        : null);
+    if (!decision) return false;
+    return this.applyCpuDecision(current.playerId, decision);
+  }
+
+  private applyCpuDecision(playerId: string, decision: CpuAction): boolean {
+    const rules = deriveRules(this.state.ruleConfig);
+    const engineAction = toEngineAction(playerId, decision, {
+      now: Date.now(),
+      shuffledDeck: shuffleWithCrypto(buildTileDeck(rules)),
+    });
+    if (!engineAction) return false;
+    const result = applyAction(this.state, engineAction);
+    if (result.error) {
+      if (decision.type !== 'DISCARD_TILE') {
+        // 選択が却下された場合はツモ切りでフォールバックする
+        const view = toStateView(this.state, playerId, Date.now());
+        if (view.myDrawnTile) {
+          const fallback = applyAction(this.state, {
+            type: 'DISCARD_TILE',
+            playerId,
+            tileId: view.myDrawnTile.id,
+            now: Date.now(),
+          });
+          if (!fallback.error) {
+            this.commitState(fallback.state);
+            return true;
+          }
+        }
+      }
+      return false;
+    }
+    this.commitState(result.state);
+    return true;
+  }
+
+  private missingCpuIds(): string[] {
+    const rules = deriveRules(this.state.ruleConfig);
+    const missing: string[] = [];
+    for (let i = 0; i < this.cpuCount; i++) {
+      const cpuId = cpuPlayerId(i);
+      if (!this.state.players.some((p) => p.playerId === cpuId)) {
+        missing.push(cpuId);
+      }
+    }
+    if (this.state.players.length + missing.length > rules.playerCount) {
+      return missing.slice(0, Math.max(0, rules.playerCount - this.state.players.length));
+    }
+    return missing;
   }
 
   private clearResponseTimer(): void {
@@ -484,6 +691,7 @@ export class HostSession {
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
+    this.cpuToken++;
     this.clearResponseTimer();
     for (const conn of this.connections.values()) {
       conn.close();
@@ -495,4 +703,19 @@ export class HostSession {
     this.peer = null;
     this.callbacks.onStatusChange('closed');
   }
+}
+
+function cpuPlayerId(index: number): string {
+  return `${CPU_PLAYER_ID_PREFIX}${index + 1}`;
+}
+
+function cpuName(index: number): string {
+  return cpuDisplayName(index);
+}
+
+function cpuIndexOf(playerId: string, cpuCount: number): number {
+  for (let i = 0; i < cpuCount; i++) {
+    if (cpuPlayerId(i) === playerId) return i;
+  }
+  return 0;
 }

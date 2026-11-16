@@ -1,5 +1,9 @@
-import { rankPlayers } from '../engine/roundProgression';
-import { deriveRules, getRoundMetadata } from '../engine/rules';
+import {
+  CPU_PLAYER_ID_PREFIX,
+  cpuDisplayName,
+  isCpuPlayerId,
+} from '../cpu/player';
+import { deriveRules } from '../engine/rules';
 import type { PublicPlayerView, RoundView, StateView } from '../types/message';
 import type {
   AbortiveDrawReason,
@@ -75,6 +79,11 @@ const ABORTIVE_DRAW_META: Record<
   },
 };
 
+/** 横向き画面（スマホ横持ち・PC）と縦向き画面の両対応を切り替える目印 */
+function applyOrientationClass(element: HTMLElement): void {
+  element.classList.add('is-landscape');
+}
+
 export function renderGameTable(
   container: HTMLElement,
   view: StateView,
@@ -92,8 +101,13 @@ export function renderGameTable(
     return;
   }
 
+  const wrapper = document.createElement('div');
+  wrapper.className = 'table-stage';
+  applyOrientationClass(wrapper);
+
   const felt = document.createElement('div');
   felt.className = 'table-felt';
+  applyOrientationClass(felt);
 
   // 相対座席の割り当て（下:自分、右:下家、上:対面(4人のみ)、左:上家）
   const selfPlayer = view.players.find((p) => p.seatIndex === view.viewerSeatIndex);
@@ -116,28 +130,33 @@ export function renderGameTable(
         );
 
   if (topPlayer) {
-    felt.appendChild(renderOpponentSeat('seat-top', topPlayer));
+    felt.appendChild(renderOpponentSeat('seat-top', topPlayer, view));
   } else {
     const emptyTop = document.createElement('div');
-    emptyTop.className = 'seat-top';
+    emptyTop.className = 'seat-top seat-empty';
     felt.appendChild(emptyTop);
   }
 
   if (leftPlayer) {
-    felt.appendChild(renderOpponentSeat('seat-left', leftPlayer));
+    felt.appendChild(renderOpponentSeat('seat-left', leftPlayer, view));
   }
 
   felt.appendChild(renderCenterHub(view));
 
   if (rightPlayer) {
-    felt.appendChild(renderOpponentSeat('seat-right', rightPlayer));
+    felt.appendChild(renderOpponentSeat('seat-right', rightPlayer, view));
   }
 
   if (selfPlayer) {
     felt.appendChild(renderSelfSeat(view, selfPlayer, handlers, uiState));
   }
 
-  container.appendChild(felt);
+  wrapper.appendChild(felt);
+
+  // 右側パネル（対局情報・スコア・捨て牌一覧）
+  wrapper.appendChild(renderSidePanel(view, handlers));
+
+  container.appendChild(wrapper);
 
   // 局終了オーバーレイ（和了 / 流局）
   if (view.phase === 'round_end' && view.round) {
@@ -174,11 +193,7 @@ function formatNextRoundDescription(view: StateView, round: RoundView): string {
   }
 
   if (decision.outcome === 'oya_nagare') {
-    const nextMeta = getRoundMetadata(
-      decision.nextRoundIndex,
-      view.initialDealerIndex,
-      rules,
-    );
+    const nextMeta = getRoundMetadataSafe(decision.nextRoundIndex, rules);
     const nextTitle = formatRoundName(
       nextMeta.roundWind,
       nextMeta.kyokuNumber,
@@ -207,6 +222,20 @@ function formatNextRoundDescription(view: StateView, round: RoundView): string {
   }
 }
 
+function getRoundMetadataSafe(
+  roundIndex: number,
+  rules: ReturnType<typeof deriveRules>,
+): { roundWind: 'E' | 'S' | 'W' | 'N'; kyokuNumber: number } {
+  // 総局数超過時は最終局の表示にフォールバックする
+  const clampedIndex = Math.min(roundIndex, rules.totalRounds - 1);
+  const roundWindIndex = Math.floor(clampedIndex / rules.playerCount);
+  const roundWind = rules.roundWinds[roundWindIndex] ?? 'E';
+  return {
+    roundWind,
+    kyokuNumber: (clampedIndex % rules.playerCount) + 1,
+  };
+}
+
 function renderRoundEndOverlay(
   container: HTMLElement,
   view: StateView,
@@ -217,6 +246,7 @@ function renderRoundEndOverlay(
   const round = view.round!;
   const overlay = document.createElement('div');
   overlay.className = 'overlay-panel';
+  applyOrientationClass(overlay);
 
   const heading = document.createElement('h2');
   heading.style.margin = '0';
@@ -404,41 +434,12 @@ function renderRoundEndOverlay(
           tilesRow.appendChild(createTileElement(tile, { small: true }));
         }
         for (const meld of p.melds) {
-          const meldGroup = document.createElement('div');
-          meldGroup.className = 'meld-group';
-          const label = document.createElement('span');
-          label.className = 'meld-label';
-          label.textContent = MELD_TYPE_LABELS[meld.type];
-          meldGroup.appendChild(label);
-          const meldTiles = document.createElement('div');
-          meldTiles.className = 'meld-tiles';
-          if (meld.type === 'ankan' && meld.tiles.length === 4) {
-            meldTiles.appendChild(createTileBackElement(true, true));
-            meldTiles.appendChild(createTileElement(meld.tiles[1]!, { small: true }));
-            meldTiles.appendChild(createTileElement(meld.tiles[2]!, { small: true }));
-            meldTiles.appendChild(createTileBackElement(true, true));
-          } else {
-            for (const tile of meld.tiles) {
-              meldTiles.appendChild(createTileElement(tile, { small: true }));
-            }
-          }
-          meldGroup.appendChild(meldTiles);
-          tilesRow.appendChild(meldGroup);
+          tilesRow.appendChild(
+            renderMeldGroup(meld, { ankanHidden: true, small: true }),
+          );
         }
         if (p.kitaTiles.length > 0) {
-          const kitaGroup = document.createElement('div');
-          kitaGroup.className = 'meld-group meld-group-kita';
-          const label = document.createElement('span');
-          label.className = 'meld-label';
-          label.textContent = `抜北 ×${p.kitaTiles.length}`;
-          kitaGroup.appendChild(label);
-          const kitaTiles = document.createElement('div');
-          kitaTiles.className = 'meld-tiles';
-          for (const tile of p.kitaTiles) {
-            kitaTiles.appendChild(createTileElement(tile, { small: true }));
-          }
-          kitaGroup.appendChild(kitaTiles);
-          tilesRow.appendChild(kitaGroup);
+          tilesRow.appendChild(renderKitaGroup(p.kitaTiles, true));
         }
         card.appendChild(tilesRow);
       } else {
@@ -491,6 +492,59 @@ function renderRoundEndOverlay(
   }
 
   container.appendChild(overlay);
+}
+
+function renderMeldGroup(
+  meld: Meld,
+  options: { ankanHidden?: boolean; small?: boolean } = {},
+): HTMLElement {
+  const small = options.small ?? true;
+  const group = document.createElement('div');
+  group.className = 'meld-group';
+
+  const label = document.createElement('span');
+  label.className = 'meld-label';
+  label.textContent = MELD_TYPE_LABELS[meld.type];
+  group.appendChild(label);
+
+  const tiles = document.createElement('div');
+  tiles.className = 'meld-tiles';
+
+  if (meld.type === 'ankan' && meld.tiles.length === 4 && options.ankanHidden) {
+    tiles.appendChild(createTileBackElement(small, true));
+    tiles.appendChild(createTileElement(meld.tiles[1]!, { small }));
+    tiles.appendChild(createTileElement(meld.tiles[2]!, { small }));
+    tiles.appendChild(createTileBackElement(small, true));
+  } else {
+    for (const tile of meld.tiles) {
+      const isCalled =
+        meld.calledTile?.id === tile.id || meld.addedTile?.id === tile.id;
+      tiles.appendChild(createTileElement(tile, { small, called: isCalled }));
+    }
+  }
+
+  group.appendChild(tiles);
+  return group;
+}
+
+function renderKitaGroup(kitaTiles: readonly { id: string; kind: TileKind }[], small = true): HTMLElement {
+  const group = document.createElement('div');
+  group.className = 'meld-group meld-group-kita';
+
+  const label = document.createElement('span');
+  label.className = 'meld-label';
+  label.textContent = `抜北 ×${kitaTiles.length}`;
+  group.appendChild(label);
+
+  const tiles = document.createElement('div');
+  tiles.className = 'meld-tiles';
+  for (const tile of kitaTiles) {
+    tiles.appendChild(
+      createTileElement({ ...tile, isRed: false }, { small }),
+    );
+  }
+  group.appendChild(tiles);
+  return group;
 }
 
 function renderAgariWinnerCard(
@@ -546,43 +600,13 @@ function renderAgariWinnerCard(
   );
 
   for (const meld of agari.melds) {
-    const meldGroup = document.createElement('div');
-    meldGroup.className = 'meld-group';
-    const label = document.createElement('span');
-    label.className = 'meld-label';
-    label.textContent = MELD_TYPE_LABELS[meld.type];
-    meldGroup.appendChild(label);
-
-    const meldTiles = document.createElement('div');
-    meldTiles.className = 'meld-tiles';
-    if (meld.type === 'ankan' && meld.tiles.length === 4) {
-      meldTiles.appendChild(createTileBackElement(true, true));
-      meldTiles.appendChild(createTileElement(meld.tiles[1]!, { small: true }));
-      meldTiles.appendChild(createTileElement(meld.tiles[2]!, { small: true }));
-      meldTiles.appendChild(createTileBackElement(true, true));
-    } else {
-      for (const tile of meld.tiles) {
-        meldTiles.appendChild(createTileElement(tile, { small: true }));
-      }
-    }
-    meldGroup.appendChild(meldTiles);
-    tilesRow.appendChild(meldGroup);
+    tilesRow.appendChild(
+      renderMeldGroup(meld, { ankanHidden: true, small: true }),
+    );
   }
 
   if (agari.kitaTiles.length > 0) {
-    const kitaGroup = document.createElement('div');
-    kitaGroup.className = 'meld-group meld-group-kita';
-    const label = document.createElement('span');
-    label.className = 'meld-label';
-    label.textContent = `抜北 ×${agari.kitaTiles.length}`;
-    kitaGroup.appendChild(label);
-    const kitaTiles = document.createElement('div');
-    kitaTiles.className = 'meld-tiles';
-    for (const tile of agari.kitaTiles) {
-      kitaTiles.appendChild(createTileElement(tile, { small: true }));
-    }
-    kitaGroup.appendChild(kitaTiles);
-    tilesRow.appendChild(kitaGroup);
+    tilesRow.appendChild(renderKitaGroup(agari.kitaTiles, true));
   }
 
   card.appendChild(tilesRow);
@@ -754,6 +778,13 @@ function renderSeatHeader(
   nameSpan.textContent = isSelf ? `${player.name}（あなた）` : player.name;
   identity.appendChild(nameSpan);
 
+  if (isCpuPlayerId(player.playerId)) {
+    const cpuBadge = document.createElement('span');
+    cpuBadge.className = 'cpu-badge';
+    cpuBadge.textContent = 'CPU';
+    identity.appendChild(cpuBadge);
+  }
+
   if (player.isDealer) {
     const oya = document.createElement('span');
     oya.className = 'hub-sub';
@@ -797,12 +828,24 @@ function renderSeatHeader(
   return header;
 }
 
-function renderDiscardRiver(player: PublicPlayerView): HTMLElement {
+function renderDiscardRiver(
+  player: PublicPlayerView,
+  options: { limit?: number; latestOnly?: boolean } = {},
+): HTMLElement {
   const river = document.createElement('div');
   river.className = 'discard-river';
 
-  player.discards.forEach((entry, idx) => {
-    const isLatest = idx === player.discards.length - 1;
+  const limit = options.limit ?? player.discards.length;
+  const start =
+    options.latestOnly && player.discards.length > limit
+      ? player.discards.length - limit
+      : 0;
+  const visible = player.discards.slice(start);
+  const lastIndex = player.discards.length - 1;
+
+  visible.forEach((entry, idx) => {
+    const absoluteIndex = start + idx;
+    const isLatest = absoluteIndex === lastIndex;
     river.appendChild(
       createTileElement(entry.tile, {
         small: true,
@@ -825,55 +868,11 @@ function renderMeldsAndKita(player: PublicPlayerView): HTMLElement | null {
   row.className = 'meld-kita-row';
 
   for (const meld of player.melds) {
-    const group = document.createElement('div');
-    group.className = 'meld-group';
-
-    const label = document.createElement('span');
-    label.className = 'meld-label';
-    label.textContent = MELD_TYPE_LABELS[meld.type];
-    group.appendChild(label);
-
-    const tilesWrap = document.createElement('div');
-    tilesWrap.className = 'meld-tiles';
-
-    if (meld.type === 'ankan' && meld.tiles.length === 4) {
-      tilesWrap.appendChild(createTileBackElement(true, true));
-      tilesWrap.appendChild(createTileElement(meld.tiles[1]!, { small: true }));
-      tilesWrap.appendChild(createTileElement(meld.tiles[2]!, { small: true }));
-      tilesWrap.appendChild(createTileBackElement(true, true));
-    } else {
-      for (const tile of meld.tiles) {
-        const isHighlighted =
-          meld.calledTile?.id === tile.id || meld.addedTile?.id === tile.id;
-        tilesWrap.appendChild(
-          createTileElement(tile, {
-            small: true,
-            called: isHighlighted,
-          }),
-        );
-      }
-    }
-
-    group.appendChild(tilesWrap);
-    row.appendChild(group);
+    row.appendChild(renderMeldGroup(meld, { ankanHidden: true, small: true }));
   }
 
   if (player.kitaTiles.length > 0) {
-    const kitaGroup = document.createElement('div');
-    kitaGroup.className = 'meld-group meld-group-kita';
-
-    const label = document.createElement('span');
-    label.className = 'meld-label';
-    label.textContent = `抜北 ×${player.kitaTiles.length}`;
-    kitaGroup.appendChild(label);
-
-    const tilesWrap = document.createElement('div');
-    tilesWrap.className = 'meld-tiles';
-    for (const tile of player.kitaTiles) {
-      tilesWrap.appendChild(createTileElement(tile, { small: true }));
-    }
-    kitaGroup.appendChild(tilesWrap);
-    row.appendChild(kitaGroup);
+    row.appendChild(renderKitaGroup(player.kitaTiles, true));
   }
 
   return row;
@@ -882,6 +881,7 @@ function renderMeldsAndKita(player: PublicPlayerView): HTMLElement | null {
 function renderOpponentSeat(
   areaClass: string,
   player: PublicPlayerView,
+  _view: StateView,
 ): HTMLElement {
   const box = document.createElement('div');
   box.className = `seat-box ${areaClass}${player.isCurrentTurn ? ' is-turn' : ''}`;
@@ -901,7 +901,8 @@ function renderOpponentSeat(
     box.appendChild(meldsEl);
   }
 
-  box.appendChild(renderDiscardRiver(player));
+  // 横画面では直近の捨て牌のみ表示（詳細は右側パネル）
+  box.appendChild(renderDiscardRiver(player, { limit: 6, latestOnly: true }));
   return box;
 }
 
@@ -1116,40 +1117,10 @@ function renderSelfTurnActionsBar(
   return bar;
 }
 
-function renderSelfSeat(
-  view: StateView,
-  player: PublicPlayerView,
-  handlers: TableHandlers,
-  uiState: TableUiState,
-): HTMLElement {
-  const box = document.createElement('div');
-  box.className = `seat-box seat-self${player.isCurrentTurn ? ' is-turn' : ''}`;
-
-  box.appendChild(renderSeatHeader(player, true, view.isFuriten));
-
-  const controls = document.createElement('div');
-  controls.className = 'self-controls';
-
-  const riverLabel = document.createElement('div');
-  riverLabel.className = 'hub-sub';
-  riverLabel.textContent = 'あなたの捨て牌';
-  controls.append(riverLabel, renderDiscardRiver(player));
-
-  const selfMelds = renderMeldsAndKita(player);
-  if (selfMelds) {
-    controls.appendChild(selfMelds);
-  }
-
-  const isMyTurn = view.phase === 'playing' && player.isCurrentTurn;
-  const canDiscardNow =
-    isMyTurn && (view.myDrawnTile !== null || view.myHand.length % 3 === 2);
-  const canRiichiIds = view.mySelfActions?.canRiichiTileIds ?? [];
-  const inRiichiMode =
-    canDiscardNow && uiState.riichiSelectingMode && canRiichiIds.length > 0;
-  const riichiCandidateSet = new Set(canRiichiIds);
-
+function buildTurnPrompt(view: StateView, canDiscardNow: boolean): HTMLElement {
   const prompt = document.createElement('div');
   prompt.className = `turn-prompt${canDiscardNow ? ' is-my-turn' : ''}`;
+
   if (view.phase === 'round_end') {
     const hasAgari =
       view.round &&
@@ -1163,16 +1134,19 @@ function renderSelfSeat(
     } else {
       prompt.textContent = '流局しました';
     }
-  } else if (view.phase === 'awaiting_responses' && view.myCallOptions !== null) {
+    return prompt;
+  }
+
+  if (view.phase === 'awaiting_responses' && view.myCallOptions !== null) {
     prompt.textContent = '相手の打牌に対して鳴き・ロンを選択できます';
-  } else if (inRiichiMode) {
-    prompt.textContent =
-      'リーチ宣言: 聴牌を維持できる牌を選んでください（ハイライト表示）';
-  } else if (canDiscardNow) {
+    return prompt;
+  }
+
+  if (canDiscardNow) {
     if (view.mySelfActions?.canTsumo) {
       prompt.textContent =
         'ツモ和了が可能です！「ツモ和了」を押すか、切る牌を選んでください';
-    } else if (player.isRiichi) {
+    } else if (view.players.find((p) => p.playerId === view.viewerPlayerId)?.isRiichi) {
       prompt.textContent = 'リーチ中です — ツモ牌のみ切れます';
     } else if (view.kuikaeForbiddenKinds.length > 0) {
       prompt.textContent =
@@ -1180,15 +1154,43 @@ function renderSelfSeat(
     } else {
       prompt.textContent = 'あなたの手番です — 切る牌をタップしてください';
     }
-  } else if (isMyTurn) {
-    prompt.textContent = '待機中...';
-  } else {
-    const current = view.players.find((p) => p.isCurrentTurn);
-    prompt.textContent = current
-      ? `${current.name} の打牌を待っています...`
-      : '待機中...';
+    return prompt;
   }
-  controls.appendChild(prompt);
+
+  const current = view.players.find((p) => p.isCurrentTurn);
+  if (current?.playerId === view.viewerPlayerId) {
+    prompt.textContent = '待機中...';
+  } else if (current) {
+    prompt.textContent = `${current.name} の打牌を待っています...`;
+  } else {
+    prompt.textContent = '待機中...';
+  }
+  return prompt;
+}
+
+function renderSelfSeat(
+  view: StateView,
+  player: PublicPlayerView,
+  handlers: TableHandlers,
+  uiState: TableUiState,
+): HTMLElement {
+  const box = document.createElement('div');
+  box.className = `seat-box seat-self${player.isCurrentTurn ? ' is-turn' : ''}`;
+
+  box.appendChild(renderSeatHeader(player, true, view.isFuriten));
+
+  const isMyTurn = view.phase === 'playing' && player.isCurrentTurn;
+  const canDiscardNow =
+    isMyTurn && (view.myDrawnTile !== null || view.myHand.length % 3 === 2);
+  const canRiichiIds = view.mySelfActions?.canRiichiTileIds ?? [];
+  const inRiichiMode =
+    canDiscardNow && uiState.riichiSelectingMode && canRiichiIds.length > 0;
+  const riichiCandidateSet = new Set(canRiichiIds);
+
+  const controls = document.createElement('div');
+  controls.className = 'self-controls';
+
+  controls.appendChild(buildTurnPrompt(view, canDiscardNow));
 
   const callBar = renderCallResponseBar(view, handlers);
   if (callBar) {
@@ -1263,11 +1265,16 @@ function renderSelfSeat(
       );
     } else {
       const blocked = forbiddenSet.has(drawn.kind);
+      const lockedByRiichi = canDiscardNow && player.isRiichi;
       handArea.appendChild(
         createTileElement(drawn, {
           clickable: canDiscardNow && !blocked,
-          disabled: canDiscardNow && blocked,
-          disabledReason: blocked ? '喰い替え禁止のため切れません' : undefined,
+          disabled: canDiscardNow && (blocked || lockedByRiichi),
+          disabledReason: blocked
+            ? '喰い替え禁止のため切れません'
+            : lockedByRiichi
+              ? 'リーチ後はツモ切りしかできません'
+              : undefined,
           onClick: () => handlers.onDiscardTile(drawn.id),
         }),
       );
@@ -1275,6 +1282,20 @@ function renderSelfSeat(
   }
 
   controls.appendChild(handArea);
+
+  const meldsEl = renderMeldsAndKita(player);
+  if (meldsEl) {
+    controls.appendChild(meldsEl);
+  }
+
+  const riverRow = document.createElement('div');
+  riverRow.className = 'self-river-row';
+  const riverLabel = document.createElement('span');
+  riverLabel.className = 'hub-sub';
+  riverLabel.textContent = '捨て牌';
+  riverRow.append(riverLabel, renderDiscardRiver(player));
+  controls.appendChild(riverRow);
+
   box.appendChild(controls);
   return box;
 }
@@ -1286,7 +1307,7 @@ function buildScoreTable(
   roundScoreDeltas?: Record<string, number>,
   initialDealerIndex = 0,
 ): HTMLElement {
-  const list = ranked ? rankPlayers(players, initialDealerIndex) : players;
+  const list = ranked ? rankPlayersByScore(players, initialDealerIndex) : players;
 
   const hasRoundDelta =
     roundScoreDeltas !== undefined && Object.keys(roundScoreDeltas).length > 0;
@@ -1339,6 +1360,127 @@ function buildScoreTable(
   return table;
 }
 
+/** 席順の起家からの距離 → 持ち点の順で並べる（同点は起家に近い席が上位） */
+function rankPlayersByScore<T extends { seatIndex: number; score: number }>(
+  players: readonly T[],
+  initialDealerIndex: number,
+): T[] {
+  const count = players.length;
+  return [...players].sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    const distA = ((a.seatIndex - initialDealerIndex) % count + count) % count;
+    const distB = ((b.seatIndex - initialDealerIndex) % count + count) % count;
+    return distA - distB;
+  });
+}
+
+/** 右側パネル: 局情報・他家の捨て牌・スコア一覧 */
+function renderSidePanel(view: StateView, _handlers: TableHandlers): HTMLElement {
+  const panel = document.createElement('aside');
+  panel.className = 'side-panel';
+  applyOrientationClass(panel);
+
+  const round = view.round;
+  const rules = deriveRules(view.ruleConfig);
+
+  const head = document.createElement('div');
+  head.className = 'side-panel-head';
+
+  const title = document.createElement('div');
+  title.className = 'side-panel-title';
+  title.textContent = round
+    ? formatRoundName(round.roundWind, round.kyokuNumber, round.honba)
+    : '待機中';
+
+  const meta = document.createElement('div');
+  meta.className = 'hub-sub';
+  const lengthJa = view.ruleConfig.gameLength === 'tonpuu' ? '東風戦' : '半荘戦';
+  meta.textContent = round
+    ? `${view.ruleConfig.playerCount}人 ${lengthJa} ${round.roundIndex + 1}/${round.totalRounds}局 ・ 残り${round.remainingWallCount}枚`
+    : `${view.ruleConfig.playerCount}人 ${lengthJa}`;
+
+  head.append(title, meta);
+  panel.appendChild(head);
+
+  if (round) {
+    const status = document.createElement('div');
+    status.className = 'side-status';
+
+    const turnPlayer = view.players.find((p) => p.isCurrentTurn);
+    const turnText =
+      turnPlayer?.playerId === view.viewerPlayerId
+        ? 'あなたの手番'
+        : turnPlayer
+          ? `${turnPlayer.name} の手番`
+          : '待機中';
+
+    const doraRow = document.createElement('div');
+    doraRow.className = 'dora-tiles-row';
+    for (const indicator of round.doraIndicators) {
+      doraRow.appendChild(createTileElement(indicator, { small: true }));
+    }
+
+    const doraBox = document.createElement('div');
+    doraBox.className = 'side-row';
+    const doraLabel = document.createElement('span');
+    doraLabel.className = 'hub-sub';
+    doraLabel.textContent = 'ドラ表示';
+    doraBox.append(doraLabel, doraRow);
+
+    status.append(buildStatusLine(turnText), doraBox);
+    panel.appendChild(status);
+  }
+
+  const scoreBox = document.createElement('div');
+  scoreBox.className = 'side-block';
+  const scoreTitle = document.createElement('div');
+  scoreTitle.className = 'side-block-title';
+  scoreTitle.textContent = 'スコア';
+  scoreBox.appendChild(scoreTitle);
+  const compact = view.players.map((p) => ({
+    ...p,
+    score: p.score,
+  }));
+  scoreBox.appendChild(
+    buildScoreTable(compact, rules.initialPoints, false, undefined, view.initialDealerIndex),
+  );
+  panel.appendChild(scoreBox);
+
+  // 他家の捨て牌（直近のものから）
+  const rivers = document.createElement('div');
+  rivers.className = 'side-block side-rivers';
+  const riversTitle = document.createElement('div');
+  riversTitle.className = 'side-block-title';
+  riversTitle.textContent = '捨て牌';
+  rivers.appendChild(riversTitle);
+
+  for (const p of view.players) {
+    const row = document.createElement('div');
+    row.className = 'side-river-row';
+
+    const name = document.createElement('span');
+    name.className = 'side-river-name';
+    name.textContent =
+      p.playerId === view.viewerPlayerId ? `${p.name}（あなた）` : p.name;
+
+    const river = renderDiscardRiver(p, { limit: 9, latestOnly: true });
+    river.classList.add('discard-river-compact');
+
+    row.append(name, river);
+    rivers.appendChild(row);
+  }
+  panel.appendChild(rivers);
+
+  return panel;
+}
+
+function buildStatusLine(text: string): HTMLElement {
+  const el = document.createElement('div');
+  el.className = 'side-turn';
+  el.textContent = text;
+  return el;
+}
+
 function renderFinishedScreen(
   container: HTMLElement,
   view: StateView,
@@ -1347,6 +1489,7 @@ function renderFinishedScreen(
 ): void {
   const panel = document.createElement('div');
   panel.className = 'overlay-panel';
+  applyOrientationClass(panel);
 
   const title = document.createElement('h2');
   title.style.margin = '0';
@@ -1392,3 +1535,6 @@ function renderFinishedScreen(
   panel.appendChild(backBtn);
   container.appendChild(panel);
 }
+
+/** CPU 名のラベル（ロビー表示用の再エクスポート） */
+export { cpuDisplayName, CPU_PLAYER_ID_PREFIX };
