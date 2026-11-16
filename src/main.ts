@@ -11,6 +11,7 @@ import {
   type LobbyFormState,
 } from './ui/lobbyView';
 import { renderGameTable } from './ui/tableView';
+import { prewarmTileSpriteSheet, waitForTileFonts } from './ui/tileTexture';
 import {
   createRotateOverlay,
   shouldBlockForOrientation,
@@ -37,6 +38,18 @@ class MahjongApp {
   private countdownTimerId: ReturnType<typeof setInterval> | null = null;
 
   private readonly formState: LobbyFormState;
+  /** 牌面スプライトシートの準備完了後に一度だけ再描画するためのフラグ */
+  private tileFacesRefreshed = false;
+
+  /**
+   * 牌面スプライトシートの準備ができたタイミングで画面を作り直す。
+   * 初回描画がテキスト牌で行われていても、ここで画像牌に差し替わる。
+   */
+  refreshTileFaces(): void {
+    if (this.tileFacesRefreshed) return;
+    this.tileFacesRefreshed = true;
+    this.render();
+  }
 
   constructor(root: HTMLElement) {
     this.root = root;
@@ -525,4 +538,13 @@ const rootEl = document.getElementById('app');
 if (!rootEl) {
   throw new Error('#app element not found');
 }
-new MahjongApp(rootEl);
+
+const app = new MahjongApp(rootEl);
+
+// 牌面のスプライトシートはフォント読み込み後に作る。
+// 先に描くと CJK 非対応の serif にフォールバックした字形が焼き込まれてしまう。
+// 失敗しても牌はテキスト描画にフォールバックするので、対局は止まらない。
+void waitForTileFonts().then(() => {
+  prewarmTileSpriteSheet();
+  app.refreshTileFaces();
+});

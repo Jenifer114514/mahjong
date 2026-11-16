@@ -164,12 +164,26 @@ Notion「麻雀アプリ 3D牌生成・操作エンジン」の `mahjong-engine.
 | 座標 | 512/768/256/105 などのベタ書き | 牌面サイズに対する比率で計算（解像度を変えても崩れない） |
 | 質感 | ベタ塗りの文字 | 明部→影→本体の 3 回重ねによる彫刻風の陰影 |
 | 解放 | `dispose()` でテクスチャが解放されない | `atlas.dispose()` で canvas とセル情報を破棄 |
+| 2D 画面への適用 | なし（3D 専用） | `createTileSpriteSheet()` で 1 枚の画像を全牌で共有し、`background-position` で切り替え |
 
 3D 側に組み込むときは、`createTileAtlas()` の戻り値 `cells[i]` の
 `u0/v0/u1/v1` を牌種ごとの PlaneGeometry の UV に書き込めば、
 1 アトラス・1 マテリアルで `InstancedMesh` 一括描画できます。
 テクスチャは `colorSpace = SRGBColorSpace` を設定し、
 `anisotropy` は `renderer.capabilities.getMaxAnisotropy()` の値を使ってください。
+
+### 2D の牌コンポーネントへの適用
+
+`src/ui/tileView.ts` の `createTileElement()` は、まず canvas 生成の牌面を試します。
+牌 1 枚ごとに要素を作るのではなく、**スプライトシート 1 枚を全牌で共有**し、
+牌ごとに `background-position` だけを変えるため、136 枚 + 河 + 副露を描いても
+DOM ノードもメモリも増えません。
+
+- 生成は `waitForTileFonts()` の後（`main.ts`）。先に描くと CJK 非対応の serif で
+  字形が焼き込まれてしまうため、フォント読み込み後に作って `refreshTileFaces()` で再描画します。
+- canvas 2D が使えない環境（jsdom / SSR）では自動的に従来のテキスト描画
+  （一萬・5筒 など）へフォールバックするので、テストはそのまま動きます。
+- 赤ドラ（`isRed`）は赤い図柄のセルを使い、さらに縁取りを付けます。
 
 目視確認: `npm run dev` で起動し `/tools/tile-texture-preview.html` を開きます。
 

@@ -930,3 +930,118 @@ export function createTileBackCanvas(
   drawTileBack(ctx, { width, height });
   return canvas;
 }
+
+// --------------------------------------------------
+// DOM 用スプライトシート
+// --------------------------------------------------
+//
+// 2D の牌コンポーネント（`.mj-tile`）で使うための経路。
+// canvas 1 枚を data URL にして CSS の background-image として共有し、
+// 牌ごとに background-position だけを変える。
+// 牌 1 枚ごとに <img> や <canvas> を作らないので、
+// 136 枚 + 捨て牌 + 副露を描いても DOM ノードとメモリが増えない。
+
+/** スプライトシートの格子（7×6 = 42 枠。34 種 + 赤ドラ 3 種 = 37 枠を収める） */
+export const SPRITE_COLUMNS = 7;
+export const SPRITE_ROWS = 6;
+
+export interface TileSpriteCell {
+  key: TileAtlasKey;
+  /** CSS の background-position（px） */
+  x: number;
+  y: number;
+}
+
+export interface TileSpriteSheet {
+  /** CSS の background-image に渡す値 */
+  imageUrl: string;
+  cellWidth: number;
+  cellHeight: number;
+  cells: Map<string, TileSpriteCell>;
+  /** 牌種から background-position を引く。未登録なら undefined */
+  getPosition: (kind: TileKind, isRed?: boolean) => { x: number; y: number } | undefined;
+}
+
+/**
+ * DOM スプライトシートを作る。
+ * `cellHeight` は「実際に画面に出す牌の高さ × devicePixelRatio」を渡す。
+ * canvas 2D が使えない環境（jsdom など）では null を返すので、
+ * 呼び出し側は従来のテキスト描画にフォールバックできる。
+ */
+export function createTileSpriteSheet(
+  options: { cellHeight?: number; fontFamily?: string } = {},
+): TileSpriteSheet | null {
+  const cellHeight = Math.round(options.cellHeight ?? 96);
+  const cellWidth = Math.round(cellHeight * TILE_FACE_ASPECT);
+
+  let created: CanvasWithContext;
+  try {
+    created = domCanvasFactory(cellWidth * SPRITE_COLUMNS, cellHeight * SPRITE_ROWS);
+  } catch {
+    return null;
+  }
+  const { canvas, ctx } = created;
+
+  const keys: TileAtlasKey[] = [...createAtlasKeys(false)];
+  // 赤ドラは 5 萬 / 5 筒 / 5 索 のみ（残りは白枠で埋める）
+  for (const kind of RED_FIVE_KINDS) {
+    keys.push({ kind: kind as TileKind, isRed: true });
+  }
+
+  const cells = new Map<string, TileSpriteCell>();
+
+  keys.forEach((key, index) => {
+    const col = index % SPRITE_COLUMNS;
+    const row = Math.floor(index / SPRITE_COLUMNS);
+    const x = col * cellWidth;
+    const y = row * cellHeight;
+
+    ctx.save();
+    ctx.translate(x, y);
+    drawTileFace(ctx, key.kind, {
+      width: cellWidth,
+      height: cellHeight,
+      fontFamily: options.fontFamily,
+      isRed: key.isRed,
+    });
+    ctx.restore();
+
+    cells.set(key.isRed ? `${key.kind}+red` : key.kind, { key, x, y });
+  });
+
+  const imageUrl = canvas.toDataURL('image/png');
+
+  return {
+    imageUrl,
+    cellWidth,
+    cellHeight,
+    cells,
+    getPosition: (kind, isRed) => {
+      const cell = cells.get(isRed ? `${kind}+red` : kind);
+      return cell ? { x: cell.x, y: cell.y } : undefined;
+    },
+  };
+}
+
+// --------------------------------------------------
+// スプライトシートの事前生成
+// --------------------------------------------------
+
+/**
+ * DOM 牌のスプライトシートを今すぐ作る。
+ * `waitForTileFonts()` の後に呼ぶと、正しい字形で焼き込める。
+ * 一度しか作らないので、繰り返し呼んでもコストは増えない。
+ */
+export function prewarmTileSpriteSheet(): void {
+  if (spriteSheetCache) return;
+  spriteSheetCache = createTileSpriteSheet({ cellHeight: DEFAULT_SPRITE_CELL_HEIGHT });
+}
+
+/** 事前生成済みのスプライトシート（未生成なら null） */
+export function getPrewarmedTileSpriteSheet(): TileSpriteSheet | null {
+  return spriteSheetCache;
+}
+
+let spriteSheetCache: TileSpriteSheet | null = null;
+/** スプライトシートの基準セル高さ（px、DPR 非適用） */
+const DEFAULT_SPRITE_CELL_HEIGHT = 112;

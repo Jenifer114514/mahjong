@@ -465,6 +465,36 @@ input {
   border-bottom-width: 3px;
 }
 
+/* canvas 生成の牌面（src/ui/tileTexture.ts）。
+   牌 1 枚ごとに要素を持たず、共有スプライトシートの background-position で切り替える。 */
+.mj-tile.mj-tile-face {
+  position: relative;
+  padding: 0;
+  border-color: rgba(140, 128, 96, 0.7);
+  background-color: #f7f0df;
+  background-repeat: no-repeat;
+  image-rendering: auto;
+}
+
+/* 画像の牌面でも読み上げ・検索用のテキストは残す（視覚的には隠す） */
+.mj-tile.mj-tile-face > .mj-tile-face-alt {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* 赤ドラは縁取りで一目で分かるようにする */
+.mj-tile.mj-tile-red {
+  border-color: rgba(196, 45, 52, 0.75);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(196, 45, 52, 0.45);
+}
+
 .mj-tile-back {
   width: 18px;
   height: 26px;

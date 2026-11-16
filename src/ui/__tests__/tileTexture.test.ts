@@ -3,6 +3,9 @@ import { describe, expect, it, vi } from 'vitest';
 import type { TileKind } from '../../types/tile';
 import {
   createAtlasKeys,
+  createTileSpriteSheet,
+  SPRITE_COLUMNS,
+  SPRITE_ROWS,
   createTileAtlas,
   createTileBackCanvas,
   createTileFaceCanvas,
@@ -252,6 +255,19 @@ describe('tileTexture', () => {
 
     vi.unstubAllGlobals();
   });
+
+  it('canvas 2D が使えない環境ではスプライトシートを作らず null を返す（テキスト描画にフォールバック）', () => {
+    // node 環境（document なし）なので canvas は作れない
+    expect(createTileSpriteSheet({ cellHeight: 96 })).toBeNull();
+  });
+
+  it('スプライトシートは 37 枠（34 種 + 赤ドラ 3 種）を収める格子を持つ', () => {
+    // 34 種 + 赤ドラ 3 種 = 37 枠。格子が足りないと最後の赤ドラがはみ出す
+    expect(SPRITE_COLUMNS * SPRITE_ROWS).toBeGreaterThanOrEqual(
+      createAtlasKeys(true).length,
+    );
+  });
+
 });
 
 function drawnTexts(
