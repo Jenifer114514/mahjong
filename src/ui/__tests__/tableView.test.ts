@@ -6,6 +6,8 @@ import { deriveRules } from '../../engine/rules';
 import { buildSeededTestDeck } from '../../engine/__tests__/testHelpers';
 import type { StateView } from '../../types/message';
 import type { GameState } from '../../types/state';
+import { decideCpuAction } from '../../cpu/player';
+import { applyAction } from '../../engine/reducer';
 import { renderGameTable, type TableHandlers } from '../tableView';
 
 const noopHandlers: TableHandlers = {
@@ -133,6 +135,61 @@ describe('renderGameTable（横画面レイアウト）', () => {
     expect(
       otherRoot.querySelectorAll('.seat-self .hand-area .mj-tile-clickable'),
     ).toHaveLength(0);
+  });
+
+  it('実物の雀卓と同じ向きで4方向に席・河・方位リングを描画する', () => {
+    // 数牌を打ち合った状態を作るため、対局を少し進める
+    let state = state4;
+    for (let i = 0; i < 12 && state.phase === 'playing'; i++) {
+      const current = state.players.find(
+        (p) => p.seatIndex === state.round!.currentTurnIndex,
+      )!;
+      const drawn = current.drawnTile;
+      if (!drawn) break;
+      const view = toStateView(state, current.playerId, 0);
+      const decision = decideCpuAction(view);
+      if (!decision || decision.type !== 'DISCARD_TILE') break;
+      const result = applyAction(state, {
+        type: 'DISCARD_TILE',
+        playerId: current.playerId,
+        tileId: decision.tileId,
+        now: 0,
+      });
+      if (result.error) break;
+      state = result.state;
+      if (state.phase === 'awaiting_responses') break;
+    }
+
+    const view = toStateView(state, 'p0', 0);
+    const root = document.createElement('div');
+    renderGameTable(root, view, noopHandlers);
+
+    // 4方向それぞれに「向き」クラスと data-seat が付く
+    for (const side of ['self', 'top', 'left', 'right']) {
+      const seat = root.querySelector(`.seat-orient-${side}`);
+      expect(seat, `seat-orient-${side}`).not.toBeNull();
+      expect(seat!.getAttribute('data-seat')).toBe(side);
+    }
+
+    // 対面は手牌が 180 度、左右は縦向き
+    expect(root.querySelector('.hand-orient-top')).not.toBeNull();
+    expect(root.querySelector('.hand-orient-left')).not.toBeNull();
+    expect(root.querySelector('.hand-orient-right')).not.toBeNull();
+
+    // 河は4人分すべて描画され、席の向きクラスを持つ
+    expect(root.querySelectorAll('.seat-box .river-zone')).toHaveLength(4);
+    expect(root.querySelector('.seat-box .river-top')).not.toBeNull();
+    expect(root.querySelector('.seat-box .river-left')).not.toBeNull();
+    expect(root.querySelector('.seat-box .river-right')).not.toBeNull();
+    expect(root.querySelector('.seat-box .river-self')).not.toBeNull();
+
+    // 河は各自 6 枚折り返し
+    expect(root.querySelector('.seat-box .discard-river.river-rows-6')).not.toBeNull();
+
+    // 中央に方位リング（自風・親・手番）
+    const compass = root.querySelector('.table-compass')!;
+    expect(compass).not.toBeNull();
+    expect(compass.querySelectorAll('.compass-slot')).toHaveLength(4);
   });
 
   it('局終了時はオーバーレイにスコア表と次局ボタンを描画する（ホストのみ）', () => {

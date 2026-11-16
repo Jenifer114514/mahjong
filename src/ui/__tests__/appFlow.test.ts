@@ -86,22 +86,26 @@ describe('アプリ起動とローカルCPU対局', () => {
 
     // 自分の手番になるまで待つ（CPU 3体が打牌を終えるまで）
     let acted = false;
+    let before = 0;
     for (let i = 0; i < 200 && !acted; i++) {
       await new Promise((resolve) => setTimeout(resolve, 40));
       const clickable = root.querySelectorAll<HTMLElement>(
         '.seat-self .hand-area .mj-tile-clickable',
       );
       if (clickable.length > 0) {
-        const before =
-          root.querySelectorAll('.seat-self .discard-river .mj-tile').length;
+        before = root.querySelectorAll('.seat-self .discard-river .mj-tile')
+          .length;
         clickable[0]!.click();
-        await new Promise((resolve) => setTimeout(resolve, 60));
-        const after =
-          root.querySelectorAll('.seat-self .discard-river .mj-tile').length;
-        expect(after).toBe(before + 1);
-        acted = true;
+        // 再描画はマイクロタスク後。取りこぼしても次の周回で再試行する
+        for (let j = 0; j < 20 && !acted; j++) {
+          await new Promise((resolve) => setTimeout(resolve, 30));
+          const after = root.querySelectorAll(
+            '.seat-self .discard-river .mj-tile',
+          ).length;
+          if (after === before + 1) acted = true;
+        }
       }
     }
-    expect(acted).toBe(true);
+    expect(acted, '自分の捨て牌が 1 枚増える').toBe(true);
   }, 30000);
 });

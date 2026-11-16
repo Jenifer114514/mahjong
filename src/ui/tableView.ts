@@ -20,6 +20,17 @@ import {
   windToJa,
 } from './tileView';
 
+/** 卓を囲む4方向（下=自分から見た相対位置） */
+export type SeatSide = 'self' | 'top' | 'left' | 'right';
+
+/** 席ごとの河・手牌の向き（CSS の data-seat と対応） */
+const SEAT_CLASS: Record<SeatSide, string> = {
+  self: 'seat-self',
+  top: 'seat-top',
+  left: 'seat-left',
+  right: 'seat-right',
+};
+
 export interface TableHandlers {
   onDiscardTile: (tileId: string) => void;
   onCallResponse: (choice: CallResponseChoice) => void;
@@ -130,7 +141,7 @@ export function renderGameTable(
         );
 
   if (topPlayer) {
-    felt.appendChild(renderOpponentSeat('seat-top', topPlayer, view));
+    felt.appendChild(renderOpponentSeat('top', topPlayer, view));
   } else {
     const emptyTop = document.createElement('div');
     emptyTop.className = 'seat-top seat-empty';
@@ -138,13 +149,21 @@ export function renderGameTable(
   }
 
   if (leftPlayer) {
-    felt.appendChild(renderOpponentSeat('seat-left', leftPlayer, view));
+    felt.appendChild(renderOpponentSeat('left', leftPlayer, view));
+  } else {
+    const emptyLeft = document.createElement('div');
+    emptyLeft.className = 'seat-left seat-empty';
+    felt.appendChild(emptyLeft);
   }
 
   felt.appendChild(renderCenterHub(view));
 
   if (rightPlayer) {
-    felt.appendChild(renderOpponentSeat('seat-right', rightPlayer, view));
+    felt.appendChild(renderOpponentSeat('right', rightPlayer, view));
+  } else {
+    const emptyRight = document.createElement('div');
+    emptyRight.className = 'seat-right seat-empty';
+    felt.appendChild(emptyRight);
   }
 
   if (selfPlayer) {
@@ -674,6 +693,8 @@ function renderCenterHub(view: StateView): HTMLElement {
   const round = view.round;
   const rules = deriveRules(view.ruleConfig);
 
+  hub.appendChild(renderCompass(view));
+
   const roundLabel = document.createElement('div');
   roundLabel.className = 'round-label';
   roundLabel.textContent = round
@@ -756,6 +777,72 @@ function renderCenterHub(view: StateView): HTMLElement {
   return wrap;
 }
 
+/**
+ * 卓の中央に置く方位リング。
+ * 実物の雀卓と同じく、各プレイヤーの席（自風）と手番が一目で分かるようにする。
+ */
+function renderCompass(view: StateView): HTMLElement {
+  const ring = document.createElement('div');
+  ring.className = 'table-compass';
+
+  const positions: Array<{ side: SeatSide; label: string }> = [
+    { side: 'top', label: '対面' },
+    { side: 'right', label: '下家' },
+    { side: 'left', label: '上家' },
+    { side: 'self', label: '自分' },
+  ];
+
+  const playerCount = view.players.length;
+  const bySide = new Map<SeatSide, PublicPlayerView>();
+  const selfPlayer = view.players.find((p) => p.seatIndex === view.viewerSeatIndex);
+  if (selfPlayer) bySide.set('self', selfPlayer);
+  const right = view.players.find(
+    (p) => p.seatIndex === (view.viewerSeatIndex + 1) % playerCount,
+  );
+  if (right) bySide.set('right', right);
+  const leftSide =
+    view.players.find(
+      (p) =>
+        p.seatIndex ===
+        (view.viewerSeatIndex + (playerCount === 4 ? 3 : 2)) % playerCount,
+    ) ?? undefined;
+  if (leftSide) bySide.set('left', leftSide);
+  if (playerCount === 4) {
+    const top = view.players.find(
+      (p) => p.seatIndex === (view.viewerSeatIndex + 2) % playerCount,
+    );
+    if (top) bySide.set('top', top);
+  }
+
+  for (const { side } of positions) {
+    const player = bySide.get(side);
+    const slot = document.createElement('div');
+    slot.className = `compass-slot compass-${side}${
+      player?.isCurrentTurn ? ' is-turn' : ''
+    }`;
+    if (!player) {
+      slot.classList.add('is-empty');
+      ring.appendChild(slot);
+      continue;
+    }
+    if (player.seatWind) {
+      const wind = document.createElement('span');
+      wind.className = `compass-wind${player.isDealer ? ' is-dealer' : ''}`;
+      wind.textContent = windToJa(player.seatWind);
+      slot.appendChild(wind);
+    }
+    if (player.isRiichi) {
+      const riichi = document.createElement('span');
+      riichi.className = 'compass-riichi';
+      riichi.textContent = 'リーチ';
+      slot.appendChild(riichi);
+    }
+    ring.appendChild(slot);
+  }
+
+  return ring;
+}
+
 function renderSeatHeader(
   player: PublicPlayerView,
   isSelf: boolean,
@@ -828,20 +915,52 @@ function renderSeatHeader(
   return header;
 }
 
+/**
+ * 河（捨て牌）を再現する。
+ * 実物の麻雀と同じく、各プレイヤーの手前から中央へ向かって 6 枚ずつ折り返して並べ、
+ * 牌は席の向きに合わせて回転させる（対面は逆さ、左右は縦向き）。
+ */
 function renderDiscardRiver(
   player: PublicPlayerView,
-  options: { limit?: number; latestOnly?: boolean } = {},
+  options: {
+    side?: SeatSide;
+    limit?: number;
+    latestOnly?: boolean;
+    compact?: boolean;
+    label?: string | null;
+  } = {},
 ): HTMLElement {
+  const side = options.side ?? 'self';
+  const wrap = document.createElement('div');
+  wrap.className = `river-zone river-${side}`;
+  wrap.dataset.seat = side;
+
+  if (options.label) {
+    const label = document.createElement('span');
+    label.className = 'river-label';
+    label.textContent = options.label;
+    wrap.appendChild(label);
+  }
+
   const river = document.createElement('div');
-  river.className = 'discard-river';
+  river.className = `discard-river river-${side} river-rows-6${
+    options.compact ? ' is-compact' : ''
+  }`;
 
   const limit = options.limit ?? player.discards.length;
   const start =
     options.latestOnly && player.discards.length > limit
-      ? player.discards.length - limit
+      ? Math.max(0, player.discards.length - limit)
       : 0;
   const visible = player.discards.slice(start);
   const lastIndex = player.discards.length - 1;
+
+  if (visible.length === 0) {
+    const empty = document.createElement('span');
+    empty.className = 'river-empty';
+    empty.textContent = '—';
+    river.appendChild(empty);
+  }
 
   visible.forEach((entry, idx) => {
     const absoluteIndex = start + idx;
@@ -856,16 +975,20 @@ function renderDiscardRiver(
     );
   });
 
-  return river;
+  wrap.appendChild(river);
+  return wrap;
 }
 
-function renderMeldsAndKita(player: PublicPlayerView): HTMLElement | null {
+function renderMeldsAndKita(
+  player: PublicPlayerView,
+  side: SeatSide = 'self',
+): HTMLElement | null {
   if (player.melds.length === 0 && player.kitaTiles.length === 0) {
     return null;
   }
 
   const row = document.createElement('div');
-  row.className = 'meld-kita-row';
+  row.className = `meld-kita-row meld-orient-${side}`;
 
   for (const meld of player.melds) {
     row.appendChild(renderMeldGroup(meld, { ankanHidden: true, small: true }));
@@ -879,30 +1002,41 @@ function renderMeldsAndKita(player: PublicPlayerView): HTMLElement | null {
 }
 
 function renderOpponentSeat(
-  areaClass: string,
+  side: Exclude<SeatSide, 'self'>,
   player: PublicPlayerView,
   _view: StateView,
 ): HTMLElement {
   const box = document.createElement('div');
-  box.className = `seat-box ${areaClass}${player.isCurrentTurn ? ' is-turn' : ''}`;
+  box.className = `seat-box ${SEAT_CLASS[side]} seat-orient-${side}${
+    player.isCurrentTurn ? ' is-turn' : ''
+  }`;
+  box.dataset.seat = side;
 
+  // 席情報（名前・自風・持ち点）は卓の外周側に置く
   box.appendChild(renderSeatHeader(player, false));
 
-  const backs = document.createElement('div');
-  backs.className = 'opponent-back-row';
+  // 外周（手牌）→ 副露 → 中央（河）の順に並べる入れ物
+  const body = document.createElement('div');
+  body.className = `seat-body seat-body-${side}`;
+
+  // 手牌（裏向き）は卓の外周を向く。実物同様、左家は縦、対面は逆さになる。
+  const handRow = document.createElement('div');
+  handRow.className = `opponent-hand hand-orient-${side}`;
   const totalVisibleBacks = player.handCount + (player.hasDrawnTile ? 1 : 0);
   for (let i = 0; i < totalVisibleBacks; i++) {
-    backs.appendChild(createTileBackElement(true));
+    handRow.appendChild(createTileBackElement(true));
   }
-  box.appendChild(backs);
+  body.appendChild(handRow);
 
-  const meldsEl = renderMeldsAndKita(player);
+  const meldsEl = renderMeldsAndKita(player, side);
   if (meldsEl) {
-    box.appendChild(meldsEl);
+    body.appendChild(meldsEl);
   }
 
-  // 横画面では直近の捨て牌のみ表示（詳細は右側パネル）
-  box.appendChild(renderDiscardRiver(player, { limit: 6, latestOnly: true }));
+  // 河は中央に向かって積まれる（全牌を表示・6枚折り返し）
+  body.appendChild(renderDiscardRiver(player, { side }));
+
+  box.appendChild(body);
   return box;
 }
 
@@ -1175,7 +1309,10 @@ function renderSelfSeat(
   uiState: TableUiState,
 ): HTMLElement {
   const box = document.createElement('div');
-  box.className = `seat-box seat-self${player.isCurrentTurn ? ' is-turn' : ''}`;
+  box.className = `seat-box seat-self seat-orient-self${
+    player.isCurrentTurn ? ' is-turn' : ''
+  }`;
+  box.dataset.seat = 'self';
 
   box.appendChild(renderSeatHeader(player, true, view.isFuriten));
 
@@ -1283,20 +1420,15 @@ function renderSelfSeat(
 
   controls.appendChild(handArea);
 
-  const meldsEl = renderMeldsAndKita(player);
+  const meldsEl = renderMeldsAndKita(player, 'self');
   if (meldsEl) {
     controls.appendChild(meldsEl);
   }
 
-  const riverRow = document.createElement('div');
-  riverRow.className = 'self-river-row';
-  const riverLabel = document.createElement('span');
-  riverLabel.className = 'hub-sub';
-  riverLabel.textContent = '捨て牌';
-  riverRow.append(riverLabel, renderDiscardRiver(player));
-  controls.appendChild(riverRow);
-
   box.appendChild(controls);
+
+  // 自分の河は手牌より中央側（卓の内側）に置き、実物と同じ並びにする
+  box.appendChild(renderDiscardRiver(player, { side: 'self' }));
   return box;
 }
 
@@ -1446,12 +1578,12 @@ function renderSidePanel(view: StateView, _handlers: TableHandlers): HTMLElement
   );
   panel.appendChild(scoreBox);
 
-  // 他家の捨て牌（直近のものから）
+  // 全員の河（卓の表示を補う一覧。直近の捨て牌を強調）
   const rivers = document.createElement('div');
   rivers.className = 'side-block side-rivers';
   const riversTitle = document.createElement('div');
   riversTitle.className = 'side-block-title';
-  riversTitle.textContent = '捨て牌';
+  riversTitle.textContent = '河（捨て牌）';
   rivers.appendChild(riversTitle);
 
   for (const p of view.players) {
@@ -1460,13 +1592,12 @@ function renderSidePanel(view: StateView, _handlers: TableHandlers): HTMLElement
 
     const name = document.createElement('span');
     name.className = 'side-river-name';
-    name.textContent =
-      p.playerId === view.viewerPlayerId ? `${p.name}（あなた）` : p.name;
+    const stateLabel = p.isRiichi ? 'リーチ' : '';
+    name.textContent = `${p.playerId === view.viewerPlayerId ? `${p.name}（あなた）` : p.name}${
+      stateLabel ? ` ・${stateLabel}` : ''
+    }`;
 
-    const river = renderDiscardRiver(p, { limit: 9, latestOnly: true });
-    river.classList.add('discard-river-compact');
-
-    row.append(name, river);
+    row.append(name, renderDiscardRiver(p, { side: 'self', compact: true }));
     rivers.appendChild(row);
   }
   panel.appendChild(rivers);
