@@ -129,6 +129,26 @@ class MahjongApp {
     this.createRoom(playerName, ruleConfig, cpuCount, true);
   }
 
+  /** ロビーに CPU を後から追加する（ホストの HostSession のみ） */
+  private addCpuToLobby(): void {
+    if (this.activeSession?.role !== 'host') {
+      this.errorBanner = 'CPU を追加できるのは部屋のホストだけです。';
+      this.render();
+      return;
+    }
+    if (!this.activeSession.session.addCpu()) {
+      this.errorBanner = 'CPU を追加できませんでした（席が埋まっているか対局中です）。';
+    }
+    this.render();
+  }
+
+  /** ロビーから CPU を減らす */
+  private removeCpuFromLobby(): void {
+    if (this.activeSession?.role !== 'host') return;
+    this.activeSession.session.removeCpu();
+    this.render();
+  }
+
   private joinRoom(roomCode: string, playerName: string): void {
     const normalized = normalizeRoomCode(roomCode);
     if (normalized.length === 0) {
@@ -407,6 +427,8 @@ class MahjongApp {
       onStartLocalGame: (name: string, ruleConfig: RuleConfig, cpuCount: number) =>
         this.startLocalGame(name, ruleConfig, cpuCount),
       onLeaveLobby: () => this.returnToLobby(),
+      onAddCpu: () => this.addCpuToLobby(),
+      onRemoveCpu: () => this.removeCpuFromLobby(),
     };
 
     if (!view) {

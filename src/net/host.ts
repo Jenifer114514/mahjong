@@ -3,6 +3,7 @@ import {
   CPU_PLAYER_ID_PREFIX,
   cpuDisplayName,
   decideCpuAction,
+  isCpuPlayerId,
   toEngineAction,
   type CpuAction,
 } from '../cpu/player';
@@ -52,7 +53,8 @@ export class HostSession {
   private idRetryCount = 0;
   private responseTimerId: ReturnType<typeof setTimeout> | null = null;
   private readonly offline: boolean;
-  private readonly cpuCount: number;
+  /** 設定された CPU 数（ロビーで後から増やせるため可変） */
+  private cpuCount: number;
   private readonly cpuDelayMs: number;
   private readonly cpuScheduler: (fn: () => void, delayMs: number) => void;
   private cpuToken = 0;
@@ -124,6 +126,53 @@ export class HostSession {
     }
   }
 
+  /**
+   * ロビーに CPU を 1 体追加する（ホストのみ・開局後は不可）。
+   * 席が埋まった時点で通常どおり自動開局する。
+   */
+  addCpu(): boolean {
+    if (this.destroyed || this.state.phase !== 'lobby') return false;
+    const rules = deriveRules(this.state.ruleConfig);
+    if (this.state.players.length >= rules.playerCount) return false;
+
+    // まだ使われていない CPU 番号を探す
+    let index = 0;
+    while (
+      this.state.players.some((p) => p.playerId === cpuPlayerId(index))
+    ) {
+      index++;
+    }
+    const result = applyAction(this.state, {
+      type: 'JOIN_PLAYER',
+      playerId: cpuPlayerId(index),
+      name: cpuName(index),
+    });
+    if (result.error) return false;
+
+    this.cpuCount = Math.max(this.cpuCount, index + 1);
+    this.commitState(this.maybeAutoStart(result.state));
+    return true;
+  }
+
+  /** ロビーから CPU を 1 体減らす（最後に追加された CPU を抜く） */
+  removeCpu(): boolean {
+    if (this.destroyed || this.state.phase !== 'lobby') return false;
+    const cpuPlayers = this.state.players.filter((p) => isCpuPlayerId(p.playerId));
+    if (cpuPlayers.length === 0) return false;
+    // CPU 番号が大きいものから抜く
+    const target = [...cpuPlayers].sort((a, b) =>
+      b.playerId.localeCompare(a.playerId, 'en', { numeric: true }),
+    )[0]!;
+    const result = applyAction(this.state, {
+      type: 'LEAVE_LOBBY',
+      playerId: target.playerId,
+    });
+    if (result.error) return false;
+    this.cpuCount = Math.max(0, this.cpuCount - 1);
+    this.commitState(result.state);
+    return true;
+  }
+
   /** ロビーで人数が揃っていれば自動開局する */
   private maybeAutoStart(nextState: GameState): GameState {
     const rules = deriveRules(nextState.ruleConfig);
@@ -146,10 +195,8 @@ export class HostSession {
   }
 
   private isCpuPlayer(playerId: string): boolean {
-    for (let i = 0; i < this.cpuCount; i++) {
-      if (cpuPlayerId(i) === playerId) return true;
-    }
-    return false;
+    // ロビーで追加された CPU は番号が飛ぶことがあるため接頭辞で判定する
+    return isCpuPlayerId(playerId);
   }
 
   private openPeerWithCurrentRoomCode(): void {
@@ -601,12 +648,20 @@ export class HostSession {
 
   private missingCpuIds(): string[] {
     const rules = deriveRules(this.state.ruleConfig);
+    const existing = this.state.players.filter((p) =>
+      isCpuPlayerId(p.playerId),
+    ).length;
     const missing: string[] = [];
-    for (let i = 0; i < this.cpuCount; i++) {
-      const cpuId = cpuPlayerId(i);
-      if (!this.state.players.some((p) => p.playerId === cpuId)) {
-        missing.push(cpuId);
+    for (let i = 0; i < this.cpuCount - existing; i++) {
+      // 追加予定の CPU 番号は、空いている番号を順に使う
+      let index = 0;
+      while (
+        this.state.players.some((p) => p.playerId === cpuPlayerId(index)) ||
+        missing.includes(cpuPlayerId(index))
+      ) {
+        index++;
       }
+      missing.push(cpuPlayerId(index));
     }
     if (this.state.players.length + missing.length > rules.playerCount) {
       return missing.slice(0, Math.max(0, rules.playerCount - this.state.players.length));

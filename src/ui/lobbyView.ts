@@ -9,6 +9,10 @@ export interface LobbyHandlers {
   onStartLocalGame: (playerName: string, ruleConfig: RuleConfig, cpuCount: number) => void;
   onJoinRoom: (roomCode: string, playerName: string) => void;
   onLeaveLobby: () => void;
+  /** ロビーに CPU を 1 体追加する（ホストのみ） */
+  onAddCpu?: () => void;
+  /** ロビーから CPU を 1 体減らす（ホストのみ） */
+  onRemoveCpu?: () => void;
 }
 
 export interface LobbyFormState {
@@ -144,7 +148,7 @@ export function renderLobbyEntry(
   const cpuField = document.createElement('div');
   cpuField.className = 'field';
   const cpuLabel = document.createElement('label');
-  cpuLabel.textContent = 'CPU の人数（ひとりでも対局できます）';
+  cpuLabel.textContent = 'CPU の人数（ひとりでも対局できます・あとからロビーで増減可）';
   const cpuSeg = document.createElement('div');
   cpuSeg.className = 'segmented segmented-4';
   cpuField.append(cpuLabel, cpuSeg);
@@ -532,6 +536,41 @@ export function renderWaitingRoom(
       ? `参加人数（${view.players.length} / ${rules.playerCount}人・うち CPU ${cpuPlayers.length}体）が揃うと自動的に対局が始まります。`
       : `参加人数（${view.players.length} / ${rules.playerCount}人）が揃うと自動的に対局が始まります。`;
   card.appendChild(info);
+
+  // ホストはロビーにいる間、CPU を後から足し引きできる
+  if (isHost && (handlers.onAddCpu || handlers.onRemoveCpu)) {
+    const cpuControls = document.createElement('div');
+    cpuControls.className = 'lobby-cpu-controls';
+
+    const cpuCaption = document.createElement('div');
+    cpuCaption.className = 'hub-sub';
+    const remains = Math.max(0, rules.playerCount - view.players.length);
+    cpuCaption.textContent =
+      remains > 0
+        ? `CPU を追加して人数を埋められます（あと ${remains} 席）`
+        : '席がすべて埋まりました';
+
+    const btnRow = document.createElement('div');
+    btnRow.className = 'lobby-cpu-buttons';
+
+    const addCpuBtn = document.createElement('button');
+    addCpuBtn.type = 'button';
+    addCpuBtn.className = 'btn btn-secondary';
+    addCpuBtn.textContent = '＋ CPU を追加';
+    addCpuBtn.disabled = remains <= 0;
+    addCpuBtn.addEventListener('click', () => handlers.onAddCpu?.());
+
+    const removeCpuBtn = document.createElement('button');
+    removeCpuBtn.type = 'button';
+    removeCpuBtn.className = 'btn btn-secondary';
+    removeCpuBtn.textContent = '− CPU を減らす';
+    removeCpuBtn.disabled = cpuPlayers.length === 0;
+    removeCpuBtn.addEventListener('click', () => handlers.onRemoveCpu?.());
+
+    btnRow.append(addCpuBtn, removeCpuBtn);
+    cpuControls.append(cpuCaption, btnRow);
+    card.appendChild(cpuControls);
+  }
 
   const leaveBtn = document.createElement('button');
   leaveBtn.type = 'button';

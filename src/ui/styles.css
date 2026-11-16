@@ -1952,3 +1952,32 @@ input {
     height: 16px;
   }
 }
+
+/* ---------- ロビーの CPU 後入れ機能 ---------- */
+.lobby-cpu-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 4px 0 14px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(240, 201, 92, 0.06);
+  border: 1px dashed rgba(240, 201, 92, 0.35);
+}
+
+.lobby-cpu-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.lobby-cpu-buttons .btn {
+  flex: 1 1 140px;
+  font-size: 0.86rem;
+  padding: 8px 10px;
+}
+
+.lobby-cpu-buttons .btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
