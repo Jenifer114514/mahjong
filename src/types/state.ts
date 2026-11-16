@@ -8,9 +8,17 @@ export type GamePhase =
   | 'round_end'          // 流局または和了表示・次局待ち
   | 'finished';          // 全規定局終了・結果表示
 
+export type AbortiveDrawReason =
+  | 'kyuushu_kyuuhai'
+  | 'suufon_renda'
+  | 'suucha_riichi'
+  | 'suukanzu'
+  | 'sancha_hou';
+
 export interface DiscardEntry {
   tile: Tile;
   isTsumogiri: boolean;
+  isRiichiDeclaration?: boolean;
 }
 
 export type MeldType = 'pon' | 'chi' | 'daiminkan' | 'kakan' | 'ankan';
@@ -61,7 +69,14 @@ export type CallResponseChoice =
   | { type: 'daiminkan' }
   | { type: 'chi'; tileIds: [string, string] };
 
+export interface PendingRiichiDeclaration {
+  playerId: string;
+  isDoubleRiichi: boolean;
+}
+
 export interface PendingResponseState {
+  /** 応答待ちの契機（省略時は通常打牌 'discard'） */
+  kind?: 'discard' | 'kakan' | 'ankan';
   discarderSeatIndex: number;
   discardedTile: Tile;
   /** 応答待ち開始時点の turnCount */
@@ -72,6 +87,12 @@ export interface PendingResponseState {
   optionsByPlayerId: Record<string, CallOptions>;
   /** 受信済みの応答 */
   responses: Record<string, CallResponseChoice>;
+  /** この打牌がリーチ宣言牌である場合の保留情報 */
+  riichiDeclaration?: PendingRiichiDeclaration | null;
+  /** 加槓の槍槓応答待ち時の保留情報 */
+  kakanTarget?: { playerId: string; addedTile: Tile } | null;
+  /** 暗槓の国士無双槍槓応答待ち時の保留情報 */
+  ankanTarget?: { playerId: string; kind: TileKind } | null;
 }
 
 export interface RoundRonWinner {
@@ -79,6 +100,36 @@ export interface RoundRonWinner {
   seatIndex: number;
   fromSeatIndex: number;
   winningTile: Tile;
+}
+
+export interface YakuEntry {
+  id: string;
+  name: string;
+  han: number;
+  isYakuman?: boolean;
+  yakumanMultiplier?: number;
+}
+
+export interface RoundAgariWinner {
+  winType: 'ron' | 'tsumo';
+  playerId: string;
+  seatIndex: number;
+  fromSeatIndex: number | null;
+  winningTile: Tile;
+  hand: Tile[];
+  melds: Meld[];
+  kitaTiles: Tile[];
+  yaku: YakuEntry[];
+  doraCount: number;
+  uraDoraCount: number;
+  kitaCount: number;
+  han: number;
+  fu: number;
+  isYakuman: boolean;
+  scoreLabel: string;
+  pointsAwarded: number;
+  /** playerId -> この和了による点棒増減（供託受取分は別で roundScoreDeltas に合算） */
+  scoreDeltas: Record<string, number>;
 }
 
 export interface PlayerState {
@@ -89,6 +140,19 @@ export interface PlayerState {
   hand: Tile[];           // 門前手牌（理牌済み）
   drawnTile: Tile | null; // ツモ牌（副露直後の打牌前は null）
   discards: DiscardEntry[];
+  /** 鳴かれた牌も含むこの局の打牌履歴（捨て牌フリテン判定用） */
+  discardedKinds: TileKind[];
+  /** ロン見逃し後の同巡フリテン状態（本人の次回打牌で解除） */
+  sameTurnFuriten: boolean;
+  /** リーチ後にロンを見逃した場合の永久ロンフリテン状態 */
+  isRiichiFuriten: boolean;
+  isRiichi: boolean;
+  isDoubleRiichi: boolean;
+  ippatsuEligible: boolean;
+  /** リーチ宣言牌を他家に鳴かれたため、次打牌を横向き宣言牌とするフラグ */
+  pendingRiichiSideways: boolean;
+  /** 現在のツモ牌が嶺上牌（カン・抜北の補充ツモ）によるものか */
+  isRinshanDraw: boolean;
   melds: Meld[];
   kitaTiles: Tile[];      // 3人麻雀の抜き北
   connected: boolean;
@@ -105,9 +169,24 @@ export interface RoundState {
   deadWall: DeadWallState;    // 構造化された王牌（14枚）
   turnCount: number;
   kanCount: number;           // この局で行われた合計カン回数（上限4）
+  /** 鳴き・カンがまだ一度も発生していない第1巡状態（北抜きでは崩れない） */
+  firstTurnUninterrupted: boolean;
   kuikaeForbiddenKinds: TileKind[]; // ポン・チー直後の1打のみ禁止される牌種
   pendingResponse: PendingResponseState | null;
   ronWinners: RoundRonWinner[];
+  agariResults: RoundAgariWinner[];
+  /** リーチ者の和了時に公開される裏ドラ表示牌 */
+  uraDoraIndicators: Tile[];
+  /** 途中流局の種別（通常進行・和了・荒牌平局では null） */
+  abortiveDrawReason: AbortiveDrawReason | null;
+  /** 九種九牌などを宣言したプレイヤーID */
+  abortiveDrawPlayerId: string | null;
+  /** 途中流局などで開示された手牌（例: 九種九牌宣言者の手牌） */
+  revealedHands: Record<string, Tile[]>;
+  kyotakuWinnerPlayerId: string | null;
+  kyotakuPointsAwarded: number;
+  roundScoreDeltas: Record<string, number>;
+  isTobiEnded: boolean;
 }
 
 export interface GameState {
@@ -116,5 +195,7 @@ export interface GameState {
   ruleConfig: RuleConfig;
   phase: GamePhase;
   players: PlayerState[];
+  /** 場に出ている供託リーチ棒の本数（1本 = 1000点） */
+  kyotakuCount: number;
   round: RoundState | null;
 }

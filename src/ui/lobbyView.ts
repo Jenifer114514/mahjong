@@ -12,7 +12,61 @@ export interface LobbyFormState {
   playerName: string;
   playerCount: PlayerCount;
   gameLength: GameLength;
+  tobi: boolean;
+  tsumoLoss: boolean;
+  allowKuitan: boolean;
+  allowAtozuke: boolean;
   joinCode: string;
+}
+
+function createBooleanToggleField(params: {
+  label: string;
+  value: boolean;
+  trueLabel: string;
+  trueSub: string;
+  falseLabel: string;
+  falseSub: string;
+  onChange: (next: boolean) => void;
+}): HTMLElement {
+  const field = document.createElement('div');
+  field.className = 'field rule-toggle-field';
+
+  const lbl = document.createElement('label');
+  lbl.textContent = params.label;
+
+  const seg = document.createElement('div');
+  seg.className = 'segmented';
+
+  const renderBtns = () => {
+    seg.innerHTML = '';
+    const options = [
+      { val: true, title: params.trueLabel, sub: params.trueSub },
+      { val: false, title: params.falseLabel, sub: params.falseSub },
+    ];
+    for (const opt of options) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = `seg-btn seg-btn-sm${params.value === opt.val ? ' is-active' : ''}`;
+
+      const titleSpan = document.createElement('span');
+      titleSpan.textContent = opt.title;
+      const subSpan = document.createElement('span');
+      subSpan.className = 'seg-sub';
+      subSpan.textContent = opt.sub;
+
+      btn.append(titleSpan, subSpan);
+      btn.addEventListener('click', () => {
+        params.value = opt.val;
+        params.onChange(opt.val);
+        renderBtns();
+      });
+      seg.appendChild(btn);
+    }
+  };
+
+  renderBtns();
+  field.append(lbl, seg);
+  return field;
 }
 
 export function renderLobbyEntry(
@@ -62,7 +116,6 @@ export function renderLobbyEntry(
   createTitle.textContent = '部屋を作る（ホスト）';
   createCard.appendChild(createTitle);
 
-  // Player count selector
   const countField = document.createElement('div');
   countField.className = 'field';
   const countLabel = document.createElement('label');
@@ -75,13 +128,77 @@ export function renderLobbyEntry(
     { value: 3, title: '3人麻雀', sub: '108枚(2〜8萬抜き) / 35,000点' },
   ];
 
-  // Length selector references updated dynamically
   const lengthField = document.createElement('div');
   lengthField.className = 'field';
   const lengthLabel = document.createElement('label');
   lengthLabel.textContent = '長さ';
   const lengthSeg = document.createElement('div');
   lengthSeg.className = 'segmented';
+
+  const localRuleWrap = document.createElement('div');
+  localRuleWrap.className = 'rule-toggle-grid';
+
+  const renderLocalRuleToggles = () => {
+    localRuleWrap.innerHTML = '';
+
+    localRuleWrap.appendChild(
+      createBooleanToggleField({
+        label: 'トビ終了（0点未満で終局）',
+        value: formState.tobi,
+        trueLabel: 'あり',
+        trueSub: '標準（0点は続行）',
+        falseLabel: 'なし',
+        falseSub: '飛び無し',
+        onChange: (v) => {
+          formState.tobi = v;
+        },
+      }),
+    );
+
+    localRuleWrap.appendChild(
+      createBooleanToggleField({
+        label: '喰いタン（鳴いた断幺九）',
+        value: formState.allowKuitan,
+        trueLabel: 'あり',
+        trueSub: '鳴きタンヤオ有効',
+        falseLabel: 'なし',
+        falseSub: '門前のみ',
+        onChange: (v) => {
+          formState.allowKuitan = v;
+        },
+      }),
+    );
+
+    localRuleWrap.appendChild(
+      createBooleanToggleField({
+        label: '後付け（片上がり・役後確定）',
+        value: formState.allowAtozuke,
+        trueLabel: 'あり',
+        trueSub: '全待ち役不要',
+        falseLabel: 'なし',
+        falseSub: '先付けのみ',
+        onChange: (v) => {
+          formState.allowAtozuke = v;
+        },
+      }),
+    );
+
+    if (formState.playerCount === 3) {
+      localRuleWrap.appendChild(
+        createBooleanToggleField({
+          label: 'ツモ損（3人麻雀専用）',
+          value: formState.tsumoLoss,
+          trueLabel: 'あり',
+          trueSub: '4麻と同額支払い',
+          falseLabel: 'なし',
+          falseSub: '北の分を2人で折半',
+          onChange: (v) => {
+            formState.tsumoLoss = v;
+          },
+        }),
+      );
+    }
+  };
 
   const renderRuleButtons = () => {
     countSeg.innerHTML = '';
@@ -93,6 +210,7 @@ export function renderLobbyEntry(
       btn.addEventListener('click', () => {
         formState.playerCount = opt.value;
         renderRuleButtons();
+        renderLocalRuleToggles();
       });
       countSeg.appendChild(btn);
     }
@@ -126,6 +244,7 @@ export function renderLobbyEntry(
   };
 
   renderRuleButtons();
+  renderLocalRuleToggles();
   countField.append(countLabel, countSeg);
   lengthField.append(lengthLabel, lengthSeg);
 
@@ -139,10 +258,14 @@ export function renderLobbyEntry(
     handlers.onCreateRoom(formState.playerName, {
       playerCount: formState.playerCount,
       gameLength: formState.gameLength,
+      tobi: formState.tobi,
+      tsumoLoss: formState.playerCount === 3 ? formState.tsumoLoss : false,
+      allowKuitan: formState.allowKuitan,
+      allowAtozuke: formState.allowAtozuke,
     });
   });
 
-  createCard.append(countField, lengthField, createBtn);
+  createCard.append(countField, lengthField, localRuleWrap, createBtn);
 
   // Join room card
   const joinCard = document.createElement('div');
@@ -261,7 +384,15 @@ export function renderWaitingRoom(
   const ruleSummary = document.createElement('div');
   ruleSummary.className = 'hub-sub';
   const lengthLabel = view.ruleConfig.gameLength === 'tonpuu' ? '東風戦' : '半荘戦';
-  ruleSummary.textContent = `ルール: ${rules.playerCount}人麻雀 / ${lengthLabel}（全${rules.totalRounds}局・${rules.totalTiles}枚・初期持ち点 ${rules.initialPoints.toLocaleString()}点・赤ドラなし）`;
+  const localDetails = [
+    `トビ:${rules.tobi ? 'あり' : 'なし'}`,
+    `喰いタン:${rules.allowKuitan ? 'あり' : 'なし'}`,
+    `後付け:${rules.allowAtozuke ? 'あり' : 'なし'}`,
+    ...(rules.playerCount === 3
+      ? [`ツモ損:${rules.tsumoLoss ? 'あり' : 'なし'}`]
+      : []),
+  ].join(' / ');
+  ruleSummary.textContent = `ルール: ${rules.playerCount}人麻雀 / ${lengthLabel}（全${rules.totalRounds}局・${rules.totalTiles}枚・初期持ち点 ${rules.initialPoints.toLocaleString()}点・赤ドラなし・${localDetails}）`;
   card.appendChild(ruleSummary);
 
   // Slots

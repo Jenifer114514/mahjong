@@ -24,6 +24,9 @@ class MahjongApp {
   private errorBanner: string | null = null;
   private busy = false;
   private actionInFlight = false;
+  private riichiSelectingMode = false;
+  private autoTsumogiriEnabled = true;
+  private autoTsumogiriTimerId: ReturnType<typeof setTimeout> | null = null;
   private countdownDeadline: number | null = null;
   private countdownTimerId: ReturnType<typeof setInterval> | null = null;
 
@@ -38,6 +41,10 @@ class MahjongApp {
       playerName: '',
       playerCount: 4,
       gameLength: 'tonpuu',
+      tobi: true,
+      tsumoLoss: false,
+      allowKuitan: true,
+      allowAtozuke: true,
       joinCode: normalizeRoomCode(roomFromUrl),
     };
 
@@ -138,14 +145,61 @@ class MahjongApp {
   }
 
   private applyStateView(view: StateView): void {
+    this.stopAutoTsumogiriTimer();
+    this.riichiSelectingMode = false;
     this.currentView = view;
-    if (view.phase === 'awaiting_responses' && view.responseRemainingMs !== null) {
+    if (
+      view.phase === 'awaiting_responses' &&
+      view.myCallOptions !== null &&
+      view.responseRemainingMs !== null
+    ) {
       this.countdownDeadline = Date.now() + view.responseRemainingMs;
       this.startCountdownTicker();
     } else {
       this.stopCountdownTicker();
     }
+    this.scheduleAutoTsumogiriIfNeeded(view);
     this.render();
+  }
+
+  private scheduleAutoTsumogiriIfNeeded(view: StateView): void {
+    if (!this.autoTsumogiriEnabled || !this.activeSession || this.actionInFlight) {
+      return;
+    }
+    if (view.phase !== 'playing') return;
+    const selfPlayer = view.players.find(
+      (p) => p.seatIndex === view.viewerSeatIndex,
+    );
+    if (!selfPlayer?.isCurrentTurn || !selfPlayer.isRiichi) return;
+    if (!view.myDrawnTile) return;
+    const actions = view.mySelfActions;
+    if (
+      actions?.canTsumo ||
+      (actions?.canAnkanKinds.length ?? 0) > 0 ||
+      (actions?.canKitaTileIds.length ?? 0) > 0
+    ) {
+      return;
+    }
+    const drawnId = view.myDrawnTile.id;
+    this.autoTsumogiriTimerId = setTimeout(() => {
+      this.autoTsumogiriTimerId = null;
+      if (
+        !this.autoTsumogiriEnabled ||
+        !this.activeSession ||
+        this.actionInFlight ||
+        this.currentView !== view
+      ) {
+        return;
+      }
+      this.dispatchAction((s) => s.discardTile(drawnId));
+    }, 450);
+  }
+
+  private stopAutoTsumogiriTimer(): void {
+    if (this.autoTsumogiriTimerId !== null) {
+      clearTimeout(this.autoTsumogiriTimerId);
+      this.autoTsumogiriTimerId = null;
+    }
   }
 
   private startCountdownTicker(): void {
@@ -172,6 +226,8 @@ class MahjongApp {
   }
 
   private handleGameError(err: GameError): void {
+    this.stopAutoTsumogiriTimer();
+    this.riichiSelectingMode = false;
     this.actionInFlight = false;
     this.errorBanner = err.message;
     this.render();
@@ -182,6 +238,7 @@ class MahjongApp {
     this.currentView = null;
     this.busy = false;
     this.actionInFlight = false;
+    this.riichiSelectingMode = false;
     this.errorBanner = null;
     this.statusText = '未接続';
     this.statusKind = 'normal';
@@ -189,6 +246,7 @@ class MahjongApp {
   }
 
   private cleanupSession(): void {
+    this.stopAutoTsumogiriTimer();
     this.stopCountdownTicker();
     if (!this.activeSession) return;
     this.activeSession.session.destroy();
@@ -214,7 +272,7 @@ class MahjongApp {
 
     const title = document.createElement('div');
     title.className = 'app-title';
-    title.textContent = 'PeerJS 対戦リーチ麻雀（第2段階）';
+    title.textContent = 'PeerJS 対戦リーチ麻雀（第3B段階）';
 
     const rightControls = document.createElement('div');
     rightControls.style.display = 'flex';
@@ -284,26 +342,67 @@ class MahjongApp {
     } else if (view.phase === 'lobby') {
       renderWaitingRoom(content, view, lobbyHandlers);
     } else {
-      renderGameTable(content, view, {
-        onDiscardTile: (tileId) =>
-          this.dispatchAction((s) => s.discardTile(tileId)),
-        onCallResponse: (choice) =>
-          this.dispatchAction((s) => s.respondToCall(choice)),
-        onDeclareAnkan: (kind) =>
-          this.dispatchAction((s) => s.declareAnkan(kind)),
-        onDeclareKakan: (tileId) =>
-          this.dispatchAction((s) => s.declareKakan(tileId)),
-        onDeclareKita: (tileId) =>
-          this.dispatchAction((s) => s.declareKita(tileId)),
-        onAdvanceRound: () => {
-          if (this.activeSession?.role === 'host' && !this.actionInFlight) {
-            this.actionInFlight = true;
-            this.errorBanner = null;
-            this.activeSession.session.advanceRound();
-          }
+      renderGameTable(
+        content,
+        view,
+        {
+          onDiscardTile: (tileId) => {
+            this.stopAutoTsumogiriTimer();
+            this.dispatchAction((s) => s.discardTile(tileId));
+          },
+          onCallResponse: (choice) =>
+            this.dispatchAction((s) => s.respondToCall(choice)),
+          onDeclareTsumo: () => {
+            this.stopAutoTsumogiriTimer();
+            this.dispatchAction((s) => s.declareTsumo());
+          },
+          onDeclareRiichi: (tileId) => {
+            this.stopAutoTsumogiriTimer();
+            this.riichiSelectingMode = false;
+            this.dispatchAction((s) => s.declareRiichi(tileId));
+          },
+          onDeclareAnkan: (kind) => {
+            this.stopAutoTsumogiriTimer();
+            this.dispatchAction((s) => s.declareAnkan(kind));
+          },
+          onDeclareKakan: (tileId) => {
+            this.stopAutoTsumogiriTimer();
+            this.dispatchAction((s) => s.declareKakan(tileId));
+          },
+          onDeclareKita: (tileId) => {
+            this.stopAutoTsumogiriTimer();
+            this.dispatchAction((s) => s.declareKita(tileId));
+          },
+          onDeclareKyuushuKyuuhai: () => {
+            this.stopAutoTsumogiriTimer();
+            this.dispatchAction((s) => s.declareKyuushuKyuuhai());
+          },
+          onToggleRiichiMode: (enabled) => {
+            this.riichiSelectingMode = enabled;
+            this.render();
+          },
+          onToggleAutoTsumogiri: (enabled) => {
+            this.autoTsumogiriEnabled = enabled;
+            this.stopAutoTsumogiriTimer();
+            if (this.currentView && enabled) {
+              this.scheduleAutoTsumogiriIfNeeded(this.currentView);
+            }
+            this.render();
+          },
+          onAdvanceRound: () => {
+            if (this.activeSession?.role === 'host' && !this.actionInFlight) {
+              this.actionInFlight = true;
+              this.errorBanner = null;
+              this.activeSession.session.advanceRound();
+            }
+          },
+          onReturnToLobby: () => this.returnToLobby(),
         },
-        onReturnToLobby: () => this.returnToLobby(),
-      });
+        {
+          riichiSelectingMode: this.riichiSelectingMode,
+          autoTsumogiriEnabled: this.autoTsumogiriEnabled,
+        },
+      );
     }
 
     this.root.appendChild(shell);

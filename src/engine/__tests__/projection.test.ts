@@ -73,12 +73,14 @@ describe('toStateView (情報隠蔽の検証)', () => {
     }
   });
 
-  it('鳴き応答待ち中は該当プレイヤーのみ自分の myCallOptions と残り時間を受け取り、他者には漏れない', () => {
+  it('鳴き応答待ち中は該当プレイヤーのみ自分の myCallOptions と残り時間・awaiting_responsesを受け取り、他者には漏れない', () => {
     const state = createStartedCustomGame(4, {
       hands: {
         0: ['9p', '9p', '9p', '1z', '1z', '1z', '2z', '2z', '2z', '3z', '3z', '3z', '5m'],
         1: ['4m', '6m', '1p', '1p', '1p', '2p', '2p', '2p', '3p', '3p', '3p', '4p', '4p'],
         2: ['5m', '5m', '5s', '5s', '5s', '6s', '6s', '6s', '7s', '7s', '7s', '8s', '8s'],
+        // 鳴き・ロンを持たない明示的な非テンパイ手牌（未指定時の山残りによる偶然テンパイを防止）
+        3: ['4z', '4z', '4z', '5z', '5z', '5z', '6z', '6z', '6z', '7z', '7z', '7z', '1s'],
       },
       dealerDrawnKind: '5m',
     });
@@ -97,15 +99,94 @@ describe('toStateView (情報隠蔽の検証)', () => {
     const v2 = toStateView(awaiting, 'p2', 3000);
     const v3 = toStateView(awaiting, 'p3', 3000);
 
+    // 選択肢のない視点 (p0, p3) には応答待ち・残り時間・手番停止が漏れない
     expect(v0.myCallOptions).toBeNull();
+    expect(v0.phase).toBe('playing');
+    expect(v0.responseRemainingMs).toBeNull();
+    expect(v0.round?.currentTurnIndex).toBe(1);
+    expect(v0.players.map((p) => p.isCurrentTurn)).toEqual([false, true, false, false]);
+
     expect(v3.myCallOptions).toBeNull();
+    expect(v3.phase).toBe('playing');
+    expect(v3.responseRemainingMs).toBeNull();
+    expect(v3.round?.currentTurnIndex).toBe(1);
+    expect(v3.players.map((p) => p.isCurrentTurn)).toEqual([false, true, false, false]);
+
+    // 選択肢のある視点 (p1, p2) にのみ awaiting_responses・選択肢・残り時間が届く
+    expect(v1.phase).toBe('awaiting_responses');
     expect(v1.myCallOptions?.chiOptions).toHaveLength(1);
     expect(v1.myCallOptions?.canPon).toBe(false);
+    expect(v1.responseRemainingMs).toBe(13000);
+
+    expect(v2.phase).toBe('awaiting_responses');
     expect(v2.myCallOptions?.canPon).toBe(true);
     expect(v2.myCallOptions?.chiOptions).toHaveLength(0);
-
-    // カウントダウン計算と他家候補非公開
-    expect(v1.responseRemainingMs).toBe(13000);
+    expect(v2.responseRemainingMs).toBe(13000);
     expect(JSON.stringify(v1)).not.toContain('canPon":true');
+
+    // p1 が先にパスすると、p2 の応答待ち中でも p1 への応答待ち表示は解除される
+    const afterP1Pass = reduce(awaiting, {
+      type: 'CALL_RESPONSE',
+      playerId: 'p1',
+      choice: { type: 'pass' },
+    });
+    expect(afterP1Pass.phase).toBe('awaiting_responses');
+    const v1AfterPass = toStateView(afterP1Pass, 'p1', 4000);
+    expect(v1AfterPass.myCallOptions).toBeNull();
+    expect(v1AfterPass.phase).toBe('playing');
+    expect(v1AfterPass.responseRemainingMs).toBeNull();
+    expect(v1AfterPass.round?.currentTurnIndex).toBe(1);
+  });
+
+  it('選択肢のない視点 (p3, p0) の StateView 判定項目は応答待ちの有無で変わらない', () => {
+    const noCallState = createStartedCustomGame(4, {
+      hands: {
+        0: ['9p', '9p', '9p', '1z', '1z', '1z', '2z', '2z', '2z', '3z', '3z', '3z', '5m'],
+        1: ['1p', '1p', '1p', '2p', '2p', '2p', '3p', '3p', '3p', '4p', '4p', '4p', '8s'],
+        2: ['5s', '5s', '5s', '6s', '6s', '6s', '7s', '7s', '7s', '8s', '8s', '9s', '9s'],
+        3: ['4z', '4z', '4z', '5z', '5z', '5z', '6z', '6z', '6z', '7z', '7z', '7z', '1s'],
+      },
+      dealerDrawnKind: '5m',
+    });
+    const afterNoCall = reduce(noCallState, {
+      type: 'DISCARD_TILE',
+      playerId: 'p0',
+      tileId: noCallState.players[0]!.drawnTile!.id,
+      now: 1000,
+    });
+    expect(afterNoCall.phase).toBe('playing');
+
+    const withCallState = createStartedCustomGame(4, {
+      hands: {
+        0: ['9p', '9p', '9p', '1z', '1z', '1z', '2z', '2z', '2z', '3z', '3z', '3z', '5m'],
+        1: ['1p', '1p', '1p', '2p', '2p', '2p', '3p', '3p', '3p', '4p', '4p', '4p', '8s'],
+        2: ['5m', '5m', '5s', '5s', '5s', '6s', '6s', '6s', '7s', '7s', '7s', '8s', '9s'],
+        3: ['4z', '4z', '4z', '5z', '5z', '5z', '6z', '6z', '6z', '7z', '7z', '7z', '1s'],
+      },
+      dealerDrawnKind: '5m',
+    });
+    const afterWithCall = reduce(withCallState, {
+      type: 'DISCARD_TILE',
+      playerId: 'p0',
+      tileId: withCallState.players[0]!.drawnTile!.id,
+      now: 1000,
+    });
+    expect(afterWithCall.phase).toBe('awaiting_responses');
+
+    for (const viewerId of ['p0', 'p3']) {
+      const viewNoCall = toStateView(afterNoCall, viewerId, 3000);
+      const viewWithCall = toStateView(afterWithCall, viewerId, 3000);
+
+      expect(viewWithCall.phase).toBe(viewNoCall.phase);
+      expect(viewWithCall.responseRemainingMs).toBe(viewNoCall.responseRemainingMs);
+      expect(viewWithCall.myCallOptions).toBe(viewNoCall.myCallOptions);
+      expect(viewWithCall.mySelfActions).toBe(viewNoCall.mySelfActions);
+      expect(viewWithCall.round?.currentTurnIndex).toBe(
+        viewNoCall.round?.currentTurnIndex,
+      );
+      expect(viewWithCall.players.map((p) => p.isCurrentTurn)).toEqual(
+        viewNoCall.players.map((p) => p.isCurrentTurn),
+      );
+    }
   });
 });

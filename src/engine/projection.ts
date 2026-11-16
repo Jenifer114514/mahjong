@@ -4,8 +4,8 @@ import type {
   SelfTurnActionsView,
   StateView,
 } from '../types/message';
-import type { CallOptions, GameState } from '../types/state';
-import { getSelfTurnActions } from './calls';
+import type { CallOptions, GameState, RoundAgariWinner } from '../types/state';
+import { getSelfTurnActions, isPlayerFuriten } from './calls';
 import { deriveRules, getSeatWind } from './rules';
 
 function cloneCallOptions(opts: CallOptions): CallOptions {
@@ -21,6 +21,35 @@ function cloneCallOptions(opts: CallOptions): CallOptions {
   };
 }
 
+function cloneAgariWinner(w: RoundAgariWinner): RoundAgariWinner {
+  return {
+    winType: w.winType,
+    playerId: w.playerId,
+    seatIndex: w.seatIndex,
+    fromSeatIndex: w.fromSeatIndex,
+    winningTile: { ...w.winningTile },
+    hand: w.hand.map((t) => ({ ...t })),
+    melds: w.melds.map((m) => ({
+      type: m.type,
+      tiles: m.tiles.map((t) => ({ ...t })),
+      calledTile: m.calledTile ? { ...m.calledTile } : null,
+      fromSeatIndex: m.fromSeatIndex,
+      addedTile: m.addedTile ? { ...m.addedTile } : null,
+    })),
+    kitaTiles: w.kitaTiles.map((t) => ({ ...t })),
+    yaku: w.yaku.map((y) => ({ ...y })),
+    doraCount: w.doraCount,
+    uraDoraCount: w.uraDoraCount,
+    kitaCount: w.kitaCount,
+    han: w.han,
+    fu: w.fu,
+    isYakuman: w.isYakuman,
+    scoreLabel: w.scoreLabel,
+    pointsAwarded: w.pointsAwarded,
+    scoreDeltas: { ...w.scoreDeltas },
+  };
+}
+
 export function toStateView(
   state: GameState,
   viewerPlayerId: string,
@@ -30,6 +59,42 @@ export function toStateView(
   const viewer = state.players.find((p) => p.playerId === viewerPlayerId);
   if (!viewer) {
     throw new Error(`Viewer player not found: ${viewerPlayerId}`);
+  }
+
+  let myCallOptions: CallOptions | null = null;
+  let responseRemainingMs: number | null = null;
+
+  if (
+    state.phase === 'awaiting_responses' &&
+    state.round?.pendingResponse
+  ) {
+    const pending = state.round.pendingResponse;
+    const rawOpts = pending.optionsByPlayerId[viewer.playerId];
+    if (rawOpts && !(viewer.playerId in pending.responses)) {
+      myCallOptions = cloneCallOptions(rawOpts);
+      if (rules.responseTimeoutMs > 0) {
+        responseRemainingMs = Math.max(
+          0,
+          pending.openedAt + rules.responseTimeoutMs - now,
+        );
+      }
+    }
+  }
+
+  // 選択肢のない視点には応答待ちの有無を漏らさない（phase・手番・残り時間を通常進行に見せる）
+  const isMaskedAwaiting =
+    state.phase === 'awaiting_responses' && myCallOptions === null;
+  const viewPhase = isMaskedAwaiting ? 'playing' : state.phase;
+
+  let maskedTurnIndex = state.round?.currentTurnIndex ?? 0;
+  if (isMaskedAwaiting && state.round?.pendingResponse) {
+    const pending = state.round.pendingResponse;
+    maskedTurnIndex =
+      pending.kind === 'kakan' || pending.kind === 'ankan'
+        ? pending.discarderSeatIndex
+        : state.round.wall.length > 0
+          ? (pending.discarderSeatIndex + 1) % rules.playerCount
+          : pending.discarderSeatIndex;
   }
 
   const orderedPlayers = [...state.players].sort(
@@ -49,6 +114,7 @@ export function toStateView(
     discards: p.discards.map((d) => ({
       tile: { ...d.tile },
       isTsumogiri: d.isTsumogiri,
+      ...(d.isRiichiDeclaration ? { isRiichiDeclaration: true } : {}),
     })),
     melds: p.melds.map((m) => ({
       type: m.type,
@@ -60,9 +126,11 @@ export function toStateView(
     kitaTiles: p.kitaTiles.map((t) => ({ ...t })),
     isDealer: state.round ? p.seatIndex === state.round.dealerIndex : false,
     isCurrentTurn:
-      state.phase === 'playing' &&
+      viewPhase === 'playing' &&
       state.round !== null &&
-      p.seatIndex === state.round.currentTurnIndex,
+      p.seatIndex === maskedTurnIndex,
+    isRiichi: p.isRiichi,
+    isDoubleRiichi: p.isDoubleRiichi,
     connected: p.connected,
   }));
 
@@ -73,38 +141,38 @@ export function toStateView(
         roundWind: state.round.roundWind,
         kyokuNumber: state.round.kyokuNumber,
         dealerIndex: state.round.dealerIndex,
-        currentTurnIndex: state.round.currentTurnIndex,
+        currentTurnIndex: maskedTurnIndex,
         remainingWallCount: state.round.wall.length,
         doraIndicators: state.round.deadWall.doraIndicators
           .slice(0, state.round.deadWall.revealedDoraCount)
           .map((t) => ({ ...t })),
+        uraDoraIndicators:
+          state.phase === 'round_end'
+            ? state.round.uraDoraIndicators.map((t) => ({ ...t }))
+            : [],
         kanCount: state.round.kanCount,
         ronWinners: state.round.ronWinners.map((w) => ({
           ...w,
           winningTile: { ...w.winningTile },
         })),
+        agariResults: state.round.agariResults.map(cloneAgariWinner),
+        abortiveDrawReason: state.round.abortiveDrawReason,
+        abortiveDrawPlayerId: state.round.abortiveDrawPlayerId,
+        revealedHands:
+          state.phase === 'round_end'
+            ? Object.fromEntries(
+                Object.entries(state.round.revealedHands).map(([pid, tiles]) => [
+                  pid,
+                  tiles.map((t) => ({ ...t })),
+                ]),
+              )
+            : {},
+        kyotakuWinnerPlayerId: state.round.kyotakuWinnerPlayerId,
+        kyotakuPointsAwarded: state.round.kyotakuPointsAwarded,
+        roundScoreDeltas: { ...state.round.roundScoreDeltas },
+        isTobiEnded: state.round.isTobiEnded,
       }
     : null;
-
-  let myCallOptions: CallOptions | null = null;
-  let responseRemainingMs: number | null = null;
-
-  if (
-    state.phase === 'awaiting_responses' &&
-    state.round?.pendingResponse
-  ) {
-    const pending = state.round.pendingResponse;
-    const rawOpts = pending.optionsByPlayerId[viewer.playerId];
-    if (rawOpts && !(viewer.playerId in pending.responses)) {
-      myCallOptions = cloneCallOptions(rawOpts);
-    }
-    if (rules.responseTimeoutMs > 0) {
-      responseRemainingMs = Math.max(
-        0,
-        pending.openedAt + rules.responseTimeoutMs - now,
-      );
-    }
-  }
 
   const isViewerTurn =
     state.phase === 'playing' &&
@@ -115,9 +183,12 @@ export function toStateView(
   if (isViewerTurn && state.round) {
     const actions = getSelfTurnActions(viewer, state.round, rules);
     if (
+      actions.canTsumo ||
+      actions.canRiichiTileIds.length > 0 ||
       actions.canAnkanKinds.length > 0 ||
       actions.canKakanTileIds.length > 0 ||
-      actions.canKitaTileIds.length > 0
+      actions.canKitaTileIds.length > 0 ||
+      actions.canKyuushuKyuuhai
     ) {
       mySelfActions = actions;
     }
@@ -128,18 +199,25 @@ export function toStateView(
       ? [...state.round.kuikaeForbiddenKinds]
       : [];
 
+  const isFuriten =
+    state.round !== null && state.phase !== 'round_end' && state.phase !== 'finished'
+      ? isPlayerFuriten(viewer, rules)
+      : false;
+
   return {
     roomCode: state.roomCode,
     hostPlayerId: state.hostPlayerId,
     viewerPlayerId: viewer.playerId,
     viewerSeatIndex: viewer.seatIndex,
     ruleConfig: { ...state.ruleConfig },
-    phase: state.phase,
+    phase: viewPhase,
     players,
+    kyotakuCount: state.kyotakuCount,
     myHand: viewer.hand.map((t) => ({ ...t })),
     myDrawnTile: viewer.drawnTile ? { ...viewer.drawnTile } : null,
     myCallOptions,
     mySelfActions,
+    isFuriten,
     kuikaeForbiddenKinds,
     responseRemainingMs,
     round,

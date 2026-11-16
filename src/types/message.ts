@@ -1,10 +1,12 @@
 import type { RuleConfig, Wind } from './rule';
 import type {
+  AbortiveDrawReason,
   CallOptions,
   CallResponseChoice,
   DiscardEntry,
   GamePhase,
   Meld,
+  RoundAgariWinner,
   RoundRonWinner,
 } from './state';
 import type { Tile, TileKind } from './tile';
@@ -46,19 +48,38 @@ export type Action =
       turnCount?: number;
     }
   | {
+      type: 'DECLARE_TSUMO';
+      playerId: string;
+    }
+  | {
+      type: 'DECLARE_RIICHI';
+      playerId: string;
+      tileId: string;
+      /** 応答タイマー基準時刻 (epoch ms、省略時は 0) */
+      now?: number;
+    }
+  | {
       type: 'DECLARE_ANKAN';
       playerId: string;
       kind: TileKind;
+      /** 槍槓応答タイマー基準時刻 (epoch ms、省略時は 0) */
+      now?: number;
     }
   | {
       type: 'DECLARE_KAKAN';
       playerId: string;
       tileId: string;
+      /** 槍槓応答タイマー基準時刻 (epoch ms、省略時は 0) */
+      now?: number;
     }
   | {
       type: 'DECLARE_KITA';
       playerId: string;
       tileId: string;
+    }
+  | {
+      type: 'DECLARE_KYUUSHU_KYUUHAI';
+      playerId: string;
     }
   | {
       type: 'ADVANCE_ROUND';
@@ -85,6 +106,8 @@ export interface PublicPlayerView {
   kitaTiles: Tile[];
   isDealer: boolean;
   isCurrentTurn: boolean;
+  isRiichi: boolean;
+  isDoubleRiichi: boolean;
   connected: boolean;
 }
 
@@ -98,14 +121,27 @@ export interface RoundView {
   remainingWallCount: number; // 残り枚数のみ（牌山の中身は送らない）
   /** めくり済みの表ドラ表示牌のみ */
   doraIndicators: Tile[];
+  /** リーチ者の和了時（round_end）のみ公開される裏ドラ表示牌 */
+  uraDoraIndicators: Tile[];
   kanCount: number;
   ronWinners: RoundRonWinner[];
+  agariResults: RoundAgariWinner[];
+  abortiveDrawReason: AbortiveDrawReason | null;
+  abortiveDrawPlayerId: string | null;
+  revealedHands: Record<string, Tile[]>;
+  kyotakuWinnerPlayerId: string | null;
+  kyotakuPointsAwarded: number;
+  roundScoreDeltas: Record<string, number>;
+  isTobiEnded: boolean;
 }
 
 export interface SelfTurnActionsView {
+  canTsumo: boolean;
+  canRiichiTileIds: string[];
   canAnkanKinds: TileKind[];
   canKakanTileIds: string[];
   canKitaTileIds: string[];
+  canKyuushuKyuuhai: boolean;
 }
 
 export interface StateView {
@@ -116,14 +152,18 @@ export interface StateView {
   ruleConfig: RuleConfig;
   phase: GamePhase;
   players: PublicPlayerView[];
+  /** 場に出ている供託リーチ棒の本数 */
+  kyotakuCount: number;
   /** 受信者本人の手牌のみ */
   myHand: Tile[];
   /** 受信者本人のツモ牌のみ */
   myDrawnTile: Tile | null;
   /** 受信者本人に対する鳴き・ロン選択要求（該当者のみ非 null） */
   myCallOptions: CallOptions | null;
-  /** 受信者本人の手番中に可能な暗槓・加槓・北抜き */
+  /** 受信者本人の手番中に可能なツモ・暗槓・加槓・北抜き */
   mySelfActions: SelfTurnActionsView | null;
+  /** 受信者本人が現在フリテン（捨て牌・同巡）状態か */
+  isFuriten: boolean;
   /** ポン・チー直後に喰い替えで切れない牌種 */
   kuikaeForbiddenKinds: TileKind[];
   /** 応答待ちの残り時間(ms)（クライアントのタイマー表示用） */
@@ -142,6 +182,11 @@ export type ErrorCode =
   | 'TILE_NOT_IN_HAND'
   | 'FORBIDDEN_KUIKAE'
   | 'INVALID_CALL'
+  | 'INVALID_AGARI'
+  | 'INVALID_RIICHI'
+  | 'INVALID_ABORTIVE_DRAW'
+  | 'TSUMOGIRI_ONLY'
+  | 'FURITEN'
   | 'INVALID_DECK'
   | 'KAN_LIMIT_REACHED'
   | 'WALL_EXHAUSTED'
@@ -164,9 +209,12 @@ export type ClientMessage =
       action:
         | { type: 'DISCARD_TILE'; tileId: string }
         | { type: 'CALL_RESPONSE'; choice: CallResponseChoice }
+        | { type: 'DECLARE_TSUMO' }
+        | { type: 'DECLARE_RIICHI'; tileId: string }
         | { type: 'DECLARE_ANKAN'; kind: TileKind }
         | { type: 'DECLARE_KAKAN'; tileId: string }
         | { type: 'DECLARE_KITA'; tileId: string }
+        | { type: 'DECLARE_KYUUSHU_KYUUHAI' }
         | { type: 'ADVANCE_ROUND' };
     };
 

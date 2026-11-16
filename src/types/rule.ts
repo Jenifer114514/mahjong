@@ -13,6 +13,14 @@ export interface KandoraTimingConfig {
   kakan: KandoraRevealTiming;
 }
 
+export interface ScoreLimitBasePoints {
+  mangan: number;
+  haneman: number;
+  baiman: number;
+  sanbaiman: number;
+  yakuman: number;
+}
+
 export interface RuleConfig {
   playerCount: PlayerCount;
   gameLength: GameLength;
@@ -32,6 +40,14 @@ export interface RuleConfig {
   maxKansPerRound?: number;
   /** カンドラ表示牌をめくる時期（既定: 暗槓=即時、大明槓・加槓=打牌後） */
   kandoraTiming?: Partial<KandoraTimingConfig>;
+  /** トビ終了（持ち点0点未満で終局、既定: true） */
+  tobi?: boolean;
+  /** 3人麻雀のツモ損あり/なし（3人のみ有効、既定: false=ツモ損なし） */
+  tsumoLoss?: boolean;
+  /** 喰いタンあり/なし（既定: true） */
+  allowKuitan?: boolean;
+  /** 後付けあり/なし（既定: true） */
+  allowAtozuke?: boolean;
 }
 
 /** 将来のローカルルール変更に備えて差し替え可能な定数群 */
@@ -65,11 +81,31 @@ export const DEAD_WALL_SIZE_BY_PLAYERS: Record<PlayerCount, number> = {
 
 export const DEFAULT_RESPONSE_TIMEOUT_MS = 15000;
 export const DEFAULT_MAX_KANS_PER_ROUND = 4;
+export const RIICHI_STICK_POINTS = 1000;
 
 export const DEFAULT_KANDORA_TIMING: KandoraTimingConfig = {
   ankan: 'immediate',
   daiminkan: 'after_discard',
   kakan: 'after_discard',
+};
+
+export const DEFAULT_TOBI = true;
+export const DEFAULT_TSUMO_LOSS = false;
+export const DEFAULT_ALLOW_KUITAN = true;
+export const DEFAULT_ALLOW_ATOZUKE = true;
+
+/** 部屋設定には出さず差し替え可能な点数・ローカルルール定数 */
+export const DEFAULT_KIRIAGE_MANGAN = false;
+export const DEFAULT_ALLOW_KAZOE_YAKUMAN = true;
+export const DEFAULT_DOUBLE_WIND_PAIR_FU = 4;
+export const DEFAULT_KITA_COUNTS_AS_INDICATOR_DORA = true;
+
+export const SCORE_LIMIT_BASE_POINTS: ScoreLimitBasePoints = {
+  mangan: 2000,
+  haneman: 3000,
+  baiman: 4000,
+  sanbaiman: 6000,
+  yakuman: 8000,
 };
 
 export const DEFAULT_TILE_SET_BY_PLAYERS: Record<PlayerCount, TileSetId> = {
@@ -121,4 +157,14 @@ export interface DerivedRules {
   responseTimeoutMs: number;
   maxKansPerRound: number;
   kandoraTiming: KandoraTimingConfig;
+  tobi: boolean;
+  tsumoLoss: boolean;
+  allowKuitan: boolean;
+  allowAtozuke: boolean;
+  kiriageMangan: boolean;
+  allowKazoeYakuman: boolean;
+  doubleWindPairFu: number;
+  kitaCountsAsIndicatorDora: boolean;
+  riichiStickPoints: number;
+  scoreLimits: ScoreLimitBasePoints;
 }

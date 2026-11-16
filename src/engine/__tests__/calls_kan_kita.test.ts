@@ -631,7 +631,7 @@ describe('第2段階: 三麻の抜北・タイムアウト・海底/河底制限
         0: ['4z', '1m', '1m', '2m', '2m', '3m', '3m', '4m', '4m', '5m', '5m', '6m', '6m'],
       },
     });
-    expect(toStateView(s4, 'p0').mySelfActions).toBeNull();
+    expect(toStateView(s4, 'p0').mySelfActions?.canKitaTileIds ?? []).toEqual([]);
     const kita4Err = applyAction(s4, {
       type: 'DECLARE_KITA',
       playerId: 'p0',

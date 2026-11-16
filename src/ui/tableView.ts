@@ -1,6 +1,11 @@
 import { deriveRules } from '../engine/rules';
 import type { PublicPlayerView, StateView } from '../types/message';
-import type { CallResponseChoice, Meld } from '../types/state';
+import type {
+  AbortiveDrawReason,
+  CallResponseChoice,
+  Meld,
+  RoundAgariWinner,
+} from '../types/state';
 import type { TileKind } from '../types/tile';
 import {
   createTileBackElement,
@@ -13,12 +18,27 @@ import {
 export interface TableHandlers {
   onDiscardTile: (tileId: string) => void;
   onCallResponse: (choice: CallResponseChoice) => void;
+  onDeclareTsumo: () => void;
+  onDeclareRiichi: (tileId: string) => void;
   onDeclareAnkan: (kind: TileKind) => void;
   onDeclareKakan: (tileId: string) => void;
   onDeclareKita: (tileId: string) => void;
+  onDeclareKyuushuKyuuhai: () => void;
+  onToggleRiichiMode?: (enabled: boolean) => void;
+  onToggleAutoTsumogiri?: (enabled: boolean) => void;
   onAdvanceRound: () => void;
   onReturnToLobby: () => void;
 }
+
+export interface TableUiState {
+  riichiSelectingMode: boolean;
+  autoTsumogiriEnabled: boolean;
+}
+
+const DEFAULT_TABLE_UI_STATE: TableUiState = {
+  riichiSelectingMode: false,
+  autoTsumogiriEnabled: true,
+};
 
 const MELD_TYPE_LABELS: Record<Meld['type'], string> = {
   pon: 'ポン',
@@ -28,10 +48,37 @@ const MELD_TYPE_LABELS: Record<Meld['type'], string> = {
   ankan: '暗槓',
 };
 
+const ABORTIVE_DRAW_META: Record<
+  AbortiveDrawReason,
+  { title: string; description: string }
+> = {
+  kyuushu_kyuuhai: {
+    title: '九種九牌',
+    description: '第1ツモ時に么九牌が9種以上あったため途中流局となりました。',
+  },
+  suufon_renda: {
+    title: '四風連打',
+    description: '1巡目に4人全員が同じ風牌を捨てたため途中流局となりました。',
+  },
+  suucha_riichi: {
+    title: '四家立直',
+    description: '4人全員がリーチを宣言したため途中流局となりました。',
+  },
+  suukanzu: {
+    title: '四槓散了',
+    description: '2人以上で合計4回の槓が行われたため途中流局となりました。',
+  },
+  sancha_hou: {
+    title: '三家和',
+    description: '3人同時にロン宣言が発生したため途中流局となりました。',
+  },
+};
+
 export function renderGameTable(
   container: HTMLElement,
   view: StateView,
   handlers: TableHandlers,
+  uiState: TableUiState = DEFAULT_TABLE_UI_STATE,
 ): void {
   container.innerHTML = '';
 
@@ -86,81 +133,335 @@ export function renderGameTable(
   }
 
   if (selfPlayer) {
-    felt.appendChild(renderSelfSeat(view, selfPlayer, handlers));
+    felt.appendChild(renderSelfSeat(view, selfPlayer, handlers, uiState));
   }
 
   container.appendChild(felt);
 
   // 局終了オーバーレイ（和了 / 流局）
   if (view.phase === 'round_end' && view.round) {
-    const overlay = document.createElement('div');
-    overlay.className = 'overlay-panel';
-
-    const heading = document.createElement('h2');
-    heading.style.margin = '0';
-    heading.style.color = 'var(--accent-gold)';
-
-    const roundTitle = formatRoundName(view.round.roundWind, view.round.kyokuNumber);
-    const desc = document.createElement('div');
-    desc.className = 'hub-sub';
-
-    if (view.round.ronWinners.length > 0) {
-      heading.textContent = `${roundTitle} ロン和了`;
-      const winnerList = document.createElement('div');
-      winnerList.className = 'ron-winners-list';
-
-      for (const winner of view.round.ronWinners) {
-        const winnerPlayer = view.players.find(
-          (p) => p.playerId === winner.playerId,
-        );
-        const loserPlayer = view.players.find(
-          (p) => p.seatIndex === winner.fromSeatIndex,
-        );
-        const item = document.createElement('div');
-        item.className = 'ron-winner-item';
-
-        const text = document.createElement('span');
-        text.textContent = `${winnerPlayer?.name ?? winner.playerId}（${loserPlayer?.name ?? ''} からロン）`;
-
-        item.append(text, createTileElement(winner.winningTile, { small: true }));
-        winnerList.appendChild(item);
-      }
-
-      desc.textContent =
-        view.round.roundIndex + 1 >= view.round.totalRounds
-          ? '規定局数がすべて終了しました。'
-          : '点棒計算は第3段階で実装予定です。次局へ進みます。';
-      overlay.append(heading, winnerList, desc);
-    } else {
-      heading.textContent = `${roundTitle} 流局`;
-      desc.textContent =
-        view.round.roundIndex + 1 >= view.round.totalRounds
-          ? '牌山が尽きて流局しました。規定局数がすべて終了しました。'
-          : '牌山が尽きて流局しました。次の局で親が次の席へ移ります。';
-      overlay.append(heading, desc);
-    }
-
-    overlay.appendChild(buildScoreTable(view.players, rules.initialPoints));
-
-    if (isHost) {
-      const nextBtn = document.createElement('button');
-      nextBtn.type = 'button';
-      nextBtn.className = 'btn btn-primary';
-      nextBtn.textContent =
-        view.round.roundIndex + 1 >= view.round.totalRounds
-          ? '結果を見る'
-          : '次の局へ';
-      nextBtn.addEventListener('click', handlers.onAdvanceRound);
-      overlay.appendChild(nextBtn);
-    } else {
-      const waitMsg = document.createElement('div');
-      waitMsg.className = 'hub-sub';
-      waitMsg.textContent = 'ホストが次の局へ進めるのを待っています...';
-      overlay.appendChild(waitMsg);
-    }
-
-    container.appendChild(overlay);
+    renderRoundEndOverlay(container, view, isHost, rules.initialPoints, handlers);
   }
+}
+
+function renderRoundEndOverlay(
+  container: HTMLElement,
+  view: StateView,
+  isHost: boolean,
+  initialPoints: number,
+  handlers: TableHandlers,
+): void {
+  const round = view.round!;
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-panel';
+
+  const heading = document.createElement('h2');
+  heading.style.margin = '0';
+  heading.style.color = 'var(--accent-gold)';
+
+  const roundTitle = formatRoundName(round.roundWind, round.kyokuNumber);
+  const desc = document.createElement('div');
+  desc.className = 'hub-sub';
+
+  const isGameClosing =
+    round.isTobiEnded || round.roundIndex + 1 >= round.totalRounds;
+
+  if (round.agariResults.length > 0) {
+    const first = round.agariResults[0]!;
+    if (first.winType === 'tsumo') {
+      heading.textContent = `${roundTitle} ツモ和了`;
+    } else if (round.agariResults.length >= 2) {
+      heading.textContent = `${roundTitle} ダブロン和了`;
+    } else {
+      heading.textContent = `${roundTitle} ロン和了`;
+    }
+
+    if (round.isTobiEnded) {
+      const tobiTag = document.createElement('span');
+      tobiTag.className = 'tobi-badge';
+      tobiTag.textContent = 'トビ終了';
+      heading.appendChild(tobiTag);
+    }
+
+    const cardsWrap = document.createElement('div');
+    cardsWrap.className = 'agari-cards-list';
+    for (const agari of round.agariResults) {
+      cardsWrap.appendChild(renderAgariWinnerCard(agari, view.players, round.dealerIndex));
+    }
+
+    if (round.uraDoraIndicators.length > 0) {
+      const uraBox = document.createElement('div');
+      uraBox.className = 'ura-dora-box';
+      const uraLabel = document.createElement('span');
+      uraLabel.className = 'hub-sub';
+      uraLabel.textContent = '裏ドラ表示牌:';
+      const uraRow = document.createElement('div');
+      uraRow.className = 'dora-tiles-row';
+      for (const indicator of round.uraDoraIndicators) {
+        uraRow.appendChild(createTileElement(indicator, { small: true }));
+      }
+      uraBox.append(uraLabel, uraRow);
+      cardsWrap.appendChild(uraBox);
+    }
+
+    if (round.kyotakuPointsAwarded > 0 && round.kyotakuWinnerPlayerId) {
+      const kWinner = view.players.find(
+        (p) => p.playerId === round.kyotakuWinnerPlayerId,
+      );
+      const kyotakuNote = document.createElement('div');
+      kyotakuNote.className = 'kyotaku-award-note';
+      kyotakuNote.textContent = `供託リーチ棒受取: ${kWinner?.name ?? round.kyotakuWinnerPlayerId} (+${round.kyotakuPointsAwarded.toLocaleString()}点)`;
+      cardsWrap.appendChild(kyotakuNote);
+    }
+
+    desc.textContent = round.isTobiEnded
+      ? '持ち点が0点未満になったプレイヤーがいるため、トビ終了となります。'
+      : isGameClosing
+        ? '規定局数がすべて終了しました。'
+        : '点棒清算が完了しました。次局へ進みます。';
+    overlay.append(heading, cardsWrap, desc);
+  } else if (round.ronWinners.length > 0) {
+    // テストフック用フォールバック表示
+    heading.textContent = `${roundTitle} ロン和了`;
+    const winnerList = document.createElement('div');
+    winnerList.className = 'ron-winners-list';
+
+    for (const winner of round.ronWinners) {
+      const winnerPlayer = view.players.find(
+        (p) => p.playerId === winner.playerId,
+      );
+      const loserPlayer = view.players.find(
+        (p) => p.seatIndex === winner.fromSeatIndex,
+      );
+      const item = document.createElement('div');
+      item.className = 'ron-winner-item';
+
+      const text = document.createElement('span');
+      text.textContent = `${winnerPlayer?.name ?? winner.playerId}（${loserPlayer?.name ?? ''} からロン）`;
+
+      item.append(text, createTileElement(winner.winningTile, { small: true }));
+      winnerList.appendChild(item);
+    }
+
+    desc.textContent = isGameClosing
+      ? '規定局数がすべて終了しました。'
+      : '次局へ進みます。';
+    overlay.append(heading, winnerList, desc);
+  } else if (round.abortiveDrawReason) {
+    const meta = ABORTIVE_DRAW_META[round.abortiveDrawReason];
+    heading.textContent = `${roundTitle} 途中流局（${meta.title}）`;
+    overlay.appendChild(heading);
+
+    if (
+      round.abortiveDrawReason === 'kyuushu_kyuuhai' &&
+      round.abortiveDrawPlayerId &&
+      round.revealedHands[round.abortiveDrawPlayerId]
+    ) {
+      const declarer = view.players.find(
+        (p) => p.playerId === round.abortiveDrawPlayerId,
+      );
+      const revealCard = document.createElement('div');
+      revealCard.className = 'agari-result-card';
+      const who = document.createElement('div');
+      who.className = 'agari-who';
+      who.textContent = `${declarer?.name ?? round.abortiveDrawPlayerId} が九種九牌を宣言（開示手牌）`;
+      const tilesRow = document.createElement('div');
+      tilesRow.className = 'agari-tiles-row';
+      for (const tile of round.revealedHands[round.abortiveDrawPlayerId]!) {
+        tilesRow.appendChild(createTileElement(tile, { small: true }));
+      }
+      revealCard.append(who, tilesRow);
+      overlay.appendChild(revealCard);
+    }
+
+    if (view.kyotakuCount > 0) {
+      const rules = deriveRules(view.ruleConfig);
+      const kyotakuNote = document.createElement('div');
+      kyotakuNote.className = 'kyotaku-award-note';
+      kyotakuNote.textContent = `供託リーチ棒 ${view.kyotakuCount}本（${(view.kyotakuCount * rules.riichiStickPoints).toLocaleString()}点）は次局へ持ち越されます。`;
+      overlay.appendChild(kyotakuNote);
+    }
+
+    desc.textContent = isGameClosing
+      ? `${meta.description} 規定局数がすべて終了しました。`
+      : `${meta.description} 点棒清算なしで次の局へ進みます。`;
+    overlay.appendChild(desc);
+  } else {
+    heading.textContent = `${roundTitle} 流局`;
+    overlay.appendChild(heading);
+
+    if (view.kyotakuCount > 0) {
+      const rules = deriveRules(view.ruleConfig);
+      const kyotakuNote = document.createElement('div');
+      kyotakuNote.className = 'kyotaku-award-note';
+      kyotakuNote.textContent = `供託リーチ棒 ${view.kyotakuCount}本（${(view.kyotakuCount * rules.riichiStickPoints).toLocaleString()}点）は次局へ持ち越されます。`;
+      overlay.appendChild(kyotakuNote);
+    }
+
+    desc.textContent = isGameClosing
+      ? '牌山が尽きて流局しました。規定局数がすべて終了しました。'
+      : '牌山が尽きて流局しました（点棒移動なし）。次の局で親が次の席へ移ります。';
+    overlay.appendChild(desc);
+  }
+
+  overlay.appendChild(
+    buildScoreTable(view.players, initialPoints, false, round.roundScoreDeltas),
+  );
+
+  if (isHost) {
+    const nextBtn = document.createElement('button');
+    nextBtn.type = 'button';
+    nextBtn.className = 'btn btn-primary';
+    nextBtn.textContent = isGameClosing ? '結果を見る' : '次の局へ';
+    nextBtn.addEventListener('click', handlers.onAdvanceRound);
+    overlay.appendChild(nextBtn);
+  } else {
+    const waitMsg = document.createElement('div');
+    waitMsg.className = 'hub-sub';
+    waitMsg.textContent = 'ホストが次へ進めるのを待っています...';
+    overlay.appendChild(waitMsg);
+  }
+
+  container.appendChild(overlay);
+}
+
+function renderAgariWinnerCard(
+  agari: RoundAgariWinner,
+  players: readonly PublicPlayerView[],
+  dealerIndex: number,
+): HTMLElement {
+  const card = document.createElement('div');
+  card.className = 'agari-result-card';
+
+  const winnerPlayer = players.find((p) => p.playerId === agari.playerId);
+  const loserPlayer =
+    agari.fromSeatIndex !== null
+      ? players.find((p) => p.seatIndex === agari.fromSeatIndex)
+      : undefined;
+  const isOya = agari.seatIndex === dealerIndex;
+
+  const header = document.createElement('div');
+  header.className = 'agari-header';
+
+  const who = document.createElement('div');
+  who.className = 'agari-who';
+  const winSourceText =
+    agari.winType === 'tsumo'
+      ? 'ツモ和了'
+      : `${loserPlayer?.name ?? ''} からロン`;
+  who.textContent = `${winnerPlayer?.name ?? agari.playerId}（${isOya ? '親' : '子'}）— ${winSourceText}`;
+
+  const scoreBadge = document.createElement('div');
+  scoreBadge.className = 'agari-score-badge';
+  scoreBadge.textContent = `${agari.scoreLabel} / ${agari.pointsAwarded.toLocaleString()}点`;
+
+  header.append(who, scoreBadge);
+  card.appendChild(header);
+
+  // 和了者の手牌＋和了牌＋副露＋抜北公開
+  const tilesRow = document.createElement('div');
+  tilesRow.className = 'agari-tiles-row';
+
+  for (const tile of agari.hand) {
+    tilesRow.appendChild(createTileElement(tile, { small: true }));
+  }
+
+  const winGap = document.createElement('div');
+  winGap.className = 'drawn-gap';
+  tilesRow.appendChild(winGap);
+
+  tilesRow.appendChild(
+    createTileElement(agari.winningTile, { small: true, called: true }),
+  );
+
+  for (const meld of agari.melds) {
+    const meldGroup = document.createElement('div');
+    meldGroup.className = 'meld-group';
+    const label = document.createElement('span');
+    label.className = 'meld-label';
+    label.textContent = MELD_TYPE_LABELS[meld.type];
+    meldGroup.appendChild(label);
+
+    const meldTiles = document.createElement('div');
+    meldTiles.className = 'meld-tiles';
+    if (meld.type === 'ankan' && meld.tiles.length === 4) {
+      meldTiles.appendChild(createTileBackElement(true, true));
+      meldTiles.appendChild(createTileElement(meld.tiles[1]!, { small: true }));
+      meldTiles.appendChild(createTileElement(meld.tiles[2]!, { small: true }));
+      meldTiles.appendChild(createTileBackElement(true, true));
+    } else {
+      for (const tile of meld.tiles) {
+        meldTiles.appendChild(createTileElement(tile, { small: true }));
+      }
+    }
+    meldGroup.appendChild(meldTiles);
+    tilesRow.appendChild(meldGroup);
+  }
+
+  if (agari.kitaTiles.length > 0) {
+    const kitaGroup = document.createElement('div');
+    kitaGroup.className = 'meld-group meld-group-kita';
+    const label = document.createElement('span');
+    label.className = 'meld-label';
+    label.textContent = `抜北 ×${agari.kitaTiles.length}`;
+    kitaGroup.appendChild(label);
+    const kitaTiles = document.createElement('div');
+    kitaTiles.className = 'meld-tiles';
+    for (const tile of agari.kitaTiles) {
+      kitaTiles.appendChild(createTileElement(tile, { small: true }));
+    }
+    kitaGroup.appendChild(kitaTiles);
+    tilesRow.appendChild(kitaGroup);
+  }
+
+  card.appendChild(tilesRow);
+
+  // 役一覧・ドラ・符翻サマリー
+  const yakuList = document.createElement('div');
+  yakuList.className = 'yaku-list';
+
+  for (const y of agari.yaku) {
+    const chip = document.createElement('span');
+    chip.className = `yaku-chip${y.isYakuman ? ' is-yakuman' : ''}`;
+    chip.textContent = y.isYakuman
+      ? (y.yakumanMultiplier ?? 1) >= 2
+        ? `${y.name} ダブル役満`
+        : `${y.name} 役満`
+      : `${y.name} ${y.han}翻`;
+    yakuList.appendChild(chip);
+  }
+
+  if (!agari.isYakuman && agari.doraCount > 0) {
+    const doraChip = document.createElement('span');
+    doraChip.className = 'yaku-chip is-dora';
+    doraChip.textContent = `ドラ ${agari.doraCount}翻`;
+    yakuList.appendChild(doraChip);
+  }
+
+  if (!agari.isYakuman && agari.uraDoraCount > 0) {
+    const uraChip = document.createElement('span');
+    uraChip.className = 'yaku-chip is-dora';
+    uraChip.textContent = `裏ドラ ${agari.uraDoraCount}翻`;
+    yakuList.appendChild(uraChip);
+  }
+
+  if (!agari.isYakuman && agari.kitaCount > 0) {
+    const kitaChip = document.createElement('span');
+    kitaChip.className = 'yaku-chip is-dora';
+    kitaChip.textContent = `抜北 ${agari.kitaCount}翻`;
+    yakuList.appendChild(kitaChip);
+  }
+
+  card.appendChild(yakuList);
+
+  const summary = document.createElement('div');
+  summary.className = 'hub-sub';
+  summary.textContent = agari.isYakuman
+    ? `${agari.scoreLabel}（${agari.pointsAwarded.toLocaleString()}点）`
+    : `${agari.han}翻 ${agari.fu}符 — ${agari.scoreLabel}（${agari.pointsAwarded.toLocaleString()}点）`;
+  card.appendChild(summary);
+
+  return card;
 }
 
 function renderCenterHub(view: StateView): HTMLElement {
@@ -209,6 +510,11 @@ function renderCenterHub(view: StateView): HTMLElement {
     doraWrap.append(doraTitle, doraTiles);
     hub.appendChild(doraWrap);
 
+    const kyotakuBadge = document.createElement('div');
+    kyotakuBadge.className = 'kyotaku-badge';
+    kyotakuBadge.textContent = `供託: ${view.kyotakuCount}本 (${(view.kyotakuCount * rules.riichiStickPoints).toLocaleString()}点)`;
+    hub.appendChild(kyotakuBadge);
+
     if (round.kanCount > 0) {
       const kanBadge = document.createElement('div');
       kanBadge.className = 'hub-sub';
@@ -217,7 +523,7 @@ function renderCenterHub(view: StateView): HTMLElement {
     }
   }
 
-  if (view.phase === 'awaiting_responses') {
+  if (view.phase === 'awaiting_responses' && view.myCallOptions !== null) {
     const waitBadge = document.createElement('div');
     waitBadge.className = 'response-wait-badge';
     const secs =
@@ -243,7 +549,11 @@ function renderCenterHub(view: StateView): HTMLElement {
   return wrap;
 }
 
-function renderSeatHeader(player: PublicPlayerView, isSelf: boolean): HTMLElement {
+function renderSeatHeader(
+  player: PublicPlayerView,
+  isSelf: boolean,
+  isSelfFuriten = false,
+): HTMLElement {
   const header = document.createElement('div');
   header.className = 'seat-header';
 
@@ -268,11 +578,25 @@ function renderSeatHeader(player: PublicPlayerView, isSelf: boolean): HTMLElemen
     identity.appendChild(oya);
   }
 
+  if (player.isDoubleRiichi || player.isRiichi) {
+    const riichiTag = document.createElement('span');
+    riichiTag.className = 'riichi-badge';
+    riichiTag.textContent = player.isDoubleRiichi ? 'Wリーチ' : 'リーチ';
+    identity.appendChild(riichiTag);
+  }
+
   if (player.isCurrentTurn) {
     const turn = document.createElement('span');
     turn.className = 'turn-tag';
     turn.textContent = '手番';
     identity.appendChild(turn);
+  }
+
+  if (isSelf && isSelfFuriten) {
+    const furiten = document.createElement('span');
+    furiten.className = 'furiten-badge';
+    furiten.textContent = 'フリテン（ロン不可）';
+    identity.appendChild(furiten);
   }
 
   if (!player.connected) {
@@ -301,6 +625,7 @@ function renderDiscardRiver(player: PublicPlayerView): HTMLElement {
         small: true,
         tsumogiri: entry.isTsumogiri,
         latestDiscard: isLatest,
+        riichiDeclaration: Boolean(entry.isRiichiDeclaration),
       }),
     );
   });
@@ -492,54 +817,116 @@ function renderCallResponseBar(
 
 function renderSelfTurnActionsBar(
   view: StateView,
+  player: PublicPlayerView,
   handlers: TableHandlers,
+  uiState: TableUiState,
+  canDiscardNow: boolean,
 ): HTMLElement | null {
-  const actions = view.mySelfActions;
-  if (!actions) return null;
+  const actions = canDiscardNow ? view.mySelfActions : null;
+  const hasTurnAction = Boolean(
+    actions &&
+      (actions.canTsumo ||
+        actions.canRiichiTileIds.length > 0 ||
+        actions.canAnkanKinds.length > 0 ||
+        actions.canKakanTileIds.length > 0 ||
+        actions.canKitaTileIds.length > 0 ||
+        actions.canKyuushuKyuuhai),
+  );
+  if (!hasTurnAction && !player.isRiichi) {
+    return null;
+  }
 
   const bar = document.createElement('div');
   bar.className = 'self-action-bar';
 
   const label = document.createElement('span');
   label.className = 'hub-sub';
-  label.textContent = '手番アクション:';
+  label.textContent = player.isRiichi && !hasTurnAction ? 'リーチ中:' : '手番アクション:';
   bar.appendChild(label);
 
   const btns = document.createElement('div');
   btns.className = 'action-buttons-row';
 
-  for (const kind of actions.canAnkanKinds) {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'btn btn-call';
-    btn.textContent = `暗槓 (${formatTileLabel(kind)})`;
-    btn.addEventListener('click', () => handlers.onDeclareAnkan(kind));
-    btns.appendChild(btn);
+  if (actions?.canTsumo) {
+    const tsumoBtn = document.createElement('button');
+    tsumoBtn.type = 'button';
+    tsumoBtn.className = 'btn btn-ron';
+    tsumoBtn.textContent = 'ツモ和了';
+    tsumoBtn.addEventListener('click', handlers.onDeclareTsumo);
+    btns.appendChild(tsumoBtn);
   }
 
-  const allMyTiles = view.myDrawnTile
-    ? [...view.myHand, view.myDrawnTile]
-    : view.myHand;
-
-  for (const tileId of actions.canKakanTileIds) {
-    const tile = allMyTiles.find((t) => t.id === tileId);
-    const tileLabel = tile ? formatTileLabel(tile.kind) : tileId;
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'btn btn-call';
-    btn.textContent = `加槓 (${tileLabel})`;
-    btn.addEventListener('click', () => handlers.onDeclareKakan(tileId));
-    btns.appendChild(btn);
+  if (actions && actions.canRiichiTileIds.length > 0) {
+    const riichiBtn = document.createElement('button');
+    riichiBtn.type = 'button';
+    riichiBtn.className = uiState.riichiSelectingMode
+      ? 'btn btn-secondary'
+      : 'btn btn-riichi';
+    riichiBtn.textContent = uiState.riichiSelectingMode
+      ? 'リーチ宣言キャンセル'
+      : 'リーチ';
+    riichiBtn.addEventListener('click', () => {
+      handlers.onToggleRiichiMode?.(!uiState.riichiSelectingMode);
+    });
+    btns.appendChild(riichiBtn);
   }
 
-  if (actions.canKitaTileIds.length > 0) {
-    const firstKitaId = actions.canKitaTileIds[0]!;
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'btn btn-kita';
-    btn.textContent = '抜北 (北)';
-    btn.addEventListener('click', () => handlers.onDeclareKita(firstKitaId));
-    btns.appendChild(btn);
+  if (actions) {
+    for (const kind of actions.canAnkanKinds) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn btn-call';
+      btn.textContent = `暗槓 (${formatTileLabel(kind)})`;
+      btn.addEventListener('click', () => handlers.onDeclareAnkan(kind));
+      btns.appendChild(btn);
+    }
+
+    const allMyTiles = view.myDrawnTile
+      ? [...view.myHand, view.myDrawnTile]
+      : view.myHand;
+
+    for (const tileId of actions.canKakanTileIds) {
+      const tile = allMyTiles.find((t) => t.id === tileId);
+      const tileLabel = tile ? formatTileLabel(tile.kind) : tileId;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn btn-call';
+      btn.textContent = `加槓 (${tileLabel})`;
+      btn.addEventListener('click', () => handlers.onDeclareKakan(tileId));
+      btns.appendChild(btn);
+    }
+
+    if (actions.canKitaTileIds.length > 0) {
+      const firstKitaId = actions.canKitaTileIds[0]!;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn btn-kita';
+      btn.textContent = '抜北 (北)';
+      btn.addEventListener('click', () => handlers.onDeclareKita(firstKitaId));
+      btns.appendChild(btn);
+    }
+
+    if (actions.canKyuushuKyuuhai) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn btn-abortive';
+      btn.textContent = '九種九牌（流局）';
+      btn.addEventListener('click', handlers.onDeclareKyuushuKyuuhai);
+      btns.appendChild(btn);
+    }
+  }
+
+  if (player.isRiichi) {
+    const autoBtn = document.createElement('button');
+    autoBtn.type = 'button';
+    autoBtn.className = uiState.autoTsumogiriEnabled
+      ? 'btn btn-call'
+      : 'btn btn-secondary';
+    autoBtn.textContent = `自動ツモ切り: ${uiState.autoTsumogiriEnabled ? 'ON' : 'OFF'}`;
+    autoBtn.addEventListener('click', () => {
+      handlers.onToggleAutoTsumogiri?.(!uiState.autoTsumogiriEnabled);
+    });
+    btns.appendChild(autoBtn);
   }
 
   bar.appendChild(btns);
@@ -550,11 +937,12 @@ function renderSelfSeat(
   view: StateView,
   player: PublicPlayerView,
   handlers: TableHandlers,
+  uiState: TableUiState,
 ): HTMLElement {
   const box = document.createElement('div');
   box.className = `seat-box seat-self${player.isCurrentTurn ? ' is-turn' : ''}`;
 
-  box.appendChild(renderSeatHeader(player, true));
+  box.appendChild(renderSeatHeader(player, true, view.isFuriten));
 
   const controls = document.createElement('div');
   controls.className = 'self-controls';
@@ -570,22 +958,47 @@ function renderSelfSeat(
   }
 
   const isMyTurn = view.phase === 'playing' && player.isCurrentTurn;
+  const canDiscardNow =
+    isMyTurn && (view.myDrawnTile !== null || view.myHand.length % 3 === 2);
+  const canRiichiIds = view.mySelfActions?.canRiichiTileIds ?? [];
+  const inRiichiMode =
+    canDiscardNow && uiState.riichiSelectingMode && canRiichiIds.length > 0;
+  const riichiCandidateSet = new Set(canRiichiIds);
+
   const prompt = document.createElement('div');
-  prompt.className = `turn-prompt${isMyTurn ? ' is-my-turn' : ''}`;
+  prompt.className = `turn-prompt${canDiscardNow ? ' is-my-turn' : ''}`;
   if (view.phase === 'round_end') {
+    const hasAgari =
+      view.round &&
+      (view.round.agariResults.length > 0 || view.round.ronWinners.length > 0);
+    if (hasAgari) {
+      const winType = view.round!.agariResults[0]?.winType;
+      prompt.textContent =
+        winType === 'tsumo' ? 'ツモ和了が発生しました' : 'ロン和了が発生しました';
+    } else if (view.round?.abortiveDrawReason) {
+      prompt.textContent = `途中流局（${ABORTIVE_DRAW_META[view.round.abortiveDrawReason].title}）が発生しました`;
+    } else {
+      prompt.textContent = '流局しました';
+    }
+  } else if (view.phase === 'awaiting_responses' && view.myCallOptions !== null) {
+    prompt.textContent = '相手の打牌に対して鳴き・ロンを選択できます';
+  } else if (inRiichiMode) {
     prompt.textContent =
-      view.round && view.round.ronWinners.length > 0
-        ? 'ロン和了が発生しました'
-        : '流局しました';
-  } else if (view.phase === 'awaiting_responses') {
-    prompt.textContent = view.myCallOptions
-      ? '相手の打牌に対して鳴き・ロンを選択できます'
-      : '他のプレイヤーの鳴き応答を待っています...';
+      'リーチ宣言: 聴牌を維持できる牌を選んでください（ハイライト表示）';
+  } else if (canDiscardNow) {
+    if (view.mySelfActions?.canTsumo) {
+      prompt.textContent =
+        'ツモ和了が可能です！「ツモ和了」を押すか、切る牌を選んでください';
+    } else if (player.isRiichi) {
+      prompt.textContent = 'リーチ中です — ツモ牌のみ切れます';
+    } else if (view.kuikaeForbiddenKinds.length > 0) {
+      prompt.textContent =
+        'あなたの手番です — 切る牌を選んでください（喰い替え禁止牌は選択不可）';
+    } else {
+      prompt.textContent = 'あなたの手番です — 切る牌をタップしてください';
+    }
   } else if (isMyTurn) {
-    prompt.textContent =
-      view.kuikaeForbiddenKinds.length > 0
-        ? 'あなたの手番です — 切る牌を選んでください（喰い替え禁止牌は選択不可）'
-        : 'あなたの手番です — 切る牌をタップしてください';
+    prompt.textContent = '待機中...';
   } else {
     const current = view.players.find((p) => p.isCurrentTurn);
     prompt.textContent = current
@@ -599,42 +1012,83 @@ function renderSelfSeat(
     controls.appendChild(callBar);
   }
 
-  if (isMyTurn) {
-    const selfActionsBar = renderSelfTurnActionsBar(view, handlers);
-    if (selfActionsBar) {
-      controls.appendChild(selfActionsBar);
-    }
+  const selfActionsBar = renderSelfTurnActionsBar(
+    view,
+    player,
+    handlers,
+    uiState,
+    canDiscardNow,
+  );
+  if (selfActionsBar) {
+    controls.appendChild(selfActionsBar);
   }
 
-  const forbiddenSet = new Set(isMyTurn ? view.kuikaeForbiddenKinds : []);
+  const forbiddenSet = new Set(canDiscardNow ? view.kuikaeForbiddenKinds : []);
   const handArea = document.createElement('div');
   handArea.className = 'hand-area';
 
   for (const tile of view.myHand) {
-    const blocked = forbiddenSet.has(tile.kind);
-    handArea.appendChild(
-      createTileElement(tile, {
-        clickable: isMyTurn && !blocked,
-        disabled: isMyTurn && blocked,
-        disabledReason: blocked ? '喰い替え禁止のため切れません' : undefined,
-        onClick: () => handlers.onDiscardTile(tile.id),
-      }),
-    );
+    if (inRiichiMode) {
+      const isCandidate = riichiCandidateSet.has(tile.id);
+      handArea.appendChild(
+        createTileElement(tile, {
+          clickable: isCandidate,
+          disabled: !isCandidate,
+          riichiCandidate: isCandidate,
+          disabledReason: isCandidate
+            ? undefined
+            : 'この牌を切っても聴牌にならないためリーチできません',
+          onClick: () => handlers.onDeclareRiichi(tile.id),
+        }),
+      );
+    } else {
+      const lockedByRiichi = canDiscardNow && player.isRiichi;
+      const blockedByKuikae = forbiddenSet.has(tile.kind);
+      const blocked = lockedByRiichi || blockedByKuikae;
+      handArea.appendChild(
+        createTileElement(tile, {
+          clickable: canDiscardNow && !blocked,
+          disabled: canDiscardNow && blocked,
+          disabledReason: lockedByRiichi
+            ? 'リーチ後は手牌を入れ替えられません'
+            : blockedByKuikae
+              ? '喰い替え禁止のため切れません'
+              : undefined,
+          onClick: () => handlers.onDiscardTile(tile.id),
+        }),
+      );
+    }
   }
 
   if (view.myDrawnTile) {
+    const drawn = view.myDrawnTile;
     const gap = document.createElement('div');
     gap.className = 'drawn-gap';
     handArea.appendChild(gap);
-    const blocked = forbiddenSet.has(view.myDrawnTile.kind);
-    handArea.appendChild(
-      createTileElement(view.myDrawnTile, {
-        clickable: isMyTurn && !blocked,
-        disabled: isMyTurn && blocked,
-        disabledReason: blocked ? '喰い替え禁止のため切れません' : undefined,
-        onClick: () => handlers.onDiscardTile(view.myDrawnTile!.id),
-      }),
-    );
+    if (inRiichiMode) {
+      const isCandidate = riichiCandidateSet.has(drawn.id);
+      handArea.appendChild(
+        createTileElement(drawn, {
+          clickable: isCandidate,
+          disabled: !isCandidate,
+          riichiCandidate: isCandidate,
+          disabledReason: isCandidate
+            ? undefined
+            : 'この牌を切っても聴牌にならないためリーチできません',
+          onClick: () => handlers.onDeclareRiichi(drawn.id),
+        }),
+      );
+    } else {
+      const blocked = forbiddenSet.has(drawn.kind);
+      handArea.appendChild(
+        createTileElement(drawn, {
+          clickable: canDiscardNow && !blocked,
+          disabled: canDiscardNow && blocked,
+          disabledReason: blocked ? '喰い替え禁止のため切れません' : undefined,
+          onClick: () => handlers.onDiscardTile(drawn.id),
+        }),
+      );
+    }
   }
 
   controls.appendChild(handArea);
@@ -646,15 +1100,19 @@ function buildScoreTable(
   players: PublicPlayerView[],
   initialPoints: number,
   ranked = false,
+  roundScoreDeltas?: Record<string, number>,
 ): HTMLElement {
   const list = ranked
     ? [...players].sort((a, b) => b.score - a.score || a.seatIndex - b.seatIndex)
     : players;
 
+  const hasRoundDelta =
+    roundScoreDeltas !== undefined && Object.keys(roundScoreDeltas).length > 0;
+
   const table = document.createElement('table');
   table.className = 'score-table';
   const thead = document.createElement('thead');
-  thead.innerHTML = `<tr>${ranked ? '<th>順位</th>' : ''}<th>プレイヤー</th><th class="num">持ち点</th><th class="num">収支</th></tr>`;
+  thead.innerHTML = `<tr>${ranked ? '<th>順位</th>' : ''}<th>プレイヤー</th>${hasRoundDelta ? '<th class="num">今局増減</th>' : ''}<th class="num">持ち点</th><th class="num">通算収支</th></tr>`;
   table.appendChild(thead);
 
   const tbody = document.createElement('tbody');
@@ -669,13 +1127,29 @@ function buildScoreTable(
     }
     const nameTd = document.createElement('td');
     nameTd.textContent = p.name;
+    tr.appendChild(nameTd);
+
+    if (hasRoundDelta) {
+      const delta = roundScoreDeltas![p.playerId] ?? 0;
+      const deltaTd = document.createElement('td');
+      deltaTd.className = `num${delta > 0 ? ' delta-pos' : delta < 0 ? ' delta-neg' : ''}`;
+      deltaTd.textContent =
+        delta > 0
+          ? `+${delta.toLocaleString()}`
+          : delta < 0
+            ? delta.toLocaleString()
+            : '±0';
+      tr.appendChild(deltaTd);
+    }
+
     const scoreTd = document.createElement('td');
     scoreTd.className = 'num';
     scoreTd.textContent = `${p.score.toLocaleString()}点`;
+
     const diffTd = document.createElement('td');
-    diffTd.className = 'num';
+    diffTd.className = `num${diff > 0 ? ' delta-pos' : diff < 0 ? ' delta-neg' : ''}`;
     diffTd.textContent = diffStr;
-    tr.append(nameTd, scoreTd, diffTd);
+    tr.append(scoreTd, diffTd);
     tbody.appendChild(tr);
   });
 
@@ -696,9 +1170,19 @@ function renderFinishedScreen(
   title.style.margin = '0';
   title.style.color = 'var(--accent-gold)';
   const lengthJa = view.ruleConfig.gameLength === 'tonpuu' ? '東風戦' : '半荘戦';
-  title.textContent = `終局 — ${view.ruleConfig.playerCount}人 ${lengthJa} 最終結果`;
+  const hasTobi = view.players.some((p) => p.score < 0);
+  title.textContent = `終局 — ${view.ruleConfig.playerCount}人 ${lengthJa} 最終結果${hasTobi ? '（トビ終了）' : ''}`;
 
   const table = buildScoreTable(view.players, initialPoints, true);
+  panel.append(title, table);
+
+  if (view.kyotakuCount > 0) {
+    const rules = deriveRules(view.ruleConfig);
+    const leftover = document.createElement('div');
+    leftover.className = 'hub-sub';
+    leftover.textContent = `場に残った供託リーチ棒: ${view.kyotakuCount}本（${(view.kyotakuCount * rules.riichiStickPoints).toLocaleString()}点）`;
+    panel.appendChild(leftover);
+  }
 
   const backBtn = document.createElement('button');
   backBtn.type = 'button';
@@ -707,6 +1191,6 @@ function renderFinishedScreen(
   backBtn.textContent = 'ロビーに戻る';
   backBtn.addEventListener('click', handlers.onReturnToLobby);
 
-  panel.append(title, table, backBtn);
+  panel.appendChild(backBtn);
   container.appendChild(panel);
 }

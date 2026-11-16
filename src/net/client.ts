@@ -174,6 +174,20 @@ export class ClientSession {
     });
   }
 
+  declareTsumo(): void {
+    this.send({
+      kind: 'ACTION',
+      action: { type: 'DECLARE_TSUMO' },
+    });
+  }
+
+  declareRiichi(tileId: string): void {
+    this.send({
+      kind: 'ACTION',
+      action: { type: 'DECLARE_RIICHI', tileId },
+    });
+  }
+
   declareAnkan(kind: TileKind): void {
     this.send({
       kind: 'ACTION',
@@ -192,6 +206,13 @@ export class ClientSession {
     this.send({
       kind: 'ACTION',
       action: { type: 'DECLARE_KITA', tileId },
+    });
+  }
+
+  declareKyuushuKyuuhai(): void {
+    this.send({
+      kind: 'ACTION',
+      action: { type: 'DECLARE_KYUUSHU_KYUUHAI' },
     });
   }
 

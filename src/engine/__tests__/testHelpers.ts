@@ -107,6 +107,7 @@ export function buildCustomDeck(
     wallTailKinds?: string[]; // 牌山最後尾（嶺上補充用：末尾が最初に補充される -> 配列末尾が一番最後尾）
     rinshanKinds?: string[]; // 王牌嶺上4枚
     doraIndicatorKinds?: string[]; // 表ドラ表示5枚
+    uraDoraIndicatorKinds?: string[]; // 裏ドラ表示5枚
   },
 ): Tile[] {
   const pool = buildTileDeck(rules);
@@ -124,7 +125,7 @@ export function buildCustomDeck(
   const dealerIndex = spec.dealerIndex ?? 0;
   const liveSize = rules.totalTiles - rules.deadWallSize;
 
-  // 1. まず全指定枠（手牌・親ツモ・ツモ順先頭・牌山末尾・王牌嶺上・ドラ表示）の牌を確保
+  // 1. まず全指定枠（手牌・親ツモ・ツモ順先頭・牌山末尾・王牌嶺上・ドラ表示・裏ドラ表示）の牌を確保
   const handSlots: Tile[][] = Array.from({ length: rules.playerCount }, () => []);
   for (let seat = 0; seat < rules.playerCount; seat++) {
     const kinds = spec.hands[seat] ?? [];
@@ -143,6 +144,7 @@ export function buildCustomDeck(
   const tailTiles = (spec.wallTailKinds ?? []).map(takeByKind);
   const rinshanTiles = (spec.rinshanKinds ?? []).map(takeByKind);
   const doraTiles = (spec.doraIndicatorKinds ?? []).map(takeByKind);
+  const uraTiles = (spec.uraDoraIndicatorKinds ?? []).map(takeByKind);
 
   const remaining = pool.filter((t) => !used.has(t.id));
   let remIdx = 0;
@@ -184,7 +186,6 @@ export function buildCustomDeck(
   while (doraTiles.length < rules.doraIndicatorCount) {
     doraTiles.push(takeNextUnused());
   }
-  const uraTiles: Tile[] = [];
   while (uraTiles.length < rules.uraDoraIndicatorCount) {
     uraTiles.push(takeNextUnused());
   }

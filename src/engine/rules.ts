@@ -3,13 +3,23 @@ import {
   DEAD_WALL_RINSHAN_COUNT,
   DEAD_WALL_SIZE_BY_PLAYERS,
   DEAD_WALL_URA_DORA_COUNT,
+  DEFAULT_ALLOW_ATOZUKE,
+  DEFAULT_ALLOW_KAZOE_YAKUMAN,
+  DEFAULT_ALLOW_KUITAN,
+  DEFAULT_DOUBLE_WIND_PAIR_FU,
   DEFAULT_KANDORA_TIMING,
+  DEFAULT_KIRIAGE_MANGAN,
+  DEFAULT_KITA_COUNTS_AS_INDICATOR_DORA,
   DEFAULT_MAX_KANS_PER_ROUND,
   DEFAULT_RESPONSE_TIMEOUT_MS,
   DEFAULT_TILE_SET_BY_PLAYERS,
+  DEFAULT_TOBI,
+  DEFAULT_TSUMO_LOSS,
   HAND_SIZE,
   INITIAL_POINTS_BY_PLAYERS,
+  RIICHI_STICK_POINTS,
   ROUND_WINDS_BY_LENGTH,
+  SCORE_LIMIT_BASE_POINTS,
   SEAT_WINDS_BY_PLAYERS,
   TILE_SETS,
   type DerivedRules,
@@ -62,6 +72,19 @@ export function deriveRules(
       daiminkan: config.kandoraTiming?.daiminkan ?? DEFAULT_KANDORA_TIMING.daiminkan,
       kakan: config.kandoraTiming?.kakan ?? DEFAULT_KANDORA_TIMING.kakan,
     },
+    tobi: config.tobi ?? DEFAULT_TOBI,
+    tsumoLoss:
+      config.playerCount === 3
+        ? (config.tsumoLoss ?? DEFAULT_TSUMO_LOSS)
+        : false,
+    allowKuitan: config.allowKuitan ?? DEFAULT_ALLOW_KUITAN,
+    allowAtozuke: config.allowAtozuke ?? DEFAULT_ALLOW_ATOZUKE,
+    kiriageMangan: DEFAULT_KIRIAGE_MANGAN,
+    allowKazoeYakuman: DEFAULT_ALLOW_KAZOE_YAKUMAN,
+    doubleWindPairFu: DEFAULT_DOUBLE_WIND_PAIR_FU,
+    kitaCountsAsIndicatorDora: DEFAULT_KITA_COUNTS_AS_INDICATOR_DORA,
+    riichiStickPoints: RIICHI_STICK_POINTS,
+    scoreLimits: { ...SCORE_LIMIT_BASE_POINTS },
   };
 }
 
