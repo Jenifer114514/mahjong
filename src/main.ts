@@ -45,6 +45,7 @@ class MahjongApp {
       tsumoLoss: false,
       allowKuitan: true,
       allowAtozuke: true,
+      honbaBonus: true,
       joinCode: normalizeRoomCode(roomFromUrl),
     };
 
@@ -272,7 +273,7 @@ class MahjongApp {
 
     const title = document.createElement('div');
     title.className = 'app-title';
-    title.textContent = 'PeerJS 対戦リーチ麻雀（第3B段階）';
+    title.textContent = 'PeerJS 対戦リーチ麻雀（第4段階）';
 
     const rightControls = document.createElement('div');
     rightControls.style.display = 'flex';

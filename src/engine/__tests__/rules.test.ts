@@ -154,4 +154,22 @@ describe('deriveRules (RuleConfig)', () => {
     });
     expect(override3.tsumoLoss).toBe(true);
   });
+
+  it('第4段階ローカルルール設定（honbaBonus）の既定値と本場点数が人数から正しく導出される', () => {
+    const def4 = deriveRules({ playerCount: 4, gameLength: 'tonpuu' });
+    expect(def4.honbaBonus).toBe(true);
+    expect(def4.honbaPointsPerStick).toBe(300);
+
+    const def3 = deriveRules({ playerCount: 3, gameLength: 'hanchan' });
+    expect(def3.honbaBonus).toBe(true);
+    expect(def3.honbaPointsPerStick).toBe(1000);
+
+    const disabled = deriveRules({
+      playerCount: 4,
+      gameLength: 'tonpuu',
+      honbaBonus: false,
+    });
+    expect(disabled.honbaBonus).toBe(false);
+    expect(disabled.honbaPointsPerStick).toBe(300);
+  });
 });

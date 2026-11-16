@@ -4,8 +4,10 @@ import type {
   CallOptions,
   CallResponseChoice,
   DiscardEntry,
+  FinalKyotakuAward,
   GamePhase,
   Meld,
+  NextRoundDecision,
   RoundAgariWinner,
   RoundRonWinner,
 } from './state';
@@ -113,6 +115,7 @@ export interface PublicPlayerView {
 
 export interface RoundView {
   roundIndex: number;
+  honba: number;
   totalRounds: number;
   roundWind: Wind;
   kyokuNumber: number;
@@ -128,11 +131,13 @@ export interface RoundView {
   agariResults: RoundAgariWinner[];
   abortiveDrawReason: AbortiveDrawReason | null;
   abortiveDrawPlayerId: string | null;
+  tenpaiPlayerIds: string[];
   revealedHands: Record<string, Tile[]>;
   kyotakuWinnerPlayerId: string | null;
   kyotakuPointsAwarded: number;
   roundScoreDeltas: Record<string, number>;
   isTobiEnded: boolean;
+  nextRoundDecision: NextRoundDecision | null;
 }
 
 export interface SelfTurnActionsView {
@@ -152,8 +157,11 @@ export interface StateView {
   ruleConfig: RuleConfig;
   phase: GamePhase;
   players: PublicPlayerView[];
+  initialDealerIndex: number;
   /** 場に出ている供託リーチ棒の本数 */
   kyotakuCount: number;
+  /** 終局時の残供託加算情報 */
+  finalKyotakuAward: FinalKyotakuAward | null;
   /** 受信者本人の手牌のみ */
   myHand: Tile[];
   /** 受信者本人のツモ牌のみ */

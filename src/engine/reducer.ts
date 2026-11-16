@@ -28,6 +28,11 @@ import {
   validatePonTilePair,
 } from './calls';
 import { getRevealedUraDoraIndicators } from './dora';
+import {
+  calculateNotenPenalties,
+  decideNextRound,
+  resolveLeftoverKyotaku,
+} from './roundProgression';
 import { deriveRules, getRoundMetadata } from './rules';
 import type { AgariScoreResult } from './score';
 import {
@@ -139,8 +144,35 @@ function buildAgariWinnerRecord(params: {
     isYakuman: evalResult.isYakuman,
     scoreLabel: evalResult.scoreLabel,
     pointsAwarded: evalResult.pointsAwarded,
+    honbaPointsAwarded: evalResult.honbaPointsAwarded,
     scoreDeltas: deltasBySeatToPlayerMap(players, evalResult.deltasBySeat),
   };
+}
+
+function getNextRoundDecisionForRound(
+  state: GameState,
+  rules: DerivedRules,
+) {
+  const round = state.round!;
+  if (round.nextRoundDecision !== null) {
+    return round.nextRoundDecision;
+  }
+  const winnerSeats = (
+    round.agariResults.length > 0 ? round.agariResults : round.ronWinners
+  ).map((w) => w.seatIndex);
+  return decideNextRound(
+    {
+      roundIndex: round.roundIndex,
+      honba: round.honba,
+      dealerIndex: round.dealerIndex,
+      agariWinnerSeatIndices: winnerSeats,
+      abortiveDrawReason: round.abortiveDrawReason,
+      tenpaiPlayerIds: round.tenpaiPlayerIds,
+      isTobiEnded: round.isTobiEnded,
+    },
+    state.players,
+    rules,
+  );
 }
 
 export function createInitialGameState(params: CreateInitialGameParams): GameState {
@@ -172,7 +204,9 @@ export function createInitialGameState(params: CreateInitialGameParams): GameSta
     ruleConfig: { ...params.ruleConfig },
     phase: 'lobby',
     players: [hostPlayer],
+    initialDealerIndex: 0,
     kyotakuCount: 0,
+    finalKyotakuAward: null,
     round: null,
   };
 }
@@ -778,10 +812,9 @@ export function validateAction(
           message: '次局への進行はホストのみ操作できます。',
         };
       }
-      const nextRoundIndex = state.round.roundIndex + 1;
+      const decision = getNextRoundDecisionForRound(state, rules);
       if (
-        !state.round.isTobiEnded &&
-        nextRoundIndex < rules.totalRounds &&
+        decision.outcome !== 'game_end' &&
         !validateDeckForRules(rules, action.shuffledDeck)
       ) {
         return {
@@ -871,7 +904,19 @@ function enterAbortiveDrawRound(
     revealedHands?: Record<string, Tile[]>;
   },
 ): GameState {
+  const rules = deriveRules(state.ruleConfig);
   const round = state.round!;
+  const nextRoundDecision = decideNextRound(
+    {
+      roundIndex: round.roundIndex,
+      honba: round.honba,
+      dealerIndex: round.dealerIndex,
+      abortiveDrawReason: reason,
+      isTobiEnded: false,
+    },
+    state.players,
+    rules,
+  );
   return {
     ...state,
     phase: 'round_end',
@@ -883,11 +928,13 @@ function enterAbortiveDrawRound(
       uraDoraIndicators: [],
       abortiveDrawReason: reason,
       abortiveDrawPlayerId: options?.playerId ?? null,
+      tenpaiPlayerIds: [],
       revealedHands: options?.revealedHands ?? {},
       kyotakuWinnerPlayerId: null,
       kyotakuPointsAwarded: 0,
       roundScoreDeltas: {},
       isTobiEnded: false,
+      nextRoundDecision,
       turnCount: round.turnCount + 1,
     },
   };
@@ -937,13 +984,38 @@ function advanceTurnAfterClearDiscard(state: GameState): GameState {
   const flushedDeadWall = flushPendingKandora(round.deadWall);
 
   if (round.wall.length === 0) {
+    const noten = calculateNotenPenalties(state.players, rules);
+    const nextPlayers = state.players.map((p) => ({
+      ...p,
+      score: p.score + (noten.deltasByPlayerId[p.playerId] ?? 0),
+    }));
+    const isTobiEnded =
+      rules.tobi && nextPlayers.some((p) => p.score < 0);
+    const nextRoundDecision = decideNextRound(
+      {
+        roundIndex: round.roundIndex,
+        honba: round.honba,
+        dealerIndex: round.dealerIndex,
+        tenpaiPlayerIds: noten.tenpaiPlayerIds,
+        isTobiEnded,
+      },
+      nextPlayers,
+      rules,
+    );
+
     return {
       ...state,
       phase: 'round_end',
+      players: nextPlayers,
       round: {
         ...round,
         deadWall: flushedDeadWall,
         pendingResponse: null,
+        tenpaiPlayerIds: noten.tenpaiPlayerIds,
+        revealedHands: noten.revealedHands,
+        roundScoreDeltas: noten.deltasByPlayerId,
+        isTobiEnded,
+        nextRoundDecision,
         turnCount: round.turnCount + 1,
       },
     };
@@ -1159,13 +1231,17 @@ function resolvePendingResponses(
         ? pending.kind
         : undefined;
 
-    for (const winner of chosen) {
+    for (let idx = 0; idx < chosen.length; idx++) {
+      const winner = chosen[idx]!;
       const evalResult = evaluateRonForPlayer(
         state,
         winner,
         pending.discardedTile,
         discarder,
-        chankanKind ? { chankanKind } : undefined,
+        {
+          ...(chankanKind ? { chankanKind } : {}),
+          applyHonba: idx === 0,
+        },
       );
       if (evalResult !== null) {
         const winnerRecord = buildAgariWinnerRecord({
@@ -1202,6 +1278,20 @@ function resolvePendingResponses(
     }));
     const isTobiEnded =
       rules.tobi && nextPlayers.some((p) => p.score < 0);
+    const winnerSeats = (
+      agariResults.length > 0 ? agariResults : ronWinners
+    ).map((w) => w.seatIndex);
+    const nextRoundDecision = decideNextRound(
+      {
+        roundIndex: round.roundIndex,
+        honba: round.honba,
+        dealerIndex: round.dealerIndex,
+        agariWinnerSeatIndices: winnerSeats,
+        isTobiEnded,
+      },
+      nextPlayers,
+      rules,
+    );
 
     return {
       ...state,
@@ -1214,6 +1304,7 @@ function resolvePendingResponses(
         ronWinners,
         agariResults,
         uraDoraIndicators,
+        tenpaiPlayerIds: [],
         kyotakuWinnerPlayerId,
         kyotakuPointsAwarded,
         roundScoreDeltas:
@@ -1221,6 +1312,7 @@ function resolvePendingResponses(
             ? roundScoreDeltas
             : {},
         isTobiEnded,
+        nextRoundDecision,
         turnCount: round.turnCount + 1,
       },
     };
@@ -1569,9 +1661,12 @@ export function reduce(
         ...state,
         phase: 'playing',
         players,
+        initialDealerIndex,
         kyotakuCount: 0,
+        finalKyotakuAward: null,
         round: {
           roundIndex: 0,
+          honba: 0,
           roundWind: roundMeta.roundWind,
           kyokuNumber: roundMeta.kyokuNumber,
           initialDealerIndex,
@@ -1589,11 +1684,13 @@ export function reduce(
           uraDoraIndicators: [],
           abortiveDrawReason: null,
           abortiveDrawPlayerId: null,
+          tenpaiPlayerIds: [],
           revealedHands: {},
           kyotakuWinnerPlayerId: null,
           kyotakuPointsAwarded: 0,
           roundScoreDeltas: {},
           isTobiEnded: false,
+          nextRoundDecision: null,
         },
       };
     }
@@ -1854,6 +1951,17 @@ export function reduce(
       }));
       const isTobiEnded =
         rules.tobi && nextPlayers.some((p) => p.score < 0);
+      const nextRoundDecision = decideNextRound(
+        {
+          roundIndex: round.roundIndex,
+          honba: round.honba,
+          dealerIndex: round.dealerIndex,
+          agariWinnerSeatIndices: [activePlayer.seatIndex],
+          isTobiEnded,
+        },
+        nextPlayers,
+        rules,
+      );
 
       return {
         ...state,
@@ -1864,10 +1972,12 @@ export function reduce(
           ...round,
           agariResults: [winnerRecord],
           uraDoraIndicators,
+          tenpaiPlayerIds: [],
           kyotakuWinnerPlayerId,
           kyotakuPointsAwarded,
           roundScoreDeltas,
           isTobiEnded,
+          nextRoundDecision,
           turnCount: round.turnCount + 1,
         },
       };
@@ -2008,10 +2118,16 @@ export function reduce(
 
     case 'ADVANCE_ROUND': {
       const currentRound = state.round!;
-      const nextRoundIndex = currentRound.roundIndex + 1;
+      const decision = getNextRoundDecisionForRound(state, rules);
 
-      if (currentRound.isTobiEnded || nextRoundIndex >= rules.totalRounds) {
-        const finishedPlayers = state.players.map((p) => ({
+      if (decision.outcome === 'game_end') {
+        const kyotakuResolved = resolveLeftoverKyotaku(
+          state.players,
+          state.kyotakuCount,
+          currentRound.initialDealerIndex,
+          rules,
+        );
+        const finishedPlayers = kyotakuResolved.players.map((p) => ({
           ...p,
           hand: [],
           drawnTile: null,
@@ -2031,10 +2147,14 @@ export function reduce(
           ...state,
           phase: 'finished',
           players: finishedPlayers,
+          initialDealerIndex: currentRound.initialDealerIndex,
+          kyotakuCount: 0,
+          finalKyotakuAward: kyotakuResolved.award,
           round: null,
         };
       }
 
+      const nextRoundIndex = decision.nextRoundIndex;
       const roundMeta = getRoundMetadata(
         nextRoundIndex,
         currentRound.initialDealerIndex,
@@ -2070,6 +2190,7 @@ export function reduce(
         players: nextPlayers,
         round: {
           roundIndex: nextRoundIndex,
+          honba: decision.nextHonba,
           roundWind: roundMeta.roundWind,
           kyokuNumber: roundMeta.kyokuNumber,
           initialDealerIndex: currentRound.initialDealerIndex,
@@ -2087,11 +2208,13 @@ export function reduce(
           uraDoraIndicators: [],
           abortiveDrawReason: null,
           abortiveDrawPlayerId: null,
+          tenpaiPlayerIds: [],
           revealedHands: {},
           kyotakuWinnerPlayerId: null,
           kyotakuPointsAwarded: 0,
           roundScoreDeltas: {},
           isTobiEnded: false,
+          nextRoundDecision: null,
         },
       };
     }

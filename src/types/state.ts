@@ -128,8 +128,33 @@ export interface RoundAgariWinner {
   isYakuman: boolean;
   scoreLabel: string;
   pointsAwarded: number;
-  /** playerId -> この和了による点棒増減（供託受取分は別で roundScoreDeltas に合算） */
+  honbaPointsAwarded: number;
+  /** playerId -> この和了による点棒増減（供託受取分は別で roundScoreDeltas に合算、本場加算はここにも含む） */
   scoreDeltas: Record<string, number>;
+}
+
+export type NextRoundOutcome = 'renchan' | 'oya_nagare' | 'game_end';
+
+export type NextRoundReason =
+  | 'tobi'
+  | 'oya_agari'
+  | 'double_ron_with_oya'
+  | 'ko_agari'
+  | 'oya_tenpai_draw'
+  | 'oya_noten_draw'
+  | 'abortive_draw';
+
+export interface NextRoundDecision {
+  outcome: NextRoundOutcome;
+  nextRoundIndex: number;
+  nextHonba: number;
+  isOorasu: boolean;
+  reason: NextRoundReason;
+}
+
+export interface FinalKyotakuAward {
+  playerId: string;
+  points: number;
 }
 
 export interface PlayerState {
@@ -160,6 +185,7 @@ export interface PlayerState {
 
 export interface RoundState {
   roundIndex: number;         // 0 .. totalRounds - 1
+  honba: number;              // 積み棒の本数（0..）
   roundWind: Wind;            // 'E' | 'S'
   kyokuNumber: number;        // 1 .. playerCount（例: 東2局なら2）
   initialDealerIndex: number; // 起家の席番号
@@ -181,12 +207,15 @@ export interface RoundState {
   abortiveDrawReason: AbortiveDrawReason | null;
   /** 九種九牌などを宣言したプレイヤーID */
   abortiveDrawPlayerId: string | null;
-  /** 途中流局などで開示された手牌（例: 九種九牌宣言者の手牌） */
+  /** 通常流局時に自動判定されたテンパイ者のプレイヤーID一覧 */
+  tenpaiPlayerIds: string[];
+  /** 途中流局（九種九牌）や通常流局（テンパイ者のみ）で開示された手牌 */
   revealedHands: Record<string, Tile[]>;
   kyotakuWinnerPlayerId: string | null;
   kyotakuPointsAwarded: number;
   roundScoreDeltas: Record<string, number>;
   isTobiEnded: boolean;
+  nextRoundDecision: NextRoundDecision | null;
 }
 
 export interface GameState {
@@ -195,7 +224,10 @@ export interface GameState {
   ruleConfig: RuleConfig;
   phase: GamePhase;
   players: PlayerState[];
+  initialDealerIndex: number;
   /** 場に出ている供託リーチ棒の本数（1本 = 1000点） */
   kyotakuCount: number;
+  /** 終局時に場に残っていた供託を最終トップへ加算した記録 */
+  finalKyotakuAward: FinalKyotakuAward | null;
   round: RoundState | null;
 }

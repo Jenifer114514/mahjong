@@ -11,7 +11,7 @@ import {
 } from './testHelpers';
 
 describe('第3A段階: ツモ和了・ロン・ダブロン・フリテン・トビ・三麻ツモ損', () => {
-  it('ツモ和了で点棒移動・和了者のみ手牌開示・他家手牌隠蔽・親回転が行われる', () => {
+  it('ツモ和了で点棒移動・和了者のみ手牌開示・他家手牌隠蔽・親の連荘が行われる', () => {
     // p0(親): 234m 456m 345p 678s 55p + 2m(2巡目ツモ) -> 平和+門前ツモ+断幺九 (20符3翻 = 1300オール = 3900)
     let state = createStartedCustomGame(4, {
       hands: {
@@ -84,7 +84,7 @@ describe('第3A段階: ツモ和了・ロン・ダブロン・フリテン・ト
       expect(serializedEnd).not.toContain(`"${t.id}"`);
     }
 
-    // 和了後でも ADVANCE_ROUND で親は必ず次席へ回る（連荘なし）
+    // 第4段階: 親(p0)のツモ和了後は連荘(roundIndex=0, dealerIndex=0, honba=1)になる
     const rules = deriveRules(state.ruleConfig);
     state = reduce(state, {
       type: 'ADVANCE_ROUND',
@@ -92,8 +92,9 @@ describe('第3A段階: ツモ和了・ロン・ダブロン・フリテン・ト
       shuffledDeck: buildSeededTestDeck(rules, 12345),
     });
     expect(state.phase).toBe('playing');
-    expect(state.round!.roundIndex).toBe(1);
-    expect(state.round!.dealerIndex).toBe(1);
+    expect(state.round!.roundIndex).toBe(0);
+    expect(state.round!.dealerIndex).toBe(0);
+    expect(state.round!.honba).toBe(1);
   });
 
   it('山残り0枚の最終ツモでもツモ和了できる (海底ツモ)', () => {
@@ -428,6 +429,7 @@ describe('第3A段階: ツモ和了・ロン・ダブロン・フリテン・ト
     expect(sNoTobi.players[1]!.score).toBe(-23000);
     expect(sNoTobi.round!.isTobiEnded).toBe(false);
 
+    // tobi=false かつ親(p0)ロンのため続行（連荘: roundIndex=0, honba=1）
     const rules = deriveRules(sNoTobi.ruleConfig);
     sNoTobi = reduce(sNoTobi, {
       type: 'ADVANCE_ROUND',
@@ -435,7 +437,8 @@ describe('第3A段階: ツモ和了・ロン・ダブロン・フリテン・ト
       shuffledDeck: buildSeededTestDeck(rules, 77),
     });
     expect(sNoTobi.phase).toBe('playing');
-    expect(sNoTobi.round!.roundIndex).toBe(1);
+    expect(sNoTobi.round!.roundIndex).toBe(0);
+    expect(sNoTobi.round!.honba).toBe(1);
   });
 
   it('0点ちょうどではトビ終了しない', () => {

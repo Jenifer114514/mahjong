@@ -293,15 +293,16 @@ describe('Stage 3B 途中流局（九種九牌・四風連打・四家立直・�
     expect(s.players.map((p) => p.score)).toEqual([24000, 24000, 24000, 24000]);
     expect(s.players.every((p) => p.isRiichi)).toBe(true);
 
-    // 次局へ進んでも供託4本(4000点)が持ち越され、次局の和了者が獲得する
+    // 次局（途中流局により連荘: dealerIndex=0, honba=1）へ進んでも供託4本(4000点)が持ち越され、次局の和了者が獲得する
     const rules4 = deriveRules(s.ruleConfig);
     const nextDeck = buildCustomDeck(rules4, {
-      dealerIndex: 1,
+      dealerIndex: 0,
       hands: {
-        0: ['1z', '1z', '1z', '2z', '2z', '2z', '3z', '3z', '3z', '4z', '4z', '4z', '5z'],
+        0: ['1m', '1m', '9m', '9m', '1s', '1s', '9s', '9s', '1p', '1p', '6z', '6z', '2z'],
         1: ['2m', '3m', '4m', '4p', '5p', '6p', '5s', '6s', '7s', '3p', '4p', '8s', '8s'],
       },
-      dealerDrawnKind: '5p',
+      dealerDrawnKind: '3z',
+      liveWallHeadKinds: ['5p'],
       doraIndicatorKinds: ['7z'],
     });
     let nextRound = reduce(s, {
@@ -310,9 +311,18 @@ describe('Stage 3B 途中流局（九種九牌・四風連打・四家立直・�
       shuffledDeck: nextDeck,
     });
     expect(nextRound.phase).toBe('playing');
+    expect(nextRound.round!.dealerIndex).toBe(0);
+    expect(nextRound.round!.honba).toBe(1);
     expect(nextRound.kyotakuCount).toBe(4);
 
-    // 親(p1)が天和相当? いや1順回すかそのままツモ -> p1の和了で4000点獲得！
+    // 親(p0)が3zを切り、子(p1)が5pをツモ和了 -> 供託4000点獲得！
+    nextRound = passAllPendingResponses(
+      reduce(nextRound, {
+        type: 'DISCARD_TILE',
+        playerId: 'p0',
+        tileId: nextRound.players[0]!.drawnTile!.id,
+      }),
+    );
     nextRound = reduce(nextRound, {
       type: 'DECLARE_TSUMO',
       playerId: 'p1',

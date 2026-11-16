@@ -46,6 +46,7 @@ function cloneAgariWinner(w: RoundAgariWinner): RoundAgariWinner {
     isYakuman: w.isYakuman,
     scoreLabel: w.scoreLabel,
     pointsAwarded: w.pointsAwarded,
+    honbaPointsAwarded: w.honbaPointsAwarded,
     scoreDeltas: { ...w.scoreDeltas },
   };
 }
@@ -137,6 +138,7 @@ export function toStateView(
   const round: RoundView | null = state.round
     ? {
         roundIndex: state.round.roundIndex,
+        honba: state.round.honba,
         totalRounds: rules.totalRounds,
         roundWind: state.round.roundWind,
         kyokuNumber: state.round.kyokuNumber,
@@ -158,6 +160,10 @@ export function toStateView(
         agariResults: state.round.agariResults.map(cloneAgariWinner),
         abortiveDrawReason: state.round.abortiveDrawReason,
         abortiveDrawPlayerId: state.round.abortiveDrawPlayerId,
+        tenpaiPlayerIds:
+          state.phase === 'round_end'
+            ? [...state.round.tenpaiPlayerIds]
+            : [],
         revealedHands:
           state.phase === 'round_end'
             ? Object.fromEntries(
@@ -171,6 +177,10 @@ export function toStateView(
         kyotakuPointsAwarded: state.round.kyotakuPointsAwarded,
         roundScoreDeltas: { ...state.round.roundScoreDeltas },
         isTobiEnded: state.round.isTobiEnded,
+        nextRoundDecision:
+          state.phase === 'round_end' && state.round.nextRoundDecision
+            ? { ...state.round.nextRoundDecision }
+            : null,
       }
     : null;
 
@@ -212,7 +222,11 @@ export function toStateView(
     ruleConfig: { ...state.ruleConfig },
     phase: viewPhase,
     players,
+    initialDealerIndex: state.initialDealerIndex,
     kyotakuCount: state.kyotakuCount,
+    finalKyotakuAward: state.finalKyotakuAward
+      ? { ...state.finalKyotakuAward }
+      : null,
     myHand: viewer.hand.map((t) => ({ ...t })),
     myDrawnTile: viewer.drawnTile ? { ...viewer.drawnTile } : null,
     myCallOptions,

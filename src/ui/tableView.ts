@@ -1,5 +1,6 @@
-import { deriveRules } from '../engine/rules';
-import type { PublicPlayerView, StateView } from '../types/message';
+import { rankPlayers } from '../engine/roundProgression';
+import { deriveRules, getRoundMetadata } from '../engine/rules';
+import type { PublicPlayerView, RoundView, StateView } from '../types/message';
 import type {
   AbortiveDrawReason,
   CallResponseChoice,
@@ -144,6 +145,68 @@ export function renderGameTable(
   }
 }
 
+function formatNextRoundDescription(view: StateView, round: RoundView): string {
+  const decision = round.nextRoundDecision;
+  const currentTitle = formatRoundName(round.roundWind, round.kyokuNumber);
+  const rules = deriveRules(view.ruleConfig);
+  if (!decision) {
+    if (round.isTobiEnded) {
+      return '持ち点が0点未満になったプレイヤーがいるため、トビ終了となります。';
+    }
+    return round.roundIndex + 1 >= round.totalRounds
+      ? '規定局数がすべて終了しました。'
+      : '次局へ進みます。';
+  }
+
+  if (decision.outcome === 'renchan') {
+    switch (decision.reason) {
+      case 'abortive_draw':
+        return `途中流局のため親の連荘となり、${currentTitle} ${decision.nextHonba}本場へ進みます。`;
+      case 'oya_agari':
+        return `親の和了により連荘となり、${currentTitle} ${decision.nextHonba}本場へ進みます。`;
+      case 'double_ron_with_oya':
+        return `親と子の同時ダブロンのため親の連荘となり、${currentTitle} ${decision.nextHonba}本場へ進みます。`;
+      case 'oya_tenpai_draw':
+        return `親がテンパイで流局したため連荘となり、${currentTitle} ${decision.nextHonba}本場へ進みます。`;
+      default:
+        return `連荘となり、${currentTitle} ${decision.nextHonba}本場へ進みます。`;
+    }
+  }
+
+  if (decision.outcome === 'oya_nagare') {
+    const nextMeta = getRoundMetadata(
+      decision.nextRoundIndex,
+      view.initialDealerIndex,
+      rules,
+    );
+    const nextTitle = formatRoundName(
+      nextMeta.roundWind,
+      nextMeta.kyokuNumber,
+      decision.nextHonba,
+    );
+    switch (decision.reason) {
+      case 'ko_agari':
+        return `子の和了により親流れとなり、${nextTitle}へ進みます。`;
+      case 'oya_noten_draw':
+        return `親がノーテンで流局したため親流れとなり、${nextTitle}へ進みます。`;
+      default:
+        return `親流れとなり、${nextTitle}へ進みます。`;
+    }
+  }
+
+  // decision.outcome === 'game_end'
+  switch (decision.reason) {
+    case 'tobi':
+      return '持ち点が0点未満になったプレイヤーがいるため、トビ終了となります。';
+    case 'ko_agari':
+      return 'オーラスで子が和了したため、対局終了（終局）となります。';
+    case 'oya_noten_draw':
+      return 'オーラスで親がノーテン流局となったため、対局終了（終局）となります。';
+    default:
+      return '規定局数が終了したため、対局終了（終局）となります。';
+  }
+}
+
 function renderRoundEndOverlay(
   container: HTMLElement,
   view: StateView,
@@ -159,12 +222,13 @@ function renderRoundEndOverlay(
   heading.style.margin = '0';
   heading.style.color = 'var(--accent-gold)';
 
-  const roundTitle = formatRoundName(round.roundWind, round.kyokuNumber);
+  const roundTitle = formatRoundName(round.roundWind, round.kyokuNumber, round.honba);
   const desc = document.createElement('div');
-  desc.className = 'hub-sub';
+  desc.className = 'progression-reason-note';
 
-  const isGameClosing =
-    round.isTobiEnded || round.roundIndex + 1 >= round.totalRounds;
+  const isGameClosing = round.nextRoundDecision
+    ? round.nextRoundDecision.outcome === 'game_end'
+    : round.isTobiEnded || round.roundIndex + 1 >= round.totalRounds;
 
   if (round.agariResults.length > 0) {
     const first = round.agariResults[0]!;
@@ -214,11 +278,7 @@ function renderRoundEndOverlay(
       cardsWrap.appendChild(kyotakuNote);
     }
 
-    desc.textContent = round.isTobiEnded
-      ? '持ち点が0点未満になったプレイヤーがいるため、トビ終了となります。'
-      : isGameClosing
-        ? '規定局数がすべて終了しました。'
-        : '点棒清算が完了しました。次局へ進みます。';
+    desc.textContent = formatNextRoundDescription(view, round);
     overlay.append(heading, cardsWrap, desc);
   } else if (round.ronWinners.length > 0) {
     // テストフック用フォールバック表示
@@ -243,9 +303,7 @@ function renderRoundEndOverlay(
       winnerList.appendChild(item);
     }
 
-    desc.textContent = isGameClosing
-      ? '規定局数がすべて終了しました。'
-      : '次局へ進みます。';
+    desc.textContent = formatNextRoundDescription(view, round);
     overlay.append(heading, winnerList, desc);
   } else if (round.abortiveDrawReason) {
     const meta = ABORTIVE_DRAW_META[round.abortiveDrawReason];
@@ -282,30 +340,140 @@ function renderRoundEndOverlay(
       overlay.appendChild(kyotakuNote);
     }
 
-    desc.textContent = isGameClosing
-      ? `${meta.description} 規定局数がすべて終了しました。`
-      : `${meta.description} 点棒清算なしで次の局へ進みます。`;
+    desc.textContent = `${meta.description} ${formatNextRoundDescription(view, round)}`;
     overlay.appendChild(desc);
   } else {
-    heading.textContent = `${roundTitle} 流局`;
+    heading.textContent = `${roundTitle} 流局（荒牌平局）`;
+    if (round.isTobiEnded) {
+      const tobiTag = document.createElement('span');
+      tobiTag.className = 'tobi-badge';
+      tobiTag.textContent = 'トビ終了';
+      heading.appendChild(tobiTag);
+    }
     overlay.appendChild(heading);
+
+    // テンパイ／ノーテン判定とテンパイ者の手牌開示
+    const tenpaiSet = new Set(round.tenpaiPlayerIds);
+    const tenpaiWrap = document.createElement('div');
+    tenpaiWrap.className = 'tenpai-cards-list';
+
+    for (const p of view.players) {
+      const isTenpai = tenpaiSet.has(p.playerId);
+      const isOya = p.seatIndex === round.dealerIndex;
+      const delta = round.roundScoreDeltas[p.playerId] ?? 0;
+      const deltaStr =
+        delta > 0
+          ? `+${delta.toLocaleString()}点`
+          : delta < 0
+            ? `${delta.toLocaleString()}点`
+            : '±0点';
+
+      const card = document.createElement('div');
+      card.className = 'agari-result-card';
+
+      const header = document.createElement('div');
+      header.className = 'agari-header';
+
+      const who = document.createElement('div');
+      who.className = 'agari-who';
+      who.textContent = `${p.name}（${isOya ? '親' : '子'}）`;
+
+      const statusGroup = document.createElement('div');
+      statusGroup.style.display = 'flex';
+      statusGroup.style.alignItems = 'center';
+      statusGroup.style.gap = '8px';
+
+      const badge = document.createElement('span');
+      badge.className = isTenpai ? 'tenpai-badge' : 'noten-badge';
+      badge.textContent = isTenpai ? 'テンパイ' : 'ノーテン';
+
+      const deltaSpan = document.createElement('span');
+      deltaSpan.className =
+        delta > 0 ? 'delta-pos' : delta < 0 ? 'delta-neg' : 'hub-sub';
+      deltaSpan.textContent = deltaStr;
+
+      statusGroup.append(badge, deltaSpan);
+      header.append(who, statusGroup);
+      card.appendChild(header);
+
+      const revealed = round.revealedHands[p.playerId];
+      if (isTenpai && revealed) {
+        const tilesRow = document.createElement('div');
+        tilesRow.className = 'agari-tiles-row';
+        for (const tile of revealed) {
+          tilesRow.appendChild(createTileElement(tile, { small: true }));
+        }
+        for (const meld of p.melds) {
+          const meldGroup = document.createElement('div');
+          meldGroup.className = 'meld-group';
+          const label = document.createElement('span');
+          label.className = 'meld-label';
+          label.textContent = MELD_TYPE_LABELS[meld.type];
+          meldGroup.appendChild(label);
+          const meldTiles = document.createElement('div');
+          meldTiles.className = 'meld-tiles';
+          if (meld.type === 'ankan' && meld.tiles.length === 4) {
+            meldTiles.appendChild(createTileBackElement(true, true));
+            meldTiles.appendChild(createTileElement(meld.tiles[1]!, { small: true }));
+            meldTiles.appendChild(createTileElement(meld.tiles[2]!, { small: true }));
+            meldTiles.appendChild(createTileBackElement(true, true));
+          } else {
+            for (const tile of meld.tiles) {
+              meldTiles.appendChild(createTileElement(tile, { small: true }));
+            }
+          }
+          meldGroup.appendChild(meldTiles);
+          tilesRow.appendChild(meldGroup);
+        }
+        if (p.kitaTiles.length > 0) {
+          const kitaGroup = document.createElement('div');
+          kitaGroup.className = 'meld-group meld-group-kita';
+          const label = document.createElement('span');
+          label.className = 'meld-label';
+          label.textContent = `抜北 ×${p.kitaTiles.length}`;
+          kitaGroup.appendChild(label);
+          const kitaTiles = document.createElement('div');
+          kitaTiles.className = 'meld-tiles';
+          for (const tile of p.kitaTiles) {
+            kitaTiles.appendChild(createTileElement(tile, { small: true }));
+          }
+          kitaGroup.appendChild(kitaTiles);
+          tilesRow.appendChild(kitaGroup);
+        }
+        card.appendChild(tilesRow);
+      } else {
+        const hiddenNote = document.createElement('div');
+        hiddenNote.className = 'hub-sub';
+        hiddenNote.textContent = '手牌非公開';
+        card.appendChild(hiddenNote);
+      }
+
+      tenpaiWrap.appendChild(card);
+    }
+    overlay.appendChild(tenpaiWrap);
 
     if (view.kyotakuCount > 0) {
       const rules = deriveRules(view.ruleConfig);
       const kyotakuNote = document.createElement('div');
       kyotakuNote.className = 'kyotaku-award-note';
-      kyotakuNote.textContent = `供託リーチ棒 ${view.kyotakuCount}本（${(view.kyotakuCount * rules.riichiStickPoints).toLocaleString()}点）は次局へ持ち越されます。`;
+      kyotakuNote.textContent = isGameClosing
+        ? `供託リーチ棒 ${view.kyotakuCount}本（${(view.kyotakuCount * rules.riichiStickPoints).toLocaleString()}点）は終局時の最終トップに加算されます。`
+        : `供託リーチ棒 ${view.kyotakuCount}本（${(view.kyotakuCount * rules.riichiStickPoints).toLocaleString()}点）は次局へ持ち越されます。`;
       overlay.appendChild(kyotakuNote);
     }
 
-    desc.textContent = isGameClosing
-      ? '牌山が尽きて流局しました。規定局数がすべて終了しました。'
-      : '牌山が尽きて流局しました（点棒移動なし）。次の局で親が次の席へ移ります。';
+    desc.textContent = formatNextRoundDescription(view, round);
     overlay.appendChild(desc);
   }
 
   overlay.appendChild(
-    buildScoreTable(view.players, initialPoints, false, round.roundScoreDeltas),
+    buildScoreTable(
+      view.players,
+      initialPoints,
+      false,
+      round.roundScoreDeltas,
+      view.initialDealerIndex,
+    ),
   );
 
   if (isHost) {
@@ -353,7 +521,10 @@ function renderAgariWinnerCard(
 
   const scoreBadge = document.createElement('div');
   scoreBadge.className = 'agari-score-badge';
-  scoreBadge.textContent = `${agari.scoreLabel} / ${agari.pointsAwarded.toLocaleString()}点`;
+  scoreBadge.textContent =
+    agari.honbaPointsAwarded > 0
+      ? `${agari.scoreLabel} / ${agari.pointsAwarded.toLocaleString()}点 (+本場 ${agari.honbaPointsAwarded.toLocaleString()}点)`
+      : `${agari.scoreLabel} / ${agari.pointsAwarded.toLocaleString()}点`;
 
   header.append(who, scoreBadge);
   card.appendChild(header);
@@ -456,9 +627,14 @@ function renderAgariWinnerCard(
 
   const summary = document.createElement('div');
   summary.className = 'hub-sub';
+  const totalWithHonba = agari.pointsAwarded + agari.honbaPointsAwarded;
+  const honbaDetail =
+    agari.honbaPointsAwarded > 0
+      ? ` + 本場 ${agari.honbaPointsAwarded.toLocaleString()}点 = 計 ${totalWithHonba.toLocaleString()}点`
+      : '';
   summary.textContent = agari.isYakuman
-    ? `${agari.scoreLabel}（${agari.pointsAwarded.toLocaleString()}点）`
-    : `${agari.han}翻 ${agari.fu}符 — ${agari.scoreLabel}（${agari.pointsAwarded.toLocaleString()}点）`;
+    ? `${agari.scoreLabel}（${agari.pointsAwarded.toLocaleString()}点${honbaDetail}）`
+    : `${agari.han}翻 ${agari.fu}符 — ${agari.scoreLabel}（${agari.pointsAwarded.toLocaleString()}点${honbaDetail}）`;
   card.appendChild(summary);
 
   return card;
@@ -477,7 +653,7 @@ function renderCenterHub(view: StateView): HTMLElement {
   const roundLabel = document.createElement('div');
   roundLabel.className = 'round-label';
   roundLabel.textContent = round
-    ? formatRoundName(round.roundWind, round.kyokuNumber)
+    ? formatRoundName(round.roundWind, round.kyokuNumber, round.honba)
     : '対局';
 
   const wallCounter = document.createElement('div');
@@ -487,6 +663,13 @@ function renderCenterHub(view: StateView): HTMLElement {
     : '';
 
   hub.append(roundLabel, wallCounter);
+
+  if (round && !rules.honbaBonus && round.honba > 0) {
+    const honbaNote = document.createElement('div');
+    honbaNote.className = 'honba-note';
+    honbaNote.textContent = '本場加算なしルール';
+    hub.appendChild(honbaNote);
+  }
 
   if (round) {
     const doraWrap = document.createElement('div');
@@ -1101,10 +1284,9 @@ function buildScoreTable(
   initialPoints: number,
   ranked = false,
   roundScoreDeltas?: Record<string, number>,
+  initialDealerIndex = 0,
 ): HTMLElement {
-  const list = ranked
-    ? [...players].sort((a, b) => b.score - a.score || a.seatIndex - b.seatIndex)
-    : players;
+  const list = ranked ? rankPlayers(players, initialDealerIndex) : players;
 
   const hasRoundDelta =
     roundScoreDeltas !== undefined && Object.keys(roundScoreDeltas).length > 0;
@@ -1173,8 +1355,24 @@ function renderFinishedScreen(
   const hasTobi = view.players.some((p) => p.score < 0);
   title.textContent = `終局 — ${view.ruleConfig.playerCount}人 ${lengthJa} 最終結果${hasTobi ? '（トビ終了）' : ''}`;
 
-  const table = buildScoreTable(view.players, initialPoints, true);
+  const table = buildScoreTable(
+    view.players,
+    initialPoints,
+    true,
+    undefined,
+    view.initialDealerIndex,
+  );
   panel.append(title, table);
+
+  if (view.finalKyotakuAward) {
+    const awardPlayer = view.players.find(
+      (p) => p.playerId === view.finalKyotakuAward!.playerId,
+    );
+    const awardNote = document.createElement('div');
+    awardNote.className = 'kyotaku-award-note';
+    awardNote.textContent = `終局時残供託加算: ${awardPlayer?.name ?? view.finalKyotakuAward.playerId} に +${view.finalKyotakuAward.points.toLocaleString()}点 を加算しました（同点時は起家に近い席が上位）。`;
+    panel.appendChild(awardNote);
+  }
 
   if (view.kyotakuCount > 0) {
     const rules = deriveRules(view.ruleConfig);

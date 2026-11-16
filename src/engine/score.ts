@@ -1,4 +1,9 @@
-import type { DerivedRules, PlayerCount, Wind } from '../types/rule';
+import {
+  HONBA_POINTS_BY_PLAYERS,
+  type DerivedRules,
+  type PlayerCount,
+  type Wind,
+} from '../types/rule';
 import type { Meld, YakuEntry } from '../types/state';
 import type { Tile, TileKind } from '../types/tile';
 import {
@@ -38,6 +43,7 @@ export interface ScoreEvaluationParams {
   isChiihou?: boolean;
   winnerSeatIndex: number;
   fromSeatIndex: number | null;
+  honba?: number;
   rules: DerivedRules;
 }
 
@@ -59,7 +65,8 @@ export interface AgariScoreResult {
   basePoints: number;
   scoreLabel: string;
   pointsAwarded: number;
-  /** 席番号(0..playerCount-1)ごとの点棒増減 */
+  honbaPointsAwarded: number;
+  /** 席番号(0..playerCount-1)ごとの点棒増減（本場加算を含む） */
   deltasBySeat: number[];
 }
 
@@ -199,7 +206,10 @@ export function calculatePaymentDeltas(params: {
   isDealer: boolean;
   isTsumo: boolean;
   tsumoLoss: boolean;
-}): { pointsAwarded: number; deltasBySeat: number[] } {
+  honba?: number;
+  honbaBonus?: boolean;
+  honbaPointsPerStick?: number;
+}): { pointsAwarded: number; honbaPointsAwarded: number; deltasBySeat: number[] } {
   const {
     playerCount,
     dealerIndex,
@@ -209,22 +219,35 @@ export function calculatePaymentDeltas(params: {
     isDealer,
     isTsumo,
     tsumoLoss,
+    honba = 0,
+    honbaBonus = true,
+    honbaPointsPerStick = HONBA_POINTS_BY_PLAYERS[playerCount],
   } = params;
 
   const deltas = new Array<number>(playerCount).fill(0);
+  const honbaPointsAwarded =
+    honbaBonus && honba > 0 ? honba * honbaPointsPerStick : 0;
 
   if (!isTsumo) {
     if (fromSeatIndex === null) {
       throw new Error('Ron payment requires fromSeatIndex');
     }
     const ronPoints = ceilTo100(basePoints * (isDealer ? 6 : 4));
-    deltas[winnerSeatIndex] = ronPoints;
-    deltas[fromSeatIndex] = -ronPoints;
-    return { pointsAwarded: ronPoints, deltasBySeat: deltas };
+    deltas[winnerSeatIndex] = ronPoints + honbaPointsAwarded;
+    deltas[fromSeatIndex] = -(ronPoints + honbaPointsAwarded);
+    return {
+      pointsAwarded: ronPoints,
+      honbaPointsAwarded,
+      deltasBySeat: deltas,
+    };
   }
 
   // ツモ支払い
   let totalAwarded = 0;
+  const payerCount = playerCount - 1;
+  const eachHonbaPay =
+    honbaPointsAwarded > 0 ? Math.floor(honbaPointsAwarded / payerCount) : 0;
+
   if (isDealer) {
     const baseChildPay = ceilTo100(basePoints * 2);
     const sanmaExtra =
@@ -233,11 +256,15 @@ export function calculatePaymentDeltas(params: {
 
     for (let seat = 0; seat < playerCount; seat++) {
       if (seat === winnerSeatIndex) continue;
-      deltas[seat] = -eachPay;
+      deltas[seat] = -(eachPay + eachHonbaPay);
       totalAwarded += eachPay;
     }
-    deltas[winnerSeatIndex] = totalAwarded;
-    return { pointsAwarded: totalAwarded, deltasBySeat: deltas };
+    deltas[winnerSeatIndex] = totalAwarded + eachHonbaPay * payerCount;
+    return {
+      pointsAwarded: totalAwarded,
+      honbaPointsAwarded: eachHonbaPay * payerCount,
+      deltasBySeat: deltas,
+    };
   }
 
   // 子のツモ
@@ -250,11 +277,15 @@ export function calculatePaymentDeltas(params: {
     if (seat === winnerSeatIndex) continue;
     const pay =
       (seat === dealerIndex ? baseDealerPay : baseChildPay) + sanmaExtra;
-    deltas[seat] = -pay;
+    deltas[seat] = -(pay + eachHonbaPay);
     totalAwarded += pay;
   }
-  deltas[winnerSeatIndex] = totalAwarded;
-  return { pointsAwarded: totalAwarded, deltasBySeat: deltas };
+  deltas[winnerSeatIndex] = totalAwarded + eachHonbaPay * payerCount;
+  return {
+    pointsAwarded: totalAwarded,
+    honbaPointsAwarded: eachHonbaPay * payerCount,
+    deltasBySeat: deltas,
+  };
 }
 
 function hasAnyNonDoraYakuForWaitKind(
@@ -330,6 +361,7 @@ export function evaluateBestAgari(
     dealerIndex,
     winnerSeatIndex,
     fromSeatIndex,
+    honba = 0,
     rules,
   } = params;
 
@@ -416,6 +448,9 @@ export function evaluateBestAgari(
       isDealer,
       isTsumo,
       tsumoLoss: rules.tsumoLoss,
+      honba,
+      honbaBonus: rules.honbaBonus,
+      honbaPointsPerStick: rules.honbaPointsPerStick,
     });
 
     const candidate: AgariScoreResult = {
@@ -431,6 +466,7 @@ export function evaluateBestAgari(
       basePoints,
       scoreLabel,
       pointsAwarded: payment.pointsAwarded,
+      honbaPointsAwarded: payment.honbaPointsAwarded,
       deltasBySeat: payment.deltasBySeat,
     };
 
