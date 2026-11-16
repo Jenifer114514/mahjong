@@ -11,6 +11,7 @@ import {
   type LobbyFormState,
 } from './ui/lobbyView';
 import { renderGameTable } from './ui/tableView';
+import { prewarmTileSpriteSheet, waitForTileFonts } from './ui/tileTexture';
 import {
   createRotateOverlay,
   shouldBlockForOrientation,
@@ -37,6 +38,18 @@ class MahjongApp {
   private countdownTimerId: ReturnType<typeof setInterval> | null = null;
 
   private readonly formState: LobbyFormState;
+  /** 牌面スプライトシートの準備完了後に一度だけ再描画するためのフラグ */
+  private tileFacesRefreshed = false;
+
+  /**
+   * 牌面スプライトシートの準備ができたタイミングで画面を作り直す。
+   * 初回描画がテキスト牌で行われていても、ここで画像牌に差し替わる。
+   */
+  refreshTileFaces(): void {
+    if (this.tileFacesRefreshed) return;
+    this.tileFacesRefreshed = true;
+    this.render();
+  }
 
   constructor(root: HTMLElement) {
     this.root = root;
@@ -311,6 +324,15 @@ class MahjongApp {
     fn(this.activeSession.session);
   }
 
+  /** 対局中に卓上から部屋を抜ける（誤タップ防止のため確認する） */
+  private confirmLeaveGame(): void {
+    const ok =
+      typeof window === 'undefined' ||
+      typeof window.confirm !== 'function' ||
+      window.confirm('対局を離れてロビーに戻りますか？（進行状況は失われます）');
+    if (ok) this.returnToLobby();
+  }
+
   /** 縦持ち時に対局画面をローテーション案内で覆う（ロビーでは表示しない） */
   private syncOrientationOverlay(): void {
     const existing = document.querySelector('.rotate-overlay');
@@ -333,12 +355,16 @@ class MahjongApp {
   private render(): void {
     this.root.innerHTML = '';
 
-    const shell = document.createElement('div');
-    shell.className = 'app-shell';
+    // 対局中は「雀卓だけ」を表示する（トップバーやサイドパネルを出さない）
+    const inGame =
+      this.currentView !== null && this.currentView.phase !== 'lobby';
 
-    // Top bar
+    const shell = document.createElement('div');
+    shell.className = inGame ? 'app-shell app-shell-table-only' : 'app-shell';
+
+    // Top bar（対局中は出さない）
     const topBar = document.createElement('header');
-    topBar.className = 'top-bar';
+    topBar.className = inGame ? 'top-bar is-hidden-in-game' : 'top-bar';
 
     const title = document.createElement('div');
     title.className = 'app-title';
@@ -417,6 +443,7 @@ class MahjongApp {
     }
 
     const content = document.createElement('main');
+    if (inGame) content.className = 'table-only-main';
     shell.appendChild(content);
 
     const view = this.currentView;
@@ -440,6 +467,9 @@ class MahjongApp {
         content,
         view,
         {
+          // 対局中はトップバーを出さないので、離脱手段は卓上に置く
+          canLeaveGame: Boolean(this.activeSession),
+          onLeaveGame: () => this.confirmLeaveGame(),
           onDiscardTile: (tileId) => {
             this.stopAutoTsumogiriTimer();
             this.dispatchAction((s) => s.discardTile(tileId));
@@ -508,4 +538,13 @@ const rootEl = document.getElementById('app');
 if (!rootEl) {
   throw new Error('#app element not found');
 }
-new MahjongApp(rootEl);
+
+const app = new MahjongApp(rootEl);
+
+// 牌面のスプライトシートはフォント読み込み後に作る。
+// 先に描くと CJK 非対応の serif にフォールバックした字形が焼き込まれてしまう。
+// 失敗しても牌はテキスト描画にフォールバックするので、対局は止まらない。
+void waitForTileFonts().then(() => {
+  prewarmTileSpriteSheet();
+  app.refreshTileFaces();
+});

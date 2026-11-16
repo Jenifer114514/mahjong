@@ -1,5 +1,13 @@
 import type { Wind } from '../types/rule';
 import type { Tile, TileKind } from '../types/tile';
+import {
+  createTileSpriteSheet,
+  getPrewarmedTileSpriteSheet,
+  SPRITE_COLUMNS,
+  SPRITE_ROWS,
+  TILE_FACE_ASPECT,
+  type TileSpriteSheet,
+} from './tileTexture';
 
 const KANJI_NUMBERS = ['', '一', '二', '三', '四', '五', '六', '七', '八', '九'] as const;
 
@@ -58,6 +66,66 @@ export interface TileElementOptions {
   onClick?: () => void;
 }
 
+/**
+ * DOM 牌のアトラス（スプライトシート）。
+ * 初回だけ生成し、以降は全牌で同じ data URL の canvas を共有する。
+ * canvas 2D が使えない環境（jsdom / SSR）では null のままで、
+ * 従来どおり文字（一萬・5筒 など）で描くフォールバックに切り替わる。
+ */
+let spriteSheet: TileSpriteSheet | null = null;
+let spriteSheetTried = false;
+
+/** スプライトシートのセル高さ（CSS px）。`.mj-tile` の高さに合わせる。 */
+const SPRITE_CELL_HEIGHT = 54;
+/** `.mj-tile-sm` の高さ */
+const SPRITE_CELL_SMALL_HEIGHT = 40;
+
+function getSpriteSheet(): TileSpriteSheet | null {
+  // 事前生成済み（フォント読み込み後に生成されたもの）を優先して使う
+  const prewarmed = getPrewarmedTileSpriteSheet();
+  if (prewarmed) return prewarmed;
+
+  if (spriteSheetTried) return spriteSheet;
+  spriteSheetTried = true;
+  if (typeof document === 'undefined') return null;
+
+  const dpr =
+    typeof window !== 'undefined' && Number.isFinite(window.devicePixelRatio)
+      ? Math.min(window.devicePixelRatio || 1, 3)
+      : 1;
+
+  spriteSheet = createTileSpriteSheet({
+    cellHeight: Math.round(SPRITE_CELL_HEIGHT * dpr),
+  });
+  return spriteSheet;
+}
+
+/**
+ * 牌面を canvas 画像で描く。使えない場合は false を返し、呼び出し側が文字描画に落ちる。
+ * スプライトシートは 1 枚を共有し、牌ごとに background-position / background-size だけを変える。
+ */
+function applyTileFaceImage(el: HTMLElement, tile: Tile, small: boolean): boolean {
+  const sheet = getSpriteSheet();
+  if (!sheet) return false;
+
+  const position = sheet.getPosition(tile.kind, tile.isRed);
+  if (!position) return false;
+
+  // 表示上のセルサイズ（CSS px）から、シート px → CSS px の縮尺を出す
+  const cssCellHeight = small ? SPRITE_CELL_SMALL_HEIGHT : SPRITE_CELL_HEIGHT;
+  const cssCellWidth = cssCellHeight * TILE_FACE_ASPECT;
+  const ratio = cssCellHeight / sheet.cellHeight;
+
+  el.classList.add('mj-tile-face');
+  el.style.backgroundImage = `url("${sheet.imageUrl}")`;
+  el.style.backgroundSize = `${cssCellWidth * SPRITE_COLUMNS}px ${
+    cssCellHeight * SPRITE_ROWS
+  }px`;
+  el.style.backgroundPosition = `-${position.x * ratio}px -${position.y * ratio}px`;
+  el.style.backgroundRepeat = 'no-repeat';
+  return true;
+}
+
 export function createTileElement(
   tile: Tile,
   options: TileElementOptions = {},
@@ -90,6 +158,19 @@ export function createTileElement(
   el.setAttribute('aria-label', formatTileLabel(tile.kind));
   el.dataset.tileId = tile.id;
   el.dataset.tileKind = tile.kind;
+  if (tile.isRed) el.classList.add('mj-tile-red');
+
+  if (applyTileFaceImage(el, tile, Boolean(options.small))) {
+    const face = document.createElement('span');
+    face.className = 'mj-tile-face-alt';
+    face.textContent = formatTileLabel(tile.kind);
+    el.appendChild(face);
+
+    if (options.clickable && !options.disabled && options.onClick) {
+      el.addEventListener('click', options.onClick);
+    }
+    return el;
+  }
 
   if (tile.kind.endsWith('z')) {
     const honor = HONOR_LABELS[tile.kind] ?? {

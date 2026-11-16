@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>牌テクスチャ プレビュー</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --felt: #0f3b30;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 24px;
+        background: radial-gradient(circle at 50% 0%, #14493c 0%, #07110e 70%);
+        color: #e8f1ed;
+        font-family: 'Hiragino Kaku Gothic ProN', 'Yu Gothic UI', 'Noto Sans JP',
+          sans-serif;
+      }
+      h1 {
+        margin: 0 0 4px;
+        font-size: 20px;
+        letter-spacing: 0.04em;
+      }
+      p.lead {
+        margin: 0 0 20px;
+        color: #9fb8b0;
+        font-size: 13px;
+        line-height: 1.7;
+      }
+      .panel {
+        margin-bottom: 24px;
+        padding: 16px;
+        border: 1px solid rgba(212, 175, 55, 0.28);
+        border-radius: 12px;
+        background: rgba(6, 20, 17, 0.7);
+      }
+      .panel h2 {
+        margin: 0 0 12px;
+        font-size: 14px;
+        color: #f0c95c;
+        letter-spacing: 0.06em;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
+        gap: 8px;
+      }
+      .grid canvas {
+        width: 100%;
+        height: auto;
+        border-radius: 6px;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.45), inset 0 0 0 1px rgba(0, 0, 0, 0.2);
+      }
+      .atlas-wrap {
+        overflow: auto;
+        border-radius: 8px;
+        background: var(--felt);
+        padding: 8px;
+      }
+      .atlas-wrap canvas {
+        display: block;
+        width: min(100%, 1024px);
+        height: auto;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .row canvas {
+        width: 72px;
+        height: auto;
+        border-radius: 6px;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
+      }
+      .row canvas.big {
+        width: 132px;
+      }
+      .meta {
+        margin-top: 10px;
+        font-size: 12px;
+        color: #8ea7a0;
+      }
+      code {
+        color: #f0c95c;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>牌テクスチャ プレビュー（改善版）</h1>
+    <p class="lead">
+      Notion「麻雀アプリ 3D牌生成・操作エンジン」の <code>mahjong-engine.js</code> の
+      テクスチャ生成を作り直したもの。<code>src/ui/tileTexture.ts</code> を直接読み込んで
+      実寸で描画しています。このページは開発用で、アプリ本体のバンドルには含まれません。
+    </p>
+
+    <div class="panel">
+      <h2>牌面（実寸 / DPR 対応）</h2>
+      <div class="grid" id="faces"></div>
+      <div class="meta" id="faces-meta"></div>
+    </div>
+
+    <div class="panel">
+      <h2>アトラス 1 枚（2048×2048・37 セル）</h2>
+      <div class="atlas-wrap"><canvas id="atlas"></canvas></div>
+      <div class="meta" id="atlas-meta"></div>
+    </div>
+
+    <div class="panel">
+      <h2>DOM 用スプライトシート（アプリ本体で使用中）</h2>
+      <div class="row" id="dom-tiles"></div>
+      <div class="meta" id="dom-meta"></div>
+    </div>
+
+    <div class="panel">
+      <h2>牌裏</h2>
+      <div class="row" id="backs"></div>
+    </div>
+
+    <div class="panel">
+      <h2>拡大（彫刻の陰影と輪郭の確認）</h2>
+      <div class="row" id="zoom"></div>
+    </div>
+
+    <script type="module">
+      import {
+        TILE_FACE_ASPECT,
+        createTileAtlas,
+        createTileBackCanvas,
+        createTileFaceCanvas,
+        waitForTileFonts,
+      } from '/src/ui/tileTexture.ts';
+
+      const dpr = Math.min(window.devicePixelRatio || 1, 3);
+
+      const FACES = [
+        ['1m', '2m', '3m', '4m', '5m', '6m', '7m', '8m', '9m'],
+        ['1p', '2p', '3p', '4p', '5p', '6p', '7p', '8p', '9p'],
+        ['1s', '2s', '3s', '4s', '5s', '6s', '7s', '8s', '9s'],
+        ['1z', '2z', '3z', '4z', '5z', '6z', '7z'],
+      ].flat();
+
+      function mountFace(kind, isRed, height) {
+        const canvas = createTileFaceCanvas(kind, {
+          height: Math.round(height * dpr),
+          isRed,
+        });
+        canvas.style.width = `${Math.round(height * TILE_FACE_ASPECT)}px`;
+        canvas.style.height = `${height}px`;
+        return canvas;
+      }
+
+      async function main() {
+        await waitForTileFonts();
+
+        const faces = document.getElementById('faces');
+        for (const kind of FACES) {
+          const canvas = mountFace(kind, false, 96);
+          canvas.title = kind;
+          faces.appendChild(canvas);
+        }
+        for (const kind of ['5m', '5p', '5s']) {
+          const canvas = mountFace(kind, true, 96);
+          canvas.title = `${kind} (赤)`;
+          faces.appendChild(canvas);
+        }
+        document.getElementById('faces-meta').textContent =
+          `DPR ${dpr} / 実際の解像度: ${Math.round(96 * TILE_FACE_ASPECT * dpr)}×${Math.round(96 * dpr)}px / アスペクト ${TILE_FACE_ASPECT}`;
+
+        const atlas = createTileAtlas({ size: 2048, columns: 8 });
+        const atlasCanvas = document.getElementById('atlas');
+        atlasCanvas.width = atlas.size;
+        atlasCanvas.height = atlas.size;
+        atlasCanvas.getContext('2d').drawImage(atlas.canvas, 0, 0);
+        document.getElementById('atlas-meta').textContent =
+          `${atlas.size}×${atlas.size} / ${atlas.cells.length} セル / ` +
+          `理論メモリ ${((atlas.size * atlas.size * 4) / 1024 / 1024).toFixed(1)}MB（ミップマップ込み約 ` +
+          `${((atlas.size * atlas.size * 4 * 1.33) / 1024 / 1024).toFixed(1)}MB）`;
+
+        const backs = document.getElementById('backs');
+        for (const h of [96, 160]) {
+          const back = createTileBackCanvas({ height: Math.round(h * dpr) });
+          back.style.width = `${Math.round(h * TILE_FACE_ASPECT)}px`;
+          back.style.height = `${h}px`;
+          backs.appendChild(back);
+        }
+
+        const zoom = document.getElementById('zoom');
+        for (const kind of ['1m', '5m', '1p', '5p', '1s', '7s', '1z', '6z']) {
+          const canvas = mountFace(kind, false, 220);
+          zoom.appendChild(canvas);
+        }
+        zoom.lastElementChild?.classList.add('big');
+      }
+
+      async function renderDomSprites() {
+        const { createTileElement } = await import('/src/ui/tileView.ts');
+        const { prewarmTileSpriteSheet } = await import('/src/ui/tileTexture.ts');
+        prewarmTileSpriteSheet();
+
+        const host = document.getElementById('dom-tiles');
+        const kinds = [
+          '1m', '5m', '9m', '1p', '5p', '1s', '7s', '1z', '5z', '6z', '7z',
+        ];
+        for (const kind of kinds) {
+          host.appendChild(
+            createTileElement({ id: `${kind}-0`, kind, isRed: false }),
+          );
+        }
+        host.appendChild(
+          createTileElement({ id: '5m-red', kind: '5m', isRed: true }),
+        );
+        document.getElementById('dom-meta').textContent =
+          'アプリ本体と同じ createTileElement() の出力。スプライトシート 1 枚を全牌で共有している。';
+      }
+
+      main().then(renderDomSprites);
+    </script>
+  </body>
+</html>

@@ -70,7 +70,11 @@ describe('アプリ起動とローカルCPU対局', () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
 
     expect(root.querySelector('.table-stage.is-landscape')).not.toBeNull();
-    expect(root.querySelector('.side-panel')).not.toBeNull();
+    // 対戦中は雀卓だけを表示する（トップバー・サイドパネルなし）
+    expect(root.querySelector('.top-bar.is-hidden-in-game')).not.toBeNull();
+    expect(root.querySelector('.side-panel')).toBeNull();
+    expect(root.querySelector('.table-chrome-leave')).not.toBeNull();
+    expect(root.querySelector('.dora-panel')).not.toBeNull();
     expect(root.querySelectorAll('.cpu-badge').length).toBe(3);
     // 自分の手牌が描画されている
     const handTiles = root.querySelectorAll('.seat-self .hand-area .mj-tile');
