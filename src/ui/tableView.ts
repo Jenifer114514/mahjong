@@ -93,7 +93,7 @@ export function renderGameTable(
   }
 
   const felt = document.createElement('div');
-  felt.className = 'table-felt';
+  felt.className = playerCount === 3 ? 'table-felt is-3p' : 'table-felt';
 
   // 相対座席の割り当て（下:自分、右:下家、上:対面(4人のみ)、左:上家）
   const selfPlayer = view.players.find((p) => p.seatIndex === view.viewerSeatIndex);
@@ -117,10 +117,6 @@ export function renderGameTable(
 
   if (topPlayer) {
     felt.appendChild(renderOpponentSeat('seat-top', topPlayer));
-  } else {
-    const emptyTop = document.createElement('div');
-    emptyTop.className = 'seat-top';
-    felt.appendChild(emptyTop);
   }
 
   if (leftPlayer) {
@@ -490,7 +486,10 @@ function renderRoundEndOverlay(
     overlay.appendChild(waitMsg);
   }
 
-  container.appendChild(overlay);
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.appendChild(overlay);
+  container.appendChild(backdrop);
 }
 
 function renderAgariWinnerCard(
@@ -751,8 +750,16 @@ function renderSeatHeader(
   }
 
   const nameSpan = document.createElement('span');
+  nameSpan.className = 'seat-player-name';
   nameSpan.textContent = isSelf ? `${player.name}（あなた）` : player.name;
   identity.appendChild(nameSpan);
+
+  if (player.isCpu) {
+    const cpuTag = document.createElement('span');
+    cpuTag.className = 'cpu-badge';
+    cpuTag.textContent = 'CPU';
+    identity.appendChild(cpuTag);
+  }
 
   if (player.isDealer) {
     const oya = document.createElement('span');
@@ -888,20 +895,27 @@ function renderOpponentSeat(
 
   box.appendChild(renderSeatHeader(player, false));
 
+  const body = document.createElement('div');
+  body.className = 'opponent-body';
+
+  const backsAndMelds = document.createElement('div');
+  backsAndMelds.className = 'opponent-hand-col';
+
   const backs = document.createElement('div');
   backs.className = 'opponent-back-row';
   const totalVisibleBacks = player.handCount + (player.hasDrawnTile ? 1 : 0);
   for (let i = 0; i < totalVisibleBacks; i++) {
     backs.appendChild(createTileBackElement(true));
   }
-  box.appendChild(backs);
+  backsAndMelds.appendChild(backs);
 
   const meldsEl = renderMeldsAndKita(player);
   if (meldsEl) {
-    box.appendChild(meldsEl);
+    backsAndMelds.appendChild(meldsEl);
   }
 
-  box.appendChild(renderDiscardRiver(player));
+  body.append(backsAndMelds, renderDiscardRiver(player));
+  box.appendChild(body);
   return box;
 }
 
@@ -1125,20 +1139,15 @@ function renderSelfSeat(
   const box = document.createElement('div');
   box.className = `seat-box seat-self${player.isCurrentTurn ? ' is-turn' : ''}`;
 
-  box.appendChild(renderSeatHeader(player, true, view.isFuriten));
-
   const controls = document.createElement('div');
   controls.className = 'self-controls';
 
-  const riverLabel = document.createElement('div');
-  riverLabel.className = 'hub-sub';
-  riverLabel.textContent = 'あなたの捨て牌';
-  controls.append(riverLabel, renderDiscardRiver(player));
+  const metaGrid = document.createElement('div');
+  metaGrid.className = 'self-meta-grid';
 
-  const selfMelds = renderMeldsAndKita(player);
-  if (selfMelds) {
-    controls.appendChild(selfMelds);
-  }
+  const metaLeft = document.createElement('div');
+  metaLeft.className = 'self-meta-left';
+  metaLeft.appendChild(renderSeatHeader(player, true, view.isFuriten));
 
   const isMyTurn = view.phase === 'playing' && player.isCurrentTurn;
   const canDiscardNow =
@@ -1188,11 +1197,11 @@ function renderSelfSeat(
       ? `${current.name} の打牌を待っています...`
       : '待機中...';
   }
-  controls.appendChild(prompt);
+  metaLeft.appendChild(prompt);
 
   const callBar = renderCallResponseBar(view, handlers);
   if (callBar) {
-    controls.appendChild(callBar);
+    metaLeft.appendChild(callBar);
   }
 
   const selfActionsBar = renderSelfTurnActionsBar(
@@ -1203,8 +1212,27 @@ function renderSelfSeat(
     canDiscardNow,
   );
   if (selfActionsBar) {
-    controls.appendChild(selfActionsBar);
+    metaLeft.appendChild(selfActionsBar);
   }
+
+  const metaRight = document.createElement('div');
+  metaRight.className = 'self-meta-right';
+
+  const riverWrap = document.createElement('div');
+  riverWrap.className = 'self-river-wrap';
+  const riverLabel = document.createElement('div');
+  riverLabel.className = 'hub-sub self-river-label';
+  riverLabel.textContent = '河';
+  riverWrap.append(riverLabel, renderDiscardRiver(player));
+  metaRight.appendChild(riverWrap);
+
+  const selfMelds = renderMeldsAndKita(player);
+  if (selfMelds) {
+    metaRight.appendChild(selfMelds);
+  }
+
+  metaGrid.append(metaLeft, metaRight);
+  controls.appendChild(metaGrid);
 
   const forbiddenSet = new Set(canDiscardNow ? view.kuikaeForbiddenKinds : []);
   const handArea = document.createElement('div');
@@ -1346,7 +1374,7 @@ function renderFinishedScreen(
   handlers: TableHandlers,
 ): void {
   const panel = document.createElement('div');
-  panel.className = 'overlay-panel';
+  panel.className = 'overlay-panel is-finished';
 
   const title = document.createElement('h2');
   title.style.margin = '0';

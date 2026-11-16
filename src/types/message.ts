@@ -1,4 +1,4 @@
-import type { RuleConfig, Wind } from './rule';
+import type { CpuLevel, RuleConfig, Wind } from './rule';
 import type {
   AbortiveDrawReason,
   CallOptions,
@@ -19,6 +19,8 @@ export type Action =
       type: 'JOIN_PLAYER';
       playerId: string;
       name: string;
+      isCpu?: boolean;
+      cpuLevel?: CpuLevel;
     }
   | {
       type: 'LEAVE_LOBBY';
@@ -111,6 +113,8 @@ export interface PublicPlayerView {
   isRiichi: boolean;
   isDoubleRiichi: boolean;
   connected: boolean;
+  isCpu: boolean;
+  cpuLevel?: CpuLevel;
 }
 
 export interface RoundView {

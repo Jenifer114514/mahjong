@@ -1,4 +1,8 @@
 import Peer, { type DataConnection } from 'peerjs';
+import {
+  decideCpuCallResponse,
+  decideCpuTurnAction,
+} from '../engine/cpu';
 import { toStateView } from '../engine/projection';
 import { applyAction, createInitialGameState } from '../engine/reducer';
 import { deriveRules } from '../engine/rules';
@@ -22,21 +26,36 @@ export interface HostSessionCallbacks {
   onError: (error: GameError) => void;
 }
 
+export interface HostSessionOptions {
+  disablePeer?: boolean;
+  cpuTurnDelayMs?: number;
+  cpuResponseDelayMs?: number;
+}
+
 export class HostSession {
   private peer: Peer | null = null;
   private state: GameState;
   private readonly connections = new Map<string, DataConnection>();
   private readonly callbacks: HostSessionCallbacks;
+  private readonly options: Required<HostSessionOptions>;
   private destroyed = false;
   private idRetryCount = 0;
+  private nextCpuSeq = 1;
   private responseTimerId: ReturnType<typeof setTimeout> | null = null;
+  private cpuTimerIds: ReturnType<typeof setTimeout>[] = [];
 
   constructor(
     hostName: string,
     ruleConfig: RuleConfig,
     callbacks: HostSessionCallbacks,
+    options: HostSessionOptions = {},
   ) {
     this.callbacks = callbacks;
+    this.options = {
+      disablePeer: options.disablePeer ?? false,
+      cpuTurnDelayMs: options.cpuTurnDelayMs ?? 420,
+      cpuResponseDelayMs: options.cpuResponseDelayMs ?? 220,
+    };
     const roomCode = generateRoomCode();
     const hostPeerId = roomCodeToPeerId(roomCode);
     this.state = createInitialGameState({
@@ -53,6 +72,12 @@ export class HostSession {
 
   start(): void {
     if (this.destroyed) return;
+    // PeerJS シグナリング前でもロビー画面と CPU 対戦操作を即座に使えるようにする
+    this.emitHostView();
+    if (this.options.disablePeer) {
+      this.callbacks.onStatusChange('ready', 'ローカル対戦モード');
+      return;
+    }
     this.callbacks.onStatusChange('initializing', 'PeerJS サーバーに接続中...');
     this.openPeerWithCurrentRoomCode();
   }
@@ -70,13 +95,15 @@ export class HostSession {
         return;
       }
       opened = true;
-      this.state = {
-        ...this.state,
-        hostPlayerId: id,
-        players: this.state.players.map((p, idx) =>
-          idx === 0 ? { ...p, playerId: id } : p,
-        ),
-      };
+      if (this.state.phase === 'lobby' && this.state.hostPlayerId !== id) {
+        this.state = {
+          ...this.state,
+          hostPlayerId: id,
+          players: this.state.players.map((p, idx) =>
+            idx === 0 ? { ...p, playerId: id } : p,
+          ),
+        };
+      }
       this.callbacks.onStatusChange('ready', '参加者待機中');
       this.emitHostView();
     });
@@ -91,7 +118,12 @@ export class HostSession {
 
     peer.on('error', (err) => {
       if (this.destroyed) return;
-      if (!opened && err.type === 'unavailable-id' && this.idRetryCount < 5) {
+      if (
+        !opened &&
+        this.state.phase === 'lobby' &&
+        err.type === 'unavailable-id' &&
+        this.idRetryCount < 5
+      ) {
         this.idRetryCount++;
         peer.destroy();
         const nextCode = generateRoomCode();
@@ -104,13 +136,14 @@ export class HostSession {
             idx === 0 ? { ...p, playerId: nextHostId } : p,
           ),
         };
+        this.emitHostView();
         this.openPeerWithCurrentRoomCode();
         return;
       }
 
       this.callbacks.onStatusChange(
         'error',
-        `接続エラー (${err.type}): ${err.message}`,
+        `通信待機オフライン (${err.type}) — CPU対戦はそのまま利用できます`,
       );
     });
 
@@ -118,7 +151,7 @@ export class HostSession {
       if (!this.destroyed && !peer.destroyed) {
         this.callbacks.onStatusChange(
           'error',
-          'シグナリングサーバーから切断されました',
+          'シグナリングサーバーから切断されました（CPU対戦は継続可能）',
         );
       }
     });
@@ -401,10 +434,251 @@ export class HostSession {
     });
   }
 
+  private getNextCpuDisplayName(existingNames: readonly string[]): string {
+    const used = new Set(existingNames);
+    for (let i = 1; i <= 4; i++) {
+      const candidate = `CPU ${i}`;
+      if (!used.has(candidate)) {
+        return candidate;
+      }
+    }
+    return `CPU ${existingNames.length + 1}`;
+  }
+
+  private maybeStartIfLobbyFull(candidateState: GameState): GameState {
+    const rules = deriveRules(candidateState.ruleConfig);
+    if (
+      candidateState.phase !== 'lobby' ||
+      candidateState.players.length !== rules.playerCount
+    ) {
+      return candidateState;
+    }
+    const shuffledPlayerIds = shuffleWithCrypto(
+      candidateState.players.map((p) => p.playerId),
+    );
+    const shuffledDeck = shuffleWithCrypto(buildTileDeck(rules));
+    const startResult = applyAction(candidateState, {
+      type: 'START_GAME',
+      shuffledDeck,
+      shuffledPlayerIds,
+    });
+    return startResult.error ? candidateState : startResult.state;
+  }
+
+  addCpuPlayer(): void {
+    if (this.destroyed || this.state.phase !== 'lobby') return;
+    const rules = deriveRules(this.state.ruleConfig);
+    if (this.state.players.length >= rules.playerCount) return;
+
+    const cpuId = `cpu-${this.nextCpuSeq++}`;
+    const name = this.getNextCpuDisplayName(
+      this.state.players.map((p) => p.name),
+    );
+    const joinResult = applyAction(this.state, {
+      type: 'JOIN_PLAYER',
+      playerId: cpuId,
+      name,
+      isCpu: true,
+      cpuLevel: rules.cpuLevel,
+    });
+    if (joinResult.error) {
+      this.callbacks.onError(joinResult.error);
+      return;
+    }
+    const nextState = this.maybeStartIfLobbyFull(joinResult.state);
+    this.commitState(nextState);
+  }
+
+  removeCpuPlayer(playerId: string): void {
+    if (this.destroyed || this.state.phase !== 'lobby') return;
+    const target = this.state.players.find((p) => p.playerId === playerId);
+    if (!target || !target.isCpu) return;
+    this.dispatchHostAction({
+      type: 'LEAVE_LOBBY',
+      playerId,
+    });
+  }
+
+  fillWithCpusAndStart(): void {
+    if (this.destroyed || this.state.phase !== 'lobby') return;
+    const rules = deriveRules(this.state.ruleConfig);
+    let nextState = this.state;
+
+    while (nextState.players.length < rules.playerCount) {
+      const cpuId = `cpu-${this.nextCpuSeq++}`;
+      const name = this.getNextCpuDisplayName(
+        nextState.players.map((p) => p.name),
+      );
+      const joinResult = applyAction(nextState, {
+        type: 'JOIN_PLAYER',
+        playerId: cpuId,
+        name,
+        isCpu: true,
+        cpuLevel: rules.cpuLevel,
+      });
+      if (joinResult.error) {
+        this.callbacks.onError(joinResult.error);
+        return;
+      }
+      nextState = joinResult.state;
+    }
+
+    nextState = this.maybeStartIfLobbyFull(nextState);
+    this.commitState(nextState);
+  }
+
   private commitState(nextState: GameState): void {
+    this.clearCpuTimers();
     this.state = nextState;
     this.syncResponseTimer();
     this.broadcastViews();
+    this.scheduleCpuActionsIfNeeded();
+  }
+
+  private clearCpuTimers(): void {
+    for (const id of this.cpuTimerIds) {
+      clearTimeout(id);
+    }
+    this.cpuTimerIds = [];
+  }
+
+  private attachNowTimestamp(action: Action): Action {
+    const now = Date.now();
+    switch (action.type) {
+      case 'DISCARD_TILE':
+      case 'DECLARE_RIICHI':
+      case 'DECLARE_ANKAN':
+      case 'DECLARE_KAKAN':
+        return { ...action, now };
+      default:
+        return action;
+    }
+  }
+
+  private scheduleCpuActionsIfNeeded(): void {
+    if (this.destroyed || !this.state.round) return;
+    const rules = deriveRules(this.state.ruleConfig);
+
+    if (this.state.phase === 'playing') {
+      const round = this.state.round;
+      const activePlayer = this.state.players.find(
+        (p) => p.seatIndex === round.currentTurnIndex,
+      );
+      if (!activePlayer || !activePlayer.isCpu) return;
+
+      const expectedTurnCount = round.turnCount;
+      const expectedPlayerId = activePlayer.playerId;
+
+      const timerId = setTimeout(() => {
+        if (this.destroyed || this.state.phase !== 'playing' || !this.state.round) {
+          return;
+        }
+        const curPlayer = this.state.players.find(
+          (p) => p.seatIndex === this.state.round!.currentTurnIndex,
+        );
+        if (
+          this.state.round.turnCount !== expectedTurnCount ||
+          !curPlayer ||
+          curPlayer.playerId !== expectedPlayerId ||
+          !curPlayer.isCpu
+        ) {
+          return;
+        }
+
+        const rawAction = decideCpuTurnAction(this.state, curPlayer, rules);
+        let result = applyAction(this.state, this.attachNowTimestamp(rawAction));
+
+        // 万一のフォールバック: 必ず合法な打牌で進行を止めない
+        if (result.error) {
+          const fallbackTile = curPlayer.drawnTile ?? curPlayer.hand[0];
+          if (fallbackTile) {
+            result = applyAction(this.state, {
+              type: 'DISCARD_TILE',
+              playerId: curPlayer.playerId,
+              tileId: fallbackTile.id,
+              now: Date.now(),
+            });
+          }
+        }
+
+        if (!result.error) {
+          this.commitState(result.state);
+        }
+      }, this.options.cpuTurnDelayMs);
+
+      this.cpuTimerIds.push(timerId);
+      return;
+    }
+
+    if (
+      this.state.phase === 'awaiting_responses' &&
+      this.state.round.pendingResponse
+    ) {
+      const pending = this.state.round.pendingResponse;
+      const unrespondedCpuIds = Object.keys(pending.optionsByPlayerId).filter(
+        (pid) => {
+          if (pid in pending.responses) return false;
+          const player = this.state.players.find((p) => p.playerId === pid);
+          return Boolean(player?.isCpu);
+        },
+      );
+      if (unrespondedCpuIds.length === 0) return;
+
+      const expectedTurnCount = pending.turnCount;
+
+      const timerId = setTimeout(() => {
+        if (
+          this.destroyed ||
+          this.state.phase !== 'awaiting_responses' ||
+          !this.state.round?.pendingResponse ||
+          this.state.round.pendingResponse.turnCount !== expectedTurnCount
+        ) {
+          return;
+        }
+
+        let nextState = this.state;
+        let changed = false;
+
+        for (const cpuId of unrespondedCpuIds) {
+          if (
+            nextState.phase !== 'awaiting_responses' ||
+            !nextState.round?.pendingResponse
+          ) {
+            break;
+          }
+          const curPending = nextState.round.pendingResponse;
+          if (cpuId in curPending.responses) continue;
+          const opts = curPending.optionsByPlayerId[cpuId];
+          const cpuPlayer = nextState.players.find((p) => p.playerId === cpuId);
+          if (!opts || !cpuPlayer || !cpuPlayer.isCpu) continue;
+
+          let choice = decideCpuCallResponse(nextState, cpuPlayer, opts, rules);
+          let res = applyAction(nextState, {
+            type: 'CALL_RESPONSE',
+            playerId: cpuId,
+            choice,
+          });
+          if (res.error) {
+            choice = { type: 'pass' };
+            res = applyAction(nextState, {
+              type: 'CALL_RESPONSE',
+              playerId: cpuId,
+              choice,
+            });
+          }
+          if (!res.error) {
+            nextState = res.state;
+            changed = true;
+          }
+        }
+
+        if (changed) {
+          this.commitState(nextState);
+        }
+      }, this.options.cpuResponseDelayMs);
+
+      this.cpuTimerIds.push(timerId);
+    }
   }
 
   private clearResponseTimer(): void {
@@ -461,7 +735,9 @@ export class HostSession {
       toStateView(this.state, this.state.hostPlayerId, now),
     );
     for (const player of this.state.players) {
-      if (player.playerId === this.state.hostPlayerId) continue;
+      if (player.playerId === this.state.hostPlayerId || player.isCpu) {
+        continue;
+      }
       const conn = this.connections.get(player.playerId);
       if (conn && conn.open) {
         this.sendToConn(conn, {
@@ -485,6 +761,7 @@ export class HostSession {
     if (this.destroyed) return;
     this.destroyed = true;
     this.clearResponseTimer();
+    this.clearCpuTimers();
     for (const conn of this.connections.values()) {
       conn.close();
     }

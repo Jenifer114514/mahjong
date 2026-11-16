@@ -41,6 +41,7 @@ class MahjongApp {
       playerName: '',
       playerCount: 4,
       gameLength: 'tonpuu',
+      cpuLevel: 'normal',
       tobi: true,
       tsumoLoss: false,
       allowKuitan: true,
@@ -53,7 +54,50 @@ class MahjongApp {
       this.cleanupSession();
     });
 
+    document.addEventListener('fullscreenchange', () => {
+      if (this.currentView && this.currentView.phase !== 'lobby') {
+        this.render();
+      }
+    });
+
     this.render();
+  }
+
+  private async tryLockLandscape(forceFullscreen = false): Promise<void> {
+    try {
+      const rootEl = document.documentElement;
+      if (
+        (forceFullscreen || !document.fullscreenElement) &&
+        typeof rootEl.requestFullscreen === 'function'
+      ) {
+        await rootEl.requestFullscreen();
+      }
+    } catch {
+      // 全画面API非対応・ユーザー操作外では静かに無視
+    }
+
+    try {
+      const orientation = screen.orientation as
+        | (ScreenOrientation & { lock?: (orientation: string) => Promise<void> })
+        | undefined;
+      if (orientation && typeof orientation.lock === 'function') {
+        await orientation.lock('landscape');
+      }
+    } catch {
+      // iOS Safari やデスクトップ等では orientation.lock 非対応のためフォールバックUIで案内
+    }
+  }
+
+  private async toggleFullscreen(): Promise<void> {
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+        return;
+      }
+    } catch {
+      // ignore
+    }
+    await this.tryLockLandscape(true);
   }
 
   private createRoom(playerName: string, ruleConfig: RuleConfig): void {
@@ -78,8 +122,10 @@ class MahjongApp {
         } else if (status === 'error') {
           this.busy = false;
           this.statusKind = 'err';
-          this.statusText = '接続エラー';
-          this.errorBanner = detail ?? 'PeerJS接続エラーが発生しました。';
+          this.statusText = 'P2P待機オフライン（CPU対戦可）';
+          if (this.currentView?.phase === 'lobby') {
+            this.errorBanner = detail ?? 'PeerJS接続エラーが発生しました。';
+          }
         } else if (status === 'closed') {
           this.busy = false;
           this.statusKind = 'normal';
@@ -149,6 +195,9 @@ class MahjongApp {
     this.stopAutoTsumogiriTimer();
     this.riichiSelectingMode = false;
     this.currentView = view;
+    if (view.phase !== 'lobby') {
+      this.errorBanner = null;
+    }
     if (
       view.phase === 'awaiting_responses' &&
       view.myCallOptions !== null &&
@@ -261,11 +310,58 @@ class MahjongApp {
     fn(this.activeSession.session);
   }
 
+  private buildPortraitLockOverlay(): HTMLElement {
+    const overlay = document.createElement('div');
+    overlay.className = 'landscape-lock-overlay';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+
+    const card = document.createElement('div');
+    card.className = 'landscape-lock-card';
+
+    const icon = document.createElement('div');
+    icon.className = 'landscape-lock-icon';
+    icon.textContent = '📱 ↻';
+
+    const heading = document.createElement('h2');
+    heading.textContent = '横画面でプレイしてください';
+
+    const msg = document.createElement('p');
+    msg.textContent =
+      '対局画面は横画面専用です。端末を横向きに回転させると自動で対局画面に戻ります。';
+
+    const btns = document.createElement('div');
+    btns.className = 'landscape-lock-actions';
+
+    const fsBtn = document.createElement('button');
+    fsBtn.type = 'button';
+    fsBtn.className = 'btn btn-primary';
+    fsBtn.textContent = '横画面・全画面に切り替える';
+    fsBtn.addEventListener('click', () => {
+      void this.tryLockLandscape(true);
+    });
+
+    const leaveBtn = document.createElement('button');
+    leaveBtn.type = 'button';
+    leaveBtn.className = 'btn btn-secondary';
+    leaveBtn.textContent = 'ロビーに戻る';
+    leaveBtn.addEventListener('click', () => this.returnToLobby());
+
+    btns.append(fsBtn, leaveBtn);
+    card.append(icon, heading, msg, btns);
+    overlay.appendChild(card);
+    return overlay;
+  }
+
   private render(): void {
+    const isGameActive =
+      this.currentView !== null && this.currentView.phase !== 'lobby';
+    document.body.dataset.gameActive = isGameActive ? 'true' : 'false';
+
     this.root.innerHTML = '';
 
     const shell = document.createElement('div');
-    shell.className = 'app-shell';
+    shell.className = isGameActive ? 'app-shell is-game-active' : 'app-shell';
 
     // Top bar
     const topBar = document.createElement('header');
@@ -273,12 +369,12 @@ class MahjongApp {
 
     const title = document.createElement('div');
     title.className = 'app-title';
-    title.textContent = 'PeerJS 対戦リーチ麻雀（第4段階）';
+    title.textContent = isGameActive
+      ? '対戦リーチ麻雀'
+      : 'PeerJS 対戦リーチ麻雀（CPU・P2P対応 / 横画面）';
 
     const rightControls = document.createElement('div');
-    rightControls.style.display = 'flex';
-    rightControls.style.alignItems = 'center';
-    rightControls.style.gap = '8px';
+    rightControls.className = 'top-bar-controls';
 
     const statusPill = document.createElement('div');
     statusPill.className = `status-pill${
@@ -291,12 +387,19 @@ class MahjongApp {
     statusPill.textContent = this.statusText;
     rightControls.appendChild(statusPill);
 
-    if (this.activeSession && this.currentView && this.currentView.phase !== 'lobby') {
+    if (isGameActive) {
+      const fsBtn = document.createElement('button');
+      fsBtn.type = 'button';
+      fsBtn.className = 'btn btn-secondary btn-compact';
+      fsBtn.textContent = document.fullscreenElement ? '全画面解除' : '⛶ 全画面';
+      fsBtn.addEventListener('click', () => {
+        void this.toggleFullscreen();
+      });
+      rightControls.appendChild(fsBtn);
+
       const resetBtn = document.createElement('button');
       resetBtn.type = 'button';
-      resetBtn.className = 'btn btn-secondary';
-      resetBtn.style.padding = '4px 10px';
-      resetBtn.style.fontSize = '0.8rem';
+      resetBtn.className = 'btn btn-secondary btn-compact';
       resetBtn.textContent = 'ロビーに戻る';
       resetBtn.addEventListener('click', () => this.returnToLobby());
       rightControls.appendChild(resetBtn);
@@ -315,8 +418,7 @@ class MahjongApp {
 
       const close = document.createElement('button');
       close.type = 'button';
-      close.className = 'btn btn-secondary';
-      close.style.padding = '4px 10px';
+      close.className = 'btn btn-secondary btn-compact';
       close.textContent = '閉じる';
       close.addEventListener('click', () => {
         this.errorBanner = null;
@@ -328,6 +430,7 @@ class MahjongApp {
     }
 
     const content = document.createElement('main');
+    content.className = isGameActive ? 'game-main' : 'lobby-main';
     shell.appendChild(content);
 
     const view = this.currentView;
@@ -336,6 +439,25 @@ class MahjongApp {
         this.createRoom(name, ruleConfig),
       onJoinRoom: (code: string, name: string) => this.joinRoom(code, name),
       onLeaveLobby: () => this.returnToLobby(),
+      onAddCpu: () => {
+        if (this.activeSession?.role === 'host') {
+          this.activeSession.session.addCpuPlayer();
+        }
+      },
+      onRemoveCpu: (playerId: string) => {
+        if (this.activeSession?.role === 'host') {
+          this.activeSession.session.removeCpuPlayer(playerId);
+        }
+      },
+      onFillCpuAndStart: () => {
+        void this.tryLockLandscape(false);
+        if (this.activeSession?.role === 'host') {
+          this.activeSession.session.fillWithCpusAndStart();
+        }
+      },
+      onRequestLandscape: () => {
+        void this.tryLockLandscape(true);
+      },
     };
 
     if (!view) {
@@ -404,6 +526,10 @@ class MahjongApp {
           autoTsumogiriEnabled: this.autoTsumogiriEnabled,
         },
       );
+    }
+
+    if (isGameActive) {
+      shell.appendChild(this.buildPortraitLockOverlay());
     }
 
     this.root.appendChild(shell);

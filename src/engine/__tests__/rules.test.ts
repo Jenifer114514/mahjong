@@ -172,4 +172,16 @@ describe('deriveRules (RuleConfig)', () => {
     expect(disabled.honbaBonus).toBe(false);
     expect(disabled.honbaPointsPerStick).toBe(300);
   });
+
+  it('CPU強さ設定（cpuLevel）の既定値と上書きが導出される', () => {
+    const def = deriveRules({ playerCount: 4, gameLength: 'tonpuu' });
+    expect(def.cpuLevel).toBe('normal');
+
+    const easy = deriveRules({
+      playerCount: 3,
+      gameLength: 'hanchan',
+      cpuLevel: 'easy',
+    });
+    expect(easy.cpuLevel).toBe('easy');
+  });
 });

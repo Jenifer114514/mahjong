@@ -133,6 +133,8 @@ export function toStateView(
     isRiichi: p.isRiichi,
     isDoubleRiichi: p.isDoubleRiichi,
     connected: p.connected,
+    isCpu: p.isCpu,
+    ...(p.isCpu && p.cpuLevel ? { cpuLevel: p.cpuLevel } : {}),
   }));
 
   const round: RoundView | null = state.round

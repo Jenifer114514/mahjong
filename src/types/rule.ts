@@ -3,6 +3,7 @@ import type { TileKind } from './tile';
 export type PlayerCount = 3 | 4;
 export type GameLength = 'tonpuu' | 'hanchan';
 export type Wind = 'E' | 'S' | 'W' | 'N';
+export type CpuLevel = 'easy' | 'normal';
 
 export type TileSetId = 'standard_136' | 'sanma_no_2m_to_8m_108';
 export type KandoraRevealTiming = 'immediate' | 'after_discard';
@@ -50,6 +51,8 @@ export interface RuleConfig {
   allowAtozuke?: boolean;
   /** 本場加算あり/なし（既定: true。なしでも本場数のカウント・表示は行う） */
   honbaBonus?: boolean;
+  /** CPUの強さ（'easy': やさしめ / 'normal': 標準、既定: 'normal'） */
+  cpuLevel?: CpuLevel;
 }
 
 /** 将来のローカルルール変更に備えて差し替え可能な定数群 */
@@ -101,6 +104,7 @@ export const DEFAULT_TOBI = true;
 export const DEFAULT_TSUMO_LOSS = false;
 export const DEFAULT_ALLOW_KUITAN = true;
 export const DEFAULT_ALLOW_ATOZUKE = true;
+export const DEFAULT_CPU_LEVEL: CpuLevel = 'normal';
 
 /** 部屋設定には出さず差し替え可能な点数・ローカルルール定数 */
 export const DEFAULT_KIRIAGE_MANGAN = false;
@@ -171,6 +175,7 @@ export interface DerivedRules {
   allowAtozuke: boolean;
   honbaBonus: boolean;
   honbaPointsPerStick: number;
+  cpuLevel: CpuLevel;
   notenPenaltyTotal: number;
   kiriageMangan: boolean;
   allowKazoeYakuman: boolean;
