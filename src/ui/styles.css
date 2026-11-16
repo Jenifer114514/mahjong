@@ -1189,12 +1189,64 @@ input {
   border-radius: 2px;
 }
 
-/* 縦向き（スマホ縦持ち）では折り返しを許可 */
-@media (orientation: portrait), (max-width: 900px) {
+/* 幅が狭いときは手牌を折り返してよい（横スクロールより見やすい） */
+@media (max-width: 700px) {
   .table-felt.is-landscape .hand-area {
     flex-wrap: wrap;
     overflow: visible;
+    justify-content: center;
   }
+}
+
+/* ---------- 縦向きオーバーレイ（強制横画面） ---------- */
+.rotate-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 28px;
+  text-align: center;
+  background: radial-gradient(circle at 50% 40%, #12362d 0%, #08120f 80%);
+}
+
+.rotate-overlay-icon {
+  font-size: 3.4rem;
+  animation: rotate-nudge 2.4s ease-in-out infinite;
+}
+
+@keyframes rotate-nudge {
+  0%,
+  55%,
+  100% {
+    transform: rotate(0deg);
+  }
+  70%,
+  85% {
+    transform: rotate(-90deg);
+  }
+}
+
+.rotate-overlay-title {
+  font-size: 1.15rem;
+  font-weight: 800;
+  color: var(--accent-gold);
+}
+
+.rotate-overlay-body {
+  max-width: 340px;
+  font-size: 0.86rem;
+  line-height: 1.6;
+  color: var(--text-main);
+}
+
+.rotate-overlay-hint {
+  max-width: 320px;
+  font-size: 0.72rem;
+  color: var(--text-muted);
 }
 
 /* 横画面推奨ヒント（縦向きのみ表示） */
@@ -1214,27 +1266,11 @@ input {
   }
 }
 
-/* ---------- 縦向き（スマホ縦持ち）: 卓を 1 カラムに積む ---------- */
-@media (orientation: portrait), (max-width: 900px) {
-  .table-felt.is-landscape {
-    grid-template-areas:
-      'center'
-      'top'
-      'left'
-      'right'
-      'self';
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto;
-    min-height: 0;
-  }
-
+/* ---------- 縦向き（PC の縦長ウィンドウ等）: サイドパネルを下へ ---------- */
+@media (max-width: 900px) {
   .side-panel {
     max-height: none;
     overflow: visible;
-  }
-
-  .discard-river-compact {
-    grid-template-columns: repeat(6, max-content);
   }
 }
 
@@ -1311,5 +1347,608 @@ input {
   .app-shell {
     padding: 6px;
     gap: 6px;
+  }
+}
+
+/* ===================================================================
+   実物の雀卓を再現するレイアウト（第6段階）
+   - 4人が卓を囲む: 手牌は外周、河は中央へ向かって積まれる
+   - 対面の河は 180 度、左右の河は 90 度回転（牌そのものを回す）
+   - 河は実物同様 6 枚 × 3 段まで（それ以上は 6 枚折り返しで伸びる）
+   =================================================================== */
+
+.table-felt.is-landscape {
+  grid-template-areas:
+    'top top top'
+    'left center right'
+    'self self self';
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 320px) minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 6px;
+  padding: 10px 14px 12px;
+  min-height: min(82vh, 780px);
+  background: radial-gradient(
+    circle at center,
+    #1a5b4a 0%,
+    var(--bg-felt) 42%,
+    var(--bg-felt-dark) 100%
+  );
+  box-shadow:
+    inset 0 0 70px rgba(0, 0, 0, 0.55),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+
+/* 席ごとの積み方（外周の席情報 → 手牌 → 副露 → 中央寄りの河） */
+.table-felt.is-landscape .seat-box {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 2px 4px;
+  background: transparent;
+  border: none;
+  min-width: 0;
+}
+
+.table-felt.is-landscape .seat-box.is-turn {
+  box-shadow: none;
+}
+
+/* 手番の席は外周側に金色のラインを引く */
+.seat-orient-top.is-turn {
+  border-top: 2px solid var(--accent-gold);
+}
+.seat-orient-left.is-turn {
+  border-left: 2px solid var(--accent-gold);
+}
+.seat-orient-right.is-turn {
+  border-right: 2px solid var(--accent-gold);
+}
+.seat-orient-self.is-turn {
+  border-bottom: 2px solid var(--accent-gold);
+}
+
+/* ---------- 席の中身: 外周側に手牌、中央側に河 ---------- */
+/* 席情報は外周（対面なら最上段、自分なら最下段）に固定する */
+.seat-orient-top > .seat-header {
+  order: 0;
+}
+.seat-orient-top > .seat-body {
+  order: 1;
+}
+.seat-orient-left > .seat-header,
+.seat-orient-right > .seat-header {
+  order: 0;
+}
+
+/*
+ * 実物の雀卓では、各プレイヤーの河は「自分の手牌のすぐ内側」にまとまって置かれ、
+ * 4 つの河が中央の壁・ドラ表示を囲む配置になる。同じ並びになるよう、
+ * 手牌 → （副露）→ 河 の順に手前側から並べ、河は中央方向へ伸ばす。
+ */
+.seat-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* 左家: 手前（左端）に手牌、右（中央）へ河 */
+.seat-body-left {
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  width: 100%;
+}
+
+/* 右家: 手前（右端）に手牌、左（中央）へ河 */
+.seat-body-right {
+  flex-direction: row-reverse;
+  align-items: center;
+  justify-content: flex-start;
+  width: 100%;
+}
+
+/* 対面: 上端に手牌、下（中央）へ河 */
+.seat-body-top {
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.seat-body-top .opponent-hand,
+.seat-body-left .opponent-hand,
+.seat-body-right .opponent-hand {
+  flex: 0 0 auto;
+}
+
+.seat-body > .river-zone {
+  flex: 0 0 auto;
+}
+
+/* ---------- 手牌（裏向き）: 外周を向く ---------- */
+.opponent-hand {
+  display: flex;
+  gap: 1px;
+  align-items: flex-end;
+  justify-content: center;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.hand-orient-top {
+  transform: rotate(180deg);
+}
+
+/*
+ * 左右の手牌は縦積み（側面から見た麻雀牌の並び）。
+ * 13 枚＋ツモ牌が画面の高さに必ず収まるよう、各牌を等高で伸縮させる。
+ */
+.hand-orient-left,
+.hand-orient-right {
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0;
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.hand-orient-left .mj-tile-back,
+.hand-orient-right .mj-tile-back {
+  width: 17px;
+  height: auto;
+  flex: 1 1 0;
+  min-height: 7px;
+  max-height: 30px;
+  border-bottom-width: 0;
+  border-right: 2px solid #123c31;
+  border-left: 2px solid #123c31;
+}
+
+/* 対面の手牌も横幅に収める（13 枚ぶんの最小幅を確保） */
+.hand-orient-top .mj-tile-back {
+  flex: 0 0 auto;
+}
+
+/* ---------- 河（捨て牌）: 中央へ向かって積まれる ---------- */
+.river-zone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+
+.river-label {
+  font-size: 0.62rem;
+  letter-spacing: 0.1em;
+  color: var(--text-muted);
+  opacity: 0.75;
+}
+
+.discard-river {
+  --river-rot: 0deg;
+  /* 河の牌サイズ（左右の河でトラック幅を合わせるため変数化） */
+  --river-tile-w: 26px;
+  --river-tile-h: 37px;
+  display: grid;
+  grid-template-columns: repeat(6, var(--river-tile-w));
+  grid-auto-rows: var(--river-tile-h);
+  gap: 2px;
+  align-content: start;
+  justify-content: start;
+  padding: 3px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+  min-height: 0;
+}
+
+/* 河の牌は升目ぴったりに収める */
+.discard-river > .mj-tile {
+  width: var(--river-tile-w);
+  height: var(--river-tile-h);
+}
+
+.discard-river .mj-tile {
+  transform: rotate(var(--river-rot));
+}
+
+/* リーチ宣言牌（横向き）は席の向きにさらに -90 度 */
+.discard-river .mj-tile.mj-tile-riichi {
+  transform: rotate(calc(var(--river-rot) - 90deg));
+}
+
+.river-empty {
+  font-size: 0.68rem;
+  color: rgba(255, 255, 255, 0.22);
+  padding: 4px 8px;
+}
+
+/* 対面: 180 度（6 列・下へ伸びる） */
+.river-top {
+  --river-rot: 180deg;
+}
+
+/* 左家: 牌を 90 度回転。奥行き（中央方向）に 6 枚並ぶ */
+.river-left {
+  --river-rot: 90deg;
+}
+
+/* 右家: 牌を -90 度回転 */
+.river-right {
+  --river-rot: -90deg;
+}
+
+/* 左右の河は手牌のすぐ内側に置き、外周側の列から中央へ向かって増える */
+.seat-orient-left .river-zone,
+.seat-orient-right .river-zone {
+  align-self: center;
+  max-width: 100%;
+}
+
+/*
+ * 左右の河: 実物同様「6 枚が垂直に並び、その列が中央へ向かって増えていく」。
+ * 牌は 90 度回転しているので、升目の大きさは回転後の見た目（縦=横の入れ替え）に合わせる。
+ */
+.seat-orient-left .discard-river,
+.seat-orient-right .discard-river {
+  /* 回転後の見た目に合わせた升目（縦=牌の幅 / 横=牌の高さ） */
+  grid-template-columns: none;
+  grid-template-rows: repeat(6, var(--river-tile-w));
+  grid-auto-flow: column;
+  grid-auto-columns: var(--river-tile-h);
+  align-content: start;
+  justify-content: start;
+  place-items: center;
+  overflow: visible;
+}
+
+/* 右家は中央方向が左なので、列の伸びる向きを反転する */
+.seat-orient-right .discard-river {
+  direction: rtl;
+}
+
+/* ---------- 副露・抜北の向き ---------- */
+.meld-orient-top {
+  transform: rotate(180deg);
+}
+.meld-orient-left .meld-group {
+  transform: rotate(90deg);
+  margin: 6px 0;
+}
+.meld-orient-right .meld-group {
+  transform: rotate(-90deg);
+  margin: 6px 0;
+}
+.meld-orient-left,
+.meld-orient-right {
+  flex-direction: column;
+  align-items: center;
+}
+
+/* ---------- 席情報（外周側） ---------- */
+.seat-orient-top .seat-header {
+  flex-direction: row-reverse;
+  justify-content: center;
+  width: 100%;
+}
+.seat-orient-top .seat-identity {
+  flex-direction: row-reverse;
+}
+.seat-orient-left .seat-header,
+.seat-orient-right .seat-header {
+  justify-content: center;
+  font-size: 0.8rem;
+}
+.seat-orient-left .seat-identity,
+.seat-orient-right .seat-identity {
+  justify-content: center;
+  flex-wrap: wrap;
+}
+.seat-orient-top .seat-score,
+.seat-orient-left .seat-score,
+.seat-orient-right .seat-score {
+  font-size: 0.82rem;
+}
+
+/* ---------- 中央の方位リング（実物の「場」表示） ---------- */
+.center-hub {
+  position: relative;
+  padding: 20px 26px;
+}
+
+.table-compass {
+  position: absolute;
+  inset: 4px;
+  pointer-events: none;
+}
+
+.compass-slot {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 0.66rem;
+}
+
+.compass-top {
+  top: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+.compass-self {
+  bottom: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+.compass-left {
+  left: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  flex-direction: column;
+}
+.compass-right {
+  right: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  flex-direction: column;
+}
+
+.compass-wind {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 21px;
+  height: 21px;
+  border-radius: 5px;
+  font-weight: 800;
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.13);
+}
+
+.compass-wind.is-dealer {
+  background: #b92b27;
+  color: #fff;
+}
+
+.compass-slot.is-turn .compass-wind {
+  color: var(--accent-gold);
+  box-shadow: 0 0 0 2px var(--accent-gold);
+}
+
+.compass-riichi {
+  font-size: 0.55rem;
+  font-weight: 800;
+  padding: 0 4px;
+  border-radius: 999px;
+  color: var(--accent-gold);
+  background: rgba(240, 201, 92, 0.18);
+  border: 1px solid rgba(240, 201, 92, 0.5);
+}
+
+/* ---------- 自分の席: 手牌が最前列、河は中央側 ---------- */
+.seat-orient-self .self-controls {
+  order: 2;
+}
+.seat-orient-self .river-zone {
+  order: 1;
+}
+.seat-orient-self .seat-header {
+  order: 3;
+}
+
+.seat-orient-self .hand-area {
+  justify-content: center;
+}
+
+/* 自分の河だけは横幅を活かして 6 枚 × 3 段に収める */
+/*
+ * 自分の河: 実物同様、最初の捨て牌がもっとも手前（下）に来て、
+ * 2 段目・3 段目はその上（中央側）に積み上がる。
+ * → 折り返しを逆方向にした flex で「1 行目 = 最下段」を実現する。
+ */
+.river-self .discard-river {
+  display: flex;
+  flex-wrap: wrap-reverse;
+  align-content: flex-start;
+  justify-content: flex-start;
+  width: calc(6 * var(--river-tile-w) + 5 * 2px + 6px);
+  max-width: 100%;
+  background: rgba(0, 0, 0, 0.22);
+}
+
+/* ---------- サイドパネルの河一覧（補助表示） ---------- */
+.side-panel .discard-river {
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+  gap: 1px;
+  grid-template-columns: repeat(9, max-content);
+  grid-template-rows: none;
+  grid-auto-rows: auto;
+  direction: ltr;
+}
+
+.side-panel .discard-river .mj-tile {
+  transform: none;
+}
+
+.side-panel .discard-river.is-compact .mj-tile {
+  width: 19px;
+  height: 27px;
+  border-bottom-width: 2px;
+}
+
+/* ---------- 狭い画面（スマホ横持ちの低い画面）向けの圧縮 ---------- */
+@media (orientation: landscape) and (max-height: 560px) {
+  .table-felt.is-landscape {
+    min-height: 0;
+    padding: 6px 8px 8px;
+    gap: 4px;
+    grid-template-columns: minmax(0, 1fr) minmax(210px, 280px) minmax(0, 1fr);
+  }
+
+  .table-felt.is-landscape .mj-tile {
+    width: 28px;
+    height: 40px;
+  }
+
+  .table-felt.is-landscape .mj-tile-sm {
+    width: 21px;
+    height: 30px;
+  }
+
+  .center-hub {
+    padding: 14px 18px;
+    gap: 4px;
+  }
+
+  .round-label {
+    font-size: 1.05rem;
+  }
+
+  .side-panel {
+    max-height: calc(100vh - 84px);
+  }
+}
+
+@media (orientation: landscape) and (max-height: 430px) {
+  .table-felt.is-landscape .mj-tile {
+    width: 24px;
+    height: 34px;
+  }
+
+  .table-felt.is-landscape .mj-tile-sm {
+    width: 18px;
+    height: 26px;
+  }
+
+  .table-compass {
+    display: none;
+  }
+
+  .seat-orient-top .seat-header .wind-badge,
+  .seat-orient-left .seat-header .wind-badge,
+  .seat-orient-right .seat-header .wind-badge {
+    width: 18px;
+    height: 18px;
+    font-size: 0.7rem;
+  }
+}
+
+/* ---------- 河の牌サイズの追随（末尾に置いて優先させる） ---------- */
+@media (orientation: landscape) and (max-height: 640px) {
+  .discard-river {
+    --river-tile-w: 24px;
+    --river-tile-h: 34px;
+  }
+}
+
+@media (orientation: landscape) and (max-height: 560px) {
+  .discard-river {
+    --river-tile-w: 21px;
+    --river-tile-h: 30px;
+  }
+}
+
+@media (orientation: landscape) and (max-height: 430px) {
+  .discard-river {
+    --river-tile-w: 18px;
+    --river-tile-h: 26px;
+  }
+}
+
+/* 河の牌サイズは --river-tile-w/h に一本化（他サイズ指定より優先） */
+.table-felt.is-landscape .discard-river > .mj-tile,
+.table-felt.is-landscape .discard-river > .mj-tile.mj-tile-sm {
+  width: var(--river-tile-w);
+  height: var(--river-tile-h);
+}
+
+/* サイドパネルの一覧は小さめ・回転なし */
+.table-felt.is-landscape .side-panel .discard-river > .mj-tile.mj-tile-sm {
+  width: 19px;
+  height: 27px;
+}
+
+/* 左右の席は横並び（手牌 ↔ 河）なので中央寄せを維持 */
+.seat-orient-left,
+.seat-orient-right {
+  min-height: 0;
+}
+
+.seat-orient-left .seat-body,
+.seat-orient-right .seat-body {
+  width: 100%;
+}
+
+/* 対面の河は 6 列 × 3 段ぶんの高さを確保して、増えても下へ伸びる */
+.seat-orient-top .river-zone {
+  align-self: stretch;
+  justify-content: flex-start;
+}
+
+/* 河ラベルは邪魔なら消す（コンパクト表示のみ残す） */
+.seat-orient-left .river-label,
+.seat-orient-right .river-label {
+  writing-mode: vertical-rl;
+  font-size: 0.55rem;
+}
+
+/*
+ * 河は「捨てられた牌がすべて見える」ことを最優先にする（テストでも検証）。
+ * 高さ・幅で切り落とさず、3 段を超えた分は中央側へ自然に伸ばす。
+ */
+.seat-orient-left .river-zone,
+.seat-orient-right .river-zone {
+  max-height: none;
+}
+
+.river-top .discard-river,
+.seat-orient-left .discard-river,
+.seat-orient-right .discard-river {
+  overflow: visible;
+}
+
+/* ---------- 手牌の裏向きサイズ: 収まる範囲で最大にする ---------- */
+.seat-body-left .opponent-hand,
+.seat-body-right .opponent-hand {
+  align-self: stretch;
+}
+
+/* 対面・自分の手牌は 13〜14 枚が 1 行に収まる幅を確保 */
+.seat-body-top .opponent-hand {
+  min-width: 0;
+}
+
+@media (orientation: landscape) and (max-height: 560px) {
+  .hand-orient-left .mj-tile-back,
+  .hand-orient-right .mj-tile-back {
+    width: 14px;
+    max-height: 22px;
+  }
+
+  .hand-orient-top .mj-tile-back {
+    width: 13px;
+    height: 19px;
+  }
+}
+
+@media (orientation: landscape) and (max-height: 430px) {
+  .hand-orient-left .mj-tile-back,
+  .hand-orient-right .mj-tile-back {
+    width: 12px;
+    max-height: 18px;
+  }
+
+  .hand-orient-top .mj-tile-back {
+    width: 11px;
+    height: 16px;
   }
 }

@@ -11,6 +11,11 @@ import {
   type LobbyFormState,
 } from './ui/lobbyView';
 import { renderGameTable } from './ui/tableView';
+import {
+  createRotateOverlay,
+  shouldBlockForOrientation,
+  watchOrientation,
+} from './ui/orientation';
 
 type Session =
   | { role: 'host'; session: HostSession }
@@ -54,6 +59,9 @@ class MahjongApp {
     window.addEventListener('beforeunload', () => {
       this.cleanupSession();
     });
+
+    // 対局画面では横画面を必須にする（縦持ち時はローテーション案内で覆う）
+    watchOrientation(() => this.syncOrientationOverlay());
 
     this.render();
   }
@@ -283,6 +291,25 @@ class MahjongApp {
     fn(this.activeSession.session);
   }
 
+  /** 縦持ち時に対局画面をローテーション案内で覆う（ロビーでは表示しない） */
+  private syncOrientationOverlay(): void {
+    const existing = document.querySelector('.rotate-overlay');
+    const needsOverlay =
+      Boolean(this.currentView) &&
+      this.currentView!.phase !== 'lobby' &&
+      shouldBlockForOrientation();
+
+    if (needsOverlay && !existing) {
+      document.body.appendChild(createRotateOverlay());
+      document.body.classList.add('is-orientation-blocked');
+      return;
+    }
+    if (!needsOverlay && existing) {
+      existing.remove();
+      document.body.classList.remove('is-orientation-blocked');
+    }
+  }
+
   private render(): void {
     this.root.innerHTML = '';
 
@@ -295,7 +322,7 @@ class MahjongApp {
 
     const title = document.createElement('div');
     title.className = 'app-title';
-    title.textContent = 'PeerJS 対戦リーチ麻雀（第5段階）';
+    title.textContent = 'PeerJS 対戦リーチ麻雀（第6段階）';
 
     const rightControls = document.createElement('div');
     rightControls.style.display = 'flex';
@@ -342,7 +369,7 @@ class MahjongApp {
 
     const rotateHint = document.createElement('div');
     rotateHint.className = 'rotate-hint';
-    rotateHint.textContent = '横画面にすると快適です';
+    rotateHint.textContent = '横画面推奨';
 
     topBar.append(title, rotateHint, rightControls);
     shell.appendChild(topBar);
@@ -451,6 +478,7 @@ class MahjongApp {
     }
 
     this.root.appendChild(shell);
+    this.syncOrientationOverlay();
   }
 }
 
