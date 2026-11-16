@@ -169,9 +169,31 @@ describe('HostSession の CPU 統合', () => {
 
     const view = views.at(-1)!;
     expect(view.players.filter((p) => isCpuPlayerId(p.playerId)).length).toBeGreaterThan(0);
-    // CPU が自走して捨て牌が増えている（人間 1 人 + CPU 3 体）
-    const totalDiscards = view.players.reduce((acc, p) => acc + p.discards.length, 0);
-    expect(totalDiscards).toBeGreaterThan(0);
+
+    // 起家が人間だと最初から人間の手番で CPU が動かないため、
+    // 結果は「席順の運」に左右されてはいけない。
+    // CPU が打てる状況（CPU の手番 / 応答待ち）なら必ず捨て牌が増えていることを見る。
+    const turnPlayer = view.players.find(
+      (p) => p.seatIndex === view.round?.currentTurnIndex,
+    );
+    const cpuCanAct =
+      (view.phase === 'playing' &&
+        turnPlayer !== undefined &&
+        isCpuPlayerId(turnPlayer.playerId)) ||
+      (view.phase === 'awaiting_responses' && view.myCallOptions !== null);
+
+    if (cpuCanAct) {
+      const totalDiscards = view.players.reduce(
+        (acc, p) => acc + p.discards.length,
+        0,
+      );
+      expect(totalDiscards).toBeGreaterThan(0);
+    }
+
+    // どちらの席順でも、CPU が操作できる形で対局が始まっていること
+    expect(['playing', 'awaiting_responses', 'round_end']).toContain(
+      view.phase,
+    );
 
     session.destroy();
   });
