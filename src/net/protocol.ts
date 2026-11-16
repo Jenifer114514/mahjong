@@ -137,6 +137,14 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
           },
         };
       }
+      case 'DECLARE_TSUMO': {
+        return {
+          kind: 'ACTION',
+          action: {
+            type: 'DECLARE_TSUMO',
+          },
+        };
+      }
       case 'DECLARE_ANKAN': {
         if (
           typeof raw.action.kind !== 'string' ||

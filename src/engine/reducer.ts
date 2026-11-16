@@ -5,6 +5,7 @@ import type {
   GameState,
   PendingResponseState,
   PlayerState,
+  RoundAgariWinner,
   RoundRonWinner,
 } from '../types/state';
 import type { Tile } from '../types/tile';
@@ -13,10 +14,13 @@ import {
   computeChiKuikaeKinds,
   DEFAULT_ENGINE_HOOKS,
   type EngineHooks,
+  evaluateRonForPlayer,
+  evaluateTsumoFromRound,
   validateChiTilePair,
   validatePonTilePair,
 } from './calls';
 import { deriveRules, getRoundMetadata } from './rules';
+import type { AgariScoreResult } from './score';
 import {
   applyKandoraTiming,
   dealRoundFromDeck,
@@ -85,6 +89,50 @@ function extractTileFromHandOrDrawn(
   };
 }
 
+function deltasBySeatToPlayerMap(
+  players: readonly PlayerState[],
+  deltasBySeat: readonly number[],
+): Record<string, number> {
+  const result: Record<string, number> = {};
+  for (const p of players) {
+    result[p.playerId] = deltasBySeat[p.seatIndex] ?? 0;
+  }
+  return result;
+}
+
+function buildAgariWinnerRecord(params: {
+  winType: 'ron' | 'tsumo';
+  winner: PlayerState;
+  fromSeatIndex: number | null;
+  winningTile: Tile;
+  players: readonly PlayerState[];
+  evalResult: AgariScoreResult;
+}): RoundAgariWinner {
+  const { winType, winner, fromSeatIndex, winningTile, players, evalResult } = params;
+  return {
+    winType,
+    playerId: winner.playerId,
+    seatIndex: winner.seatIndex,
+    fromSeatIndex,
+    winningTile,
+    hand: sortTiles(winner.hand),
+    melds: winner.melds.map((m) => ({
+      ...m,
+      tiles: [...m.tiles],
+    })),
+    kitaTiles: [...winner.kitaTiles],
+    yaku: evalResult.yaku.map((y) => ({ ...y })),
+    doraCount: evalResult.doraCount,
+    kitaCount: evalResult.kitaCount,
+    han: evalResult.totalHan,
+    fu: evalResult.fu,
+    isYakuman: evalResult.isYakuman,
+    scoreLabel: evalResult.scoreLabel,
+    pointsAwarded: evalResult.pointsAwarded,
+    scoreDeltas: deltasBySeatToPlayerMap(players, evalResult.deltasBySeat),
+  };
+}
+
 export function createInitialGameState(params: CreateInitialGameParams): GameState {
   const rules = deriveRules(params.ruleConfig);
   const hostPlayer: PlayerState = {
@@ -95,6 +143,8 @@ export function createInitialGameState(params: CreateInitialGameParams): GameSta
     hand: [],
     drawnTile: null,
     discards: [],
+    discardedKinds: [],
+    sameTurnFuriten: false,
     melds: [],
     kitaTiles: [],
     connected: true,
@@ -365,6 +415,41 @@ export function validateAction(
       return null;
     }
 
+    case 'DECLARE_TSUMO': {
+      if (state.phase !== 'playing' || state.round === null) {
+        return {
+          code: 'INVALID_PHASE',
+          message: 'ツモ和了できる状態ではありません。',
+        };
+      }
+      const player = state.players.find((p) => p.playerId === action.playerId);
+      if (!player) {
+        return {
+          code: 'PLAYER_NOT_FOUND',
+          message: 'プレイヤーが見つかりません。',
+        };
+      }
+      if (player.seatIndex !== state.round.currentTurnIndex) {
+        return {
+          code: 'NOT_YOUR_TURN',
+          message: 'あなたの手番ではありません。',
+        };
+      }
+      if (player.drawnTile === null) {
+        return {
+          code: 'INVALID_AGARI',
+          message: '副露直後の打牌前にはツモ和了できません。',
+        };
+      }
+      if (evaluateTsumoFromRound(player, state.round, rules) === null) {
+        return {
+          code: 'INVALID_AGARI',
+          message: '和了形または成立役を満たしていないためツモ和了できません。',
+        };
+      }
+      return null;
+    }
+
     case 'DECLARE_ANKAN': {
       if (state.phase !== 'playing' || state.round === null) {
         return {
@@ -541,6 +626,7 @@ export function validateAction(
       }
       const nextRoundIndex = state.round.roundIndex + 1;
       if (
+        !state.round.isTobiEnded &&
         nextRoundIndex < rules.totalRounds &&
         !validateDeckForRules(rules, action.shuffledDeck)
       ) {
@@ -562,6 +648,25 @@ export function validateAction(
       return null;
     }
   }
+}
+
+function markSameTurnFuritenForMissedRons(
+  players: readonly PlayerState[],
+  pending: PendingResponseState,
+  responses: Record<string, CallResponseChoice>,
+): PlayerState[] {
+  const missedRonIds = new Set<string>();
+  for (const [pid, opts] of Object.entries(pending.optionsByPlayerId)) {
+    if (opts.canRon && responses[pid]?.type !== 'ron') {
+      missedRonIds.add(pid);
+    }
+  }
+  if (missedRonIds.size === 0) {
+    return [...players];
+  }
+  return players.map((p) =>
+    missedRonIds.has(p.playerId) ? { ...p, sameTurnFuriten: true } : p,
+  );
 }
 
 function advanceTurnAfterClearDiscard(state: GameState): GameState {
@@ -653,6 +758,10 @@ function resolvePendingResponses(
   );
   if (ronPlayers.length > 0) {
     const chosen = rules.doubleRon ? ronPlayers : [ronPlayers[0]!];
+    const discarder = state.players.find(
+      (p) => p.seatIndex === pending.discarderSeatIndex,
+    )!;
+
     const ronWinners: RoundRonWinner[] = chosen.map((p) => ({
       playerId: p.playerId,
       seatIndex: p.seatIndex,
@@ -660,17 +769,64 @@ function resolvePendingResponses(
       winningTile: pending.discardedTile,
     }));
 
+    const agariResults: RoundAgariWinner[] = [];
+    const roundScoreDeltas: Record<string, number> = {};
+    for (const p of state.players) {
+      roundScoreDeltas[p.playerId] = 0;
+    }
+
+    for (const winner of chosen) {
+      const evalResult = evaluateRonForPlayer(
+        state,
+        winner,
+        pending.discardedTile,
+        discarder,
+      );
+      if (evalResult !== null) {
+        const winnerRecord = buildAgariWinnerRecord({
+          winType: 'ron',
+          winner,
+          fromSeatIndex: pending.discarderSeatIndex,
+          winningTile: pending.discardedTile,
+          players: state.players,
+          evalResult,
+        });
+        agariResults.push(winnerRecord);
+        for (const [pid, delta] of Object.entries(winnerRecord.scoreDeltas)) {
+          roundScoreDeltas[pid] = (roundScoreDeltas[pid] ?? 0) + delta;
+        }
+      }
+    }
+
+    const nextPlayers = state.players.map((p) => ({
+      ...p,
+      score: p.score + (roundScoreDeltas[p.playerId] ?? 0),
+    }));
+    const isTobiEnded =
+      rules.tobi && nextPlayers.some((p) => p.score < 0);
+
     return {
       ...state,
       phase: 'round_end',
+      players: nextPlayers,
       round: {
         ...round,
         pendingResponse: null,
         ronWinners,
+        agariResults,
+        roundScoreDeltas: agariResults.length > 0 ? roundScoreDeltas : {},
+        isTobiEnded,
         turnCount: round.turnCount + 1,
       },
     };
   }
+
+  // ロン以外で終了する場合、ロンを見逃したプレイヤーに同巡フリテンを付与
+  const playersWithFuriten = markSameTurnFuritenForMissedRons(
+    state.players,
+    pending,
+    responses,
+  );
 
   // 2. ポン / 大明槓（ロンに次ぐ優先度）
   const ponOrKanPlayer = eligiblePlayers.find((p) => {
@@ -682,7 +838,7 @@ function resolvePendingResponses(
     const choice = responses[ponOrKanPlayer.playerId]!;
     const flushedDeadWall = flushPendingKandora(round.deadWall);
     const playersWithoutDiscard = removeLastDiscardFromDiscarder(
-      state.players,
+      playersWithFuriten,
       pending.discarderSeatIndex,
       pending.discardedTile.id,
     );
@@ -802,7 +958,7 @@ function resolvePendingResponses(
     };
     const flushedDeadWall = flushPendingKandora(round.deadWall);
     const playersWithoutDiscard = removeLastDiscardFromDiscarder(
-      state.players,
+      playersWithFuriten,
       pending.discarderSeatIndex,
       pending.discardedTile.id,
     );
@@ -861,7 +1017,10 @@ function resolvePendingResponses(
   }
 
   // 4. 全員パス
-  return advanceTurnAfterClearDiscard(state);
+  return advanceTurnAfterClearDiscard({
+    ...state,
+    players: playersWithFuriten,
+  });
 }
 
 export function reduce(
@@ -886,6 +1045,8 @@ export function reduce(
         hand: [],
         drawnTile: null,
         discards: [],
+        discardedKinds: [],
+        sameTurnFuriten: false,
         melds: [],
         kitaTiles: [],
         connected: true,
@@ -929,6 +1090,8 @@ export function reduce(
         drawnTile:
           seatIndex === roundMeta.dealerIndex ? deal.dealerDrawnTile : null,
         discards: [],
+        discardedKinds: [],
+        sameTurnFuriten: false,
         melds: [],
         kitaTiles: [],
       }));
@@ -951,6 +1114,9 @@ export function reduce(
           kuikaeForbiddenKinds: [],
           pendingResponse: null,
           ronWinners: [],
+          agariResults: [],
+          roundScoreDeltas: {},
+          isTobiEnded: false,
         },
       };
     }
@@ -975,6 +1141,8 @@ export function reduce(
               hand: extracted.nextHand,
               drawnTile: null,
               discards: [...p.discards, { tile: discardedTile, isTsumogiri }],
+              discardedKinds: [...p.discardedKinds, discardedTile.kind],
+              sameTurnFuriten: false,
             }
           : p,
       );
@@ -1058,6 +1226,43 @@ export function reduce(
         }
       }
       return resolvePendingResponses(state, pending, completedResponses);
+    }
+
+    case 'DECLARE_TSUMO': {
+      const round = state.round!;
+      const activePlayer = state.players.find(
+        (p) => p.playerId === action.playerId,
+      )!;
+      const evalResult = evaluateTsumoFromRound(activePlayer, round, rules)!;
+      const winnerRecord = buildAgariWinnerRecord({
+        winType: 'tsumo',
+        winner: activePlayer,
+        fromSeatIndex: null,
+        winningTile: activePlayer.drawnTile!,
+        players: state.players,
+        evalResult,
+      });
+
+      const roundScoreDeltas = { ...winnerRecord.scoreDeltas };
+      const nextPlayers = state.players.map((p) => ({
+        ...p,
+        score: p.score + (roundScoreDeltas[p.playerId] ?? 0),
+      }));
+      const isTobiEnded =
+        rules.tobi && nextPlayers.some((p) => p.score < 0);
+
+      return {
+        ...state,
+        phase: 'round_end',
+        players: nextPlayers,
+        round: {
+          ...round,
+          agariResults: [winnerRecord],
+          roundScoreDeltas,
+          isTobiEnded,
+          turnCount: round.turnCount + 1,
+        },
+      };
     }
 
     case 'DECLARE_ANKAN': {
@@ -1194,12 +1399,14 @@ export function reduce(
       const currentRound = state.round!;
       const nextRoundIndex = currentRound.roundIndex + 1;
 
-      if (nextRoundIndex >= rules.totalRounds) {
+      if (currentRound.isTobiEnded || nextRoundIndex >= rules.totalRounds) {
         const finishedPlayers = state.players.map((p) => ({
           ...p,
           hand: [],
           drawnTile: null,
           discards: [],
+          discardedKinds: [],
+          sameTurnFuriten: false,
           melds: [],
           kitaTiles: [],
         }));
@@ -1228,6 +1435,8 @@ export function reduce(
         drawnTile:
           p.seatIndex === roundMeta.dealerIndex ? deal.dealerDrawnTile : null,
         discards: [],
+        discardedKinds: [],
+        sameTurnFuriten: false,
         melds: [],
         kitaTiles: [],
       }));
@@ -1250,6 +1459,9 @@ export function reduce(
           kuikaeForbiddenKinds: [],
           pendingResponse: null,
           ronWinners: [],
+          agariResults: [],
+          roundScoreDeltas: {},
+          isTobiEnded: false,
         },
       };
     }

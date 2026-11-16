@@ -124,4 +124,34 @@ describe('deriveRules (RuleConfig)', () => {
     );
     expect(rules.totalTiles).toBe(100);
   });
+
+  it('第3A段階ローカルルール設定（トビ・ツモ損・喰いタン・後付け）が既定値と上書きに従う', () => {
+    const def4 = deriveRules({ playerCount: 4, gameLength: 'tonpuu' });
+    expect(def4.tobi).toBe(true);
+    expect(def4.tsumoLoss).toBe(false);
+    expect(def4.allowKuitan).toBe(true);
+    expect(def4.allowAtozuke).toBe(true);
+
+    // 4人麻雀では tsumoLoss: true を渡しても false に正規化される
+    const override4 = deriveRules({
+      playerCount: 4,
+      gameLength: 'hanchan',
+      tobi: false,
+      tsumoLoss: true,
+      allowKuitan: false,
+      allowAtozuke: false,
+    });
+    expect(override4.tobi).toBe(false);
+    expect(override4.tsumoLoss).toBe(false);
+    expect(override4.allowKuitan).toBe(false);
+    expect(override4.allowAtozuke).toBe(false);
+
+    // 3人麻雀では tsumoLoss が有効になる
+    const override3 = deriveRules({
+      playerCount: 3,
+      gameLength: 'tonpuu',
+      tsumoLoss: true,
+    });
+    expect(override3.tsumoLoss).toBe(true);
+  });
 });

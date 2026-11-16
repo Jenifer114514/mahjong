@@ -81,6 +81,34 @@ export interface RoundRonWinner {
   winningTile: Tile;
 }
 
+export interface YakuEntry {
+  id: string;
+  name: string;
+  han: number;
+  isYakuman?: boolean;
+}
+
+export interface RoundAgariWinner {
+  winType: 'ron' | 'tsumo';
+  playerId: string;
+  seatIndex: number;
+  fromSeatIndex: number | null;
+  winningTile: Tile;
+  hand: Tile[];
+  melds: Meld[];
+  kitaTiles: Tile[];
+  yaku: YakuEntry[];
+  doraCount: number;
+  kitaCount: number;
+  han: number;
+  fu: number;
+  isYakuman: boolean;
+  scoreLabel: string;
+  pointsAwarded: number;
+  /** playerId -> この和了による点棒増減 */
+  scoreDeltas: Record<string, number>;
+}
+
 export interface PlayerState {
   playerId: string;
   name: string;
@@ -89,6 +117,10 @@ export interface PlayerState {
   hand: Tile[];           // 門前手牌（理牌済み）
   drawnTile: Tile | null; // ツモ牌（副露直後の打牌前は null）
   discards: DiscardEntry[];
+  /** 鳴かれた牌も含むこの局の打牌履歴（捨て牌フリテン判定用） */
+  discardedKinds: TileKind[];
+  /** ロン見逃し後の同巡フリテン状態（本人の次回打牌で解除） */
+  sameTurnFuriten: boolean;
   melds: Meld[];
   kitaTiles: Tile[];      // 3人麻雀の抜き北
   connected: boolean;
@@ -108,6 +140,9 @@ export interface RoundState {
   kuikaeForbiddenKinds: TileKind[]; // ポン・チー直後の1打のみ禁止される牌種
   pendingResponse: PendingResponseState | null;
   ronWinners: RoundRonWinner[];
+  agariResults: RoundAgariWinner[];
+  roundScoreDeltas: Record<string, number>;
+  isTobiEnded: boolean;
 }
 
 export interface GameState {

@@ -1,0 +1,394 @@
+import type { DerivedRules, PlayerCount, Wind } from '../types/rule';
+import type { Meld, YakuEntry } from '../types/state';
+import type { Tile, TileKind } from '../types/tile';
+import {
+  countKindInHandAndMelds,
+  enumerateAgariDecompositions,
+  type AgariDecomposition,
+  type AgariMentsu,
+} from './agari';
+import { countDoraAndKita } from './dora';
+import {
+  evaluateYaku,
+  getPairYakuhaiHan,
+  isTerminalOrHonorKind,
+  type YakuContext,
+  type YakuEvaluation,
+} from './yaku';
+
+export interface ScoreEvaluationParams {
+  hand: readonly Tile[];
+  melds: readonly Meld[];
+  kitaTiles: readonly Tile[];
+  winningTile: Tile;
+  isTsumo: boolean;
+  isDealer: boolean;
+  roundWind: Wind;
+  seatWind: Wind;
+  doraIndicators: readonly Tile[];
+  winnerSeatIndex: number;
+  fromSeatIndex: number | null;
+  rules: DerivedRules;
+}
+
+export interface ScoreLimitDetail {
+  basePoints: number;
+  scoreLabel: string;
+}
+
+export interface AgariScoreResult {
+  decomposition: AgariDecomposition;
+  yaku: YakuEntry[];
+  yakuHan: number;
+  doraCount: number;
+  kitaCount: number;
+  totalHan: number;
+  fu: number;
+  isYakuman: boolean;
+  basePoints: number;
+  scoreLabel: string;
+  pointsAwarded: number;
+  /** 席番号(0..playerCount-1)ごとの点棒増減 */
+  deltasBySeat: number[];
+}
+
+export function ceilTo10(value: number): number {
+  return Math.ceil(value / 10) * 10;
+}
+
+export function ceilTo100(value: number): number {
+  return Math.ceil(value / 100) * 100;
+}
+
+function getMentsuFu(mentsu: AgariMentsu): number {
+  if (mentsu.type === 'shuntsu') return 0;
+  const isYaochu = isTerminalOrHonorKind(mentsu.kinds[0]!);
+  if (mentsu.type === 'koutsu') {
+    if (mentsu.isOpen) {
+      return isYaochu ? 4 : 2;
+    }
+    return isYaochu ? 8 : 4;
+  }
+  // kantsu
+  if (mentsu.isOpen) {
+    return isYaochu ? 16 : 8;
+  }
+  return isYaochu ? 32 : 16;
+}
+
+export function calculateFu(
+  decomp: AgariDecomposition,
+  yakuEval: YakuEvaluation,
+  ctx: YakuContext,
+): number {
+  if (decomp.form === 'kokushi') {
+    return 0;
+  }
+  if (decomp.form === 'chiitoitsu') {
+    return 25;
+  }
+  if (yakuEval.hasPinfu && ctx.isTsumo) {
+    return 20;
+  }
+
+  let fu = 20;
+
+  if (decomp.isMenzen && !ctx.isTsumo) {
+    fu += 10;
+  }
+  if (ctx.isTsumo) {
+    fu += 2;
+  }
+
+  for (const m of decomp.mentsu) {
+    fu += getMentsuFu(m);
+  }
+
+  fu += getPairYakuhaiHan(decomp.pairKind, ctx);
+
+  if (
+    decomp.machi === 'kanchan' ||
+    decomp.machi === 'penchan' ||
+    decomp.machi === 'tanki'
+  ) {
+    fu += 2;
+  }
+
+  const rounded = ceilTo10(fu);
+  // 副露した平和形のロンは30符（20符のままにはしない）
+  if (!decomp.isMenzen && !ctx.isTsumo && rounded < 30) {
+    return 30;
+  }
+  return rounded;
+}
+
+export function resolveBasePoints(
+  totalHan: number,
+  fu: number,
+  isYakuman: boolean,
+  rules: DerivedRules,
+): ScoreLimitDetail {
+  const limits = rules.scoreLimits;
+
+  if (isYakuman) {
+    return { basePoints: limits.yakuman, scoreLabel: '役満' };
+  }
+  if (rules.allowKazoeYakuman && totalHan >= 13) {
+    return { basePoints: limits.yakuman, scoreLabel: '数え役満' };
+  }
+  if (totalHan >= 11) {
+    return { basePoints: limits.sanbaiman, scoreLabel: '三倍満' };
+  }
+  if (totalHan >= 8) {
+    return { basePoints: limits.baiman, scoreLabel: '倍満' };
+  }
+  if (totalHan >= 6) {
+    return { basePoints: limits.haneman, scoreLabel: '跳満' };
+  }
+  if (totalHan >= 5) {
+    return { basePoints: limits.mangan, scoreLabel: '満貫' };
+  }
+
+  if (
+    rules.kiriageMangan &&
+    ((totalHan === 4 && fu === 30) || (totalHan === 3 && fu === 60))
+  ) {
+    return { basePoints: limits.mangan, scoreLabel: '満貫' };
+  }
+
+  const rawBase = fu * Math.pow(2, totalHan + 2);
+  if (rawBase >= limits.mangan) {
+    return { basePoints: limits.mangan, scoreLabel: '満貫' };
+  }
+  return {
+    basePoints: rawBase,
+    scoreLabel: `${fu}符${totalHan}翻`,
+  };
+}
+
+export function calculatePaymentDeltas(params: {
+  playerCount: PlayerCount;
+  dealerIndex: number;
+  winnerSeatIndex: number;
+  fromSeatIndex: number | null;
+  basePoints: number;
+  isDealer: boolean;
+  isTsumo: boolean;
+  tsumoLoss: boolean;
+}): { pointsAwarded: number; deltasBySeat: number[] } {
+  const {
+    playerCount,
+    dealerIndex,
+    winnerSeatIndex,
+    fromSeatIndex,
+    basePoints,
+    isDealer,
+    isTsumo,
+    tsumoLoss,
+  } = params;
+
+  const deltas = new Array<number>(playerCount).fill(0);
+
+  if (!isTsumo) {
+    if (fromSeatIndex === null) {
+      throw new Error('Ron payment requires fromSeatIndex');
+    }
+    const ronPoints = ceilTo100(basePoints * (isDealer ? 6 : 4));
+    deltas[winnerSeatIndex] = ronPoints;
+    deltas[fromSeatIndex] = -ronPoints;
+    return { pointsAwarded: ronPoints, deltasBySeat: deltas };
+  }
+
+  // ツモ支払い
+  let totalAwarded = 0;
+  if (isDealer) {
+    const baseChildPay = ceilTo100(basePoints * 2);
+    const sanmaExtra =
+      playerCount === 3 && !tsumoLoss ? ceilTo100(baseChildPay / 2) : 0;
+    const eachPay = baseChildPay + sanmaExtra;
+
+    for (let seat = 0; seat < playerCount; seat++) {
+      if (seat === winnerSeatIndex) continue;
+      deltas[seat] = -eachPay;
+      totalAwarded += eachPay;
+    }
+    deltas[winnerSeatIndex] = totalAwarded;
+    return { pointsAwarded: totalAwarded, deltasBySeat: deltas };
+  }
+
+  // 子のツモ
+  const baseChildPay = ceilTo100(basePoints);
+  const baseDealerPay = ceilTo100(basePoints * 2);
+  const sanmaExtra =
+    playerCount === 3 && !tsumoLoss ? ceilTo100(baseChildPay / 2) : 0;
+
+  for (let seat = 0; seat < playerCount; seat++) {
+    if (seat === winnerSeatIndex) continue;
+    const pay =
+      (seat === dealerIndex ? baseDealerPay : baseChildPay) + sanmaExtra;
+    deltas[seat] = -pay;
+    totalAwarded += pay;
+  }
+  deltas[winnerSeatIndex] = totalAwarded;
+  return { pointsAwarded: totalAwarded, deltasBySeat: deltas };
+}
+
+function hasAnyNonDoraYakuForWaitKind(
+  handWithoutWin: readonly Tile[],
+  melds: readonly Meld[],
+  waitKind: TileKind,
+  ctx: YakuContext,
+): boolean {
+  const decomps = enumerateAgariDecompositions(
+    handWithoutWin,
+    melds,
+    waitKind,
+    ctx.isTsumo,
+  );
+  return decomps.some((d) => evaluateYaku(d, ctx).yaku.length > 0);
+}
+
+/** 後付けなしルール時: 副露ありの形で、和了形を完成させる全待ち牌種に役があるかを判定 */
+function passesAtozukeCheck(
+  handWithoutWin: readonly Tile[],
+  melds: readonly Meld[],
+  ctx: YakuContext,
+): boolean {
+  const isMenzen = melds.every((m) => m.type === 'ankan');
+  if (isMenzen || ctx.rules.allowAtozuke) {
+    return true;
+  }
+
+  for (const waitKind of ctx.rules.allowedTileKinds) {
+    if (
+      countKindInHandAndMelds(handWithoutWin, melds, waitKind) >=
+      ctx.rules.tileSet.copiesPerKind
+    ) {
+      continue;
+    }
+    const decomps = enumerateAgariDecompositions(
+      handWithoutWin,
+      melds,
+      waitKind,
+      ctx.isTsumo,
+    );
+    if (decomps.length === 0) continue;
+    if (!hasAnyNonDoraYakuForWaitKind(handWithoutWin, melds, waitKind, ctx)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export function evaluateBestAgari(
+  params: ScoreEvaluationParams & { dealerIndex: number },
+): AgariScoreResult | null {
+  const {
+    hand,
+    melds,
+    kitaTiles,
+    winningTile,
+    isTsumo,
+    isDealer,
+    roundWind,
+    seatWind,
+    doraIndicators,
+    dealerIndex,
+    winnerSeatIndex,
+    fromSeatIndex,
+    rules,
+  } = params;
+
+  const decomps = enumerateAgariDecompositions(
+    hand,
+    melds,
+    winningTile.kind,
+    isTsumo,
+  );
+  if (decomps.length === 0) {
+    return null;
+  }
+
+  const ctx: YakuContext = {
+    isTsumo,
+    roundWind,
+    seatWind,
+    rules,
+  };
+
+  if (!passesAtozukeCheck(hand, melds, ctx)) {
+    return null;
+  }
+
+  const { doraCount, kitaCount } = countDoraAndKita({
+    hand,
+    winningTile,
+    melds,
+    kitaTiles,
+    doraIndicators,
+    rules,
+  });
+
+  let best: AgariScoreResult | null = null;
+
+  for (const decomp of decomps) {
+    const yakuEval = evaluateYaku(decomp, ctx);
+    if (yakuEval.yaku.length === 0) {
+      continue;
+    }
+
+    const fu = calculateFu(decomp, yakuEval, ctx);
+    const effectiveDora = yakuEval.isYakuman ? 0 : doraCount;
+    const effectiveKita = yakuEval.isYakuman ? 0 : kitaCount;
+    const totalHan = yakuEval.isYakuman
+      ? yakuEval.yakuHan
+      : yakuEval.yakuHan + effectiveDora + effectiveKita;
+
+    const { basePoints, scoreLabel } = resolveBasePoints(
+      totalHan,
+      fu,
+      yakuEval.isYakuman,
+      rules,
+    );
+
+    const payment = calculatePaymentDeltas({
+      playerCount: rules.playerCount,
+      dealerIndex,
+      winnerSeatIndex,
+      fromSeatIndex,
+      basePoints,
+      isDealer,
+      isTsumo,
+      tsumoLoss: rules.tsumoLoss,
+    });
+
+    const candidate: AgariScoreResult = {
+      decomposition: decomp,
+      yaku: yakuEval.yaku,
+      yakuHan: yakuEval.yakuHan,
+      doraCount: effectiveDora,
+      kitaCount: effectiveKita,
+      totalHan,
+      fu,
+      isYakuman: yakuEval.isYakuman,
+      basePoints,
+      scoreLabel,
+      pointsAwarded: payment.pointsAwarded,
+      deltasBySeat: payment.deltasBySeat,
+    };
+
+    if (
+      best === null ||
+      candidate.pointsAwarded > best.pointsAwarded ||
+      (candidate.pointsAwarded === best.pointsAwarded &&
+        candidate.totalHan > best.totalHan) ||
+      (candidate.pointsAwarded === best.pointsAwarded &&
+        candidate.totalHan === best.totalHan &&
+        candidate.fu > best.fu)
+    ) {
+      best = candidate;
+    }
+  }
+
+  return best;
+}

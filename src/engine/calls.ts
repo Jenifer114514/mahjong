@@ -1,3 +1,4 @@
+import type { SelfTurnActionsView } from '../types/message';
 import type { DerivedRules } from '../types/rule';
 import type {
   CallOptions,
@@ -6,8 +7,11 @@ import type {
   PlayerState,
   RoundState,
 } from '../types/state';
-import type { SelfTurnActionsView } from '../types/message';
 import type { Tile, TileKind } from '../types/tile';
+import { getTenpaiWaitKinds } from './agari';
+import { getRevealedDoraIndicators } from './dora';
+import { deriveRules, getSeatWind } from './rules';
+import { type AgariScoreResult, evaluateBestAgari } from './score';
 
 export interface CanRonParams {
   state: GameState;
@@ -17,12 +21,107 @@ export interface CanRonParams {
 }
 
 export interface EngineHooks {
-  /** ロン可能判定（第3段階で和了判定を実装するまで既定は常に false） */
+  /** ロン可能判定（既定は第3A段階の和了・役・フリテン判定） */
   canRon?: (params: CanRonParams) => boolean;
 }
 
+/**
+ * フリテン判定（捨て牌フリテン + 同巡フリテン）
+ * - 同巡フリテン中なら true
+ * - 非手番形（手牌枚数が 13 - 副露数*3）で待ち牌種のいずれかが自分の捨て牌履歴にあるなら true
+ */
+export function isPlayerFuriten(
+  player: PlayerState,
+  rules: DerivedRules,
+): boolean {
+  if (player.sameTurnFuriten) {
+    return true;
+  }
+  if (player.discardedKinds.length === 0) {
+    return false;
+  }
+  const expectedTenpaiCount = (4 - player.melds.length) * 3 + 1;
+  if (player.hand.length !== expectedTenpaiCount) {
+    return false;
+  }
+  const waitKinds = getTenpaiWaitKinds(player.hand, player.melds, rules);
+  if (waitKinds.length === 0) {
+    return false;
+  }
+  const discardedSet = new Set(player.discardedKinds);
+  return waitKinds.some((k) => discardedSet.has(k));
+}
+
+export function evaluateRonForPlayer(
+  state: GameState,
+  player: PlayerState,
+  discardedTile: Tile,
+  discarder: PlayerState,
+): AgariScoreResult | null {
+  const round = state.round;
+  if (!round) return null;
+  if (player.playerId === discarder.playerId) return null;
+
+  const rules = deriveRules(state.ruleConfig);
+  if (player.sameTurnFuriten) {
+    return null;
+  }
+
+  const waitKinds = getTenpaiWaitKinds(player.hand, player.melds, rules);
+  if (!waitKinds.includes(discardedTile.kind)) {
+    return null;
+  }
+
+  const discardedSet = new Set(player.discardedKinds);
+  if (waitKinds.some((k) => discardedSet.has(k))) {
+    return null;
+  }
+
+  return evaluateBestAgari({
+    hand: player.hand,
+    melds: player.melds,
+    kitaTiles: player.kitaTiles,
+    winningTile: discardedTile,
+    isTsumo: false,
+    isDealer: player.seatIndex === round.dealerIndex,
+    dealerIndex: round.dealerIndex,
+    roundWind: round.roundWind,
+    seatWind: getSeatWind(player.seatIndex, round.dealerIndex, rules.seatWinds),
+    doraIndicators: getRevealedDoraIndicators(round.deadWall),
+    winnerSeatIndex: player.seatIndex,
+    fromSeatIndex: discarder.seatIndex,
+    rules,
+  });
+}
+
+export function evaluateTsumoFromRound(
+  player: PlayerState,
+  round: RoundState,
+  rules: DerivedRules,
+): AgariScoreResult | null {
+  if (player.drawnTile === null) {
+    return null;
+  }
+  return evaluateBestAgari({
+    hand: player.hand,
+    melds: player.melds,
+    kitaTiles: player.kitaTiles,
+    winningTile: player.drawnTile,
+    isTsumo: true,
+    isDealer: player.seatIndex === round.dealerIndex,
+    dealerIndex: round.dealerIndex,
+    roundWind: round.roundWind,
+    seatWind: getSeatWind(player.seatIndex, round.dealerIndex, rules.seatWinds),
+    doraIndicators: getRevealedDoraIndicators(round.deadWall),
+    winnerSeatIndex: player.seatIndex,
+    fromSeatIndex: null,
+    rules,
+  });
+}
+
 export const DEFAULT_ENGINE_HOOKS: Required<EngineHooks> = {
-  canRon: () => false,
+  canRon: ({ state, player, discardedTile, discarder }) =>
+    evaluateRonForPlayer(state, player, discardedTile, discarder) !== null,
 };
 
 function parseNumberTile(
@@ -254,9 +353,14 @@ export function getSelfTurnActions(
   round: RoundState,
   rules: DerivedRules,
 ): SelfTurnActionsView {
-  // ツモ直後かつ山残りがある場合のみ（ポン・チー直後の打牌前、または海底では不可）
+  const canTsumo =
+    player.drawnTile !== null &&
+    evaluateTsumoFromRound(player, round, rules) !== null;
+
+  // カン・北抜きはツモ直後かつ山残りがある場合のみ（ポン・チー直後の打牌前、または海底では不可）
   if (player.drawnTile === null || round.wall.length === 0) {
     return {
+      canTsumo,
       canAnkanKinds: [],
       canKakanTileIds: [],
       canKitaTileIds: [],
@@ -299,6 +403,7 @@ export function getSelfTurnActions(
     : [];
 
   return {
+    canTsumo,
     canAnkanKinds,
     canKakanTileIds,
     canKitaTileIds,

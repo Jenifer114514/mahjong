@@ -736,6 +736,128 @@ input {
   font-variant-numeric: tabular-nums;
 }
 
+.delta-pos {
+  color: #6ee7a8;
+  font-weight: 700;
+}
+
+.delta-neg {
+  color: #ff9c9c;
+  font-weight: 700;
+}
+
+/* Stage 3A: Room local rule toggles, furiten & agari disclosure */
+.rule-toggle-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.rule-toggle-field {
+  margin-bottom: 0;
+}
+
+.seg-btn-sm {
+  padding: 7px 8px;
+  font-size: 0.85rem;
+}
+
+.furiten-badge {
+  font-size: 0.72rem;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(240, 147, 43, 0.25);
+  border: 1px solid rgba(240, 147, 43, 0.7);
+  color: #ffd394;
+  font-weight: 700;
+}
+
+.tobi-badge {
+  display: inline-block;
+  margin-left: 10px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  vertical-align: middle;
+  background: rgba(229, 83, 83, 0.28);
+  border: 1px solid rgba(229, 83, 83, 0.7);
+  color: #ffc2c2;
+}
+
+.agari-cards-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.agari-result-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-gold);
+}
+
+.agari-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.agari-who {
+  font-weight: 700;
+  font-size: 0.98rem;
+}
+
+.agari-score-badge {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(240, 201, 92, 0.2);
+  border: 1px solid var(--accent-gold);
+  color: var(--accent-gold);
+  font-weight: 800;
+  font-size: 0.9rem;
+}
+
+.agari-tiles-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px;
+}
+
+.yaku-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.yaku-chip {
+  padding: 3px 9px;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  background: rgba(255, 255, 255, 0.09);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+}
+
+.yaku-chip.is-dora {
+  background: rgba(56, 193, 114, 0.16);
+  border-color: rgba(56, 193, 114, 0.45);
+  color: #a6f2c7;
+}
+
+.yaku-chip.is-yakuman {
+  background: rgba(240, 201, 92, 0.24);
+  border-color: var(--accent-gold);
+  color: var(--accent-gold);
+}
+
 @media (max-width: 780px) {
   .table-felt {
     grid-template-areas:

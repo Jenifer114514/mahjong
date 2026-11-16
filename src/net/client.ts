@@ -174,6 +174,13 @@ export class ClientSession {
     });
   }
 
+  declareTsumo(): void {
+    this.send({
+      kind: 'ACTION',
+      action: { type: 'DECLARE_TSUMO' },
+    });
+  }
+
   declareAnkan(kind: TileKind): void {
     this.send({
       kind: 'ACTION',

@@ -38,6 +38,10 @@ class MahjongApp {
       playerName: '',
       playerCount: 4,
       gameLength: 'tonpuu',
+      tobi: true,
+      tsumoLoss: false,
+      allowKuitan: true,
+      allowAtozuke: true,
       joinCode: normalizeRoomCode(roomFromUrl),
     };
 
@@ -214,7 +218,7 @@ class MahjongApp {
 
     const title = document.createElement('div');
     title.className = 'app-title';
-    title.textContent = 'PeerJS 対戦リーチ麻雀（第2段階）';
+    title.textContent = 'PeerJS 対戦リーチ麻雀（第3A段階）';
 
     const rightControls = document.createElement('div');
     rightControls.style.display = 'flex';
@@ -289,6 +293,8 @@ class MahjongApp {
           this.dispatchAction((s) => s.discardTile(tileId)),
         onCallResponse: (choice) =>
           this.dispatchAction((s) => s.respondToCall(choice)),
+        onDeclareTsumo: () =>
+          this.dispatchAction((s) => s.declareTsumo()),
         onDeclareAnkan: (kind) =>
           this.dispatchAction((s) => s.declareAnkan(kind)),
         onDeclareKakan: (tileId) =>

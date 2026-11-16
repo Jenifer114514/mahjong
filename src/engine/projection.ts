@@ -4,8 +4,8 @@ import type {
   SelfTurnActionsView,
   StateView,
 } from '../types/message';
-import type { CallOptions, GameState } from '../types/state';
-import { getSelfTurnActions } from './calls';
+import type { CallOptions, GameState, RoundAgariWinner } from '../types/state';
+import { getSelfTurnActions, isPlayerFuriten } from './calls';
 import { deriveRules, getSeatWind } from './rules';
 
 function cloneCallOptions(opts: CallOptions): CallOptions {
@@ -18,6 +18,34 @@ function cloneCallOptions(opts: CallOptions): CallOptions {
     chiOptions: opts.chiOptions.map((c) => ({
       tiles: [{ ...c.tiles[0] }, { ...c.tiles[1] }],
     })),
+  };
+}
+
+function cloneAgariWinner(w: RoundAgariWinner): RoundAgariWinner {
+  return {
+    winType: w.winType,
+    playerId: w.playerId,
+    seatIndex: w.seatIndex,
+    fromSeatIndex: w.fromSeatIndex,
+    winningTile: { ...w.winningTile },
+    hand: w.hand.map((t) => ({ ...t })),
+    melds: w.melds.map((m) => ({
+      type: m.type,
+      tiles: m.tiles.map((t) => ({ ...t })),
+      calledTile: m.calledTile ? { ...m.calledTile } : null,
+      fromSeatIndex: m.fromSeatIndex,
+      addedTile: m.addedTile ? { ...m.addedTile } : null,
+    })),
+    kitaTiles: w.kitaTiles.map((t) => ({ ...t })),
+    yaku: w.yaku.map((y) => ({ ...y })),
+    doraCount: w.doraCount,
+    kitaCount: w.kitaCount,
+    han: w.han,
+    fu: w.fu,
+    isYakuman: w.isYakuman,
+    scoreLabel: w.scoreLabel,
+    pointsAwarded: w.pointsAwarded,
+    scoreDeltas: { ...w.scoreDeltas },
   };
 }
 
@@ -83,6 +111,9 @@ export function toStateView(
           ...w,
           winningTile: { ...w.winningTile },
         })),
+        agariResults: state.round.agariResults.map(cloneAgariWinner),
+        roundScoreDeltas: { ...state.round.roundScoreDeltas },
+        isTobiEnded: state.round.isTobiEnded,
       }
     : null;
 
@@ -115,6 +146,7 @@ export function toStateView(
   if (isViewerTurn && state.round) {
     const actions = getSelfTurnActions(viewer, state.round, rules);
     if (
+      actions.canTsumo ||
       actions.canAnkanKinds.length > 0 ||
       actions.canKakanTileIds.length > 0 ||
       actions.canKitaTileIds.length > 0
@@ -128,6 +160,11 @@ export function toStateView(
       ? [...state.round.kuikaeForbiddenKinds]
       : [];
 
+  const isFuriten =
+    state.round !== null && state.phase !== 'round_end' && state.phase !== 'finished'
+      ? isPlayerFuriten(viewer, rules)
+      : false;
+
   return {
     roomCode: state.roomCode,
     hostPlayerId: state.hostPlayerId,
@@ -140,6 +177,7 @@ export function toStateView(
     myDrawnTile: viewer.drawnTile ? { ...viewer.drawnTile } : null,
     myCallOptions,
     mySelfActions,
+    isFuriten,
     kuikaeForbiddenKinds,
     responseRemainingMs,
     round,

@@ -97,6 +97,17 @@ describe('net/protocol', () => {
       action: { type: 'DECLARE_KITA', tileId: '4z-0' },
     });
 
+    // Stage 3A action
+    expect(
+      parseClientMessage({
+        kind: 'ACTION',
+        action: { type: 'DECLARE_TSUMO' },
+      }),
+    ).toEqual({
+      kind: 'ACTION',
+      action: { type: 'DECLARE_TSUMO' },
+    });
+
     // Invalid cases
     expect(parseClientMessage(null)).toBeNull();
     expect(parseClientMessage({ kind: 'JOIN', playerName: 123 })).toBeNull();

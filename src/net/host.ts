@@ -238,6 +238,12 @@ export class HostSession {
           choice: message.action.choice,
         };
         break;
+      case 'DECLARE_TSUMO':
+        engineAction = {
+          type: 'DECLARE_TSUMO',
+          playerId,
+        };
+        break;
       case 'DECLARE_ANKAN':
         engineAction = {
           type: 'DECLARE_ANKAN',
@@ -318,6 +324,13 @@ export class HostSession {
       type: 'CALL_RESPONSE',
       playerId: this.state.hostPlayerId,
       choice,
+    });
+  }
+
+  declareTsumo(): void {
+    this.dispatchHostAction({
+      type: 'DECLARE_TSUMO',
+      playerId: this.state.hostPlayerId,
     });
   }
 
