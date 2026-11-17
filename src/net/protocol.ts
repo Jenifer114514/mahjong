@@ -1,9 +1,15 @@
 import type { PeerOptions } from 'peerjs';
 import type {
   ChatMessage,
+  CheckpointKeyPayload,
   ClientMessage,
   GameError,
+  HostCheckpointPayload,
   HostMessage,
+  HostMigratingPayload,
+  HostRedirectPayload,
+  HostSnapshotPayload,
+  SessionWelcomePayload,
   StateView,
 } from '../types/message';
 import type { CallResponseChoice } from '../types/state';
@@ -48,6 +54,11 @@ export function normalizeRoomCode(raw: string): string {
 
 export function roomCodeToPeerId(roomCode: string): string {
   return `${PEER_ID_PREFIX}${normalizeRoomCode(roomCode)}`;
+}
+
+export function migratedHostPeerId(roomCode: string, epoch: number): string {
+  const base = roomCodeToPeerId(roomCode);
+  return epoch <= 0 ? base : `${base}-H${epoch}`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -106,9 +117,34 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
     if (typeof raw.playerName !== 'string') {
       return null;
     }
-    return {
+    const msg: ClientMessage = {
       kind: 'JOIN',
       playerName: raw.playerName,
+    };
+    if (isNonEmptyString(raw.reconnectToken)) {
+      msg.reconnectToken = raw.reconnectToken;
+    }
+    if (raw.preferSpectate === true) {
+      msg.preferSpectate = true;
+    }
+    return msg;
+  }
+
+  if (raw.kind === 'CHECKPOINT_KEY_SHARE') {
+    if (
+      typeof raw.hostEpoch !== 'number' ||
+      !Number.isFinite(raw.hostEpoch) ||
+      typeof raw.seq !== 'number' ||
+      !Number.isFinite(raw.seq) ||
+      !isNonEmptyString(raw.keyBase64)
+    ) {
+      return null;
+    }
+    return {
+      kind: 'CHECKPOINT_KEY_SHARE',
+      hostEpoch: raw.hostEpoch,
+      seq: raw.seq,
+      keyBase64: raw.keyBase64,
     };
   }
 
@@ -309,6 +345,115 @@ export function parseHostMessage(raw: unknown): HostMessage | null {
     return {
       kind: 'CHAT_HISTORY',
       payload: list,
+    };
+  }
+
+  if (raw.kind === 'SESSION_WELCOME') {
+    if (!isRecord(raw.payload)) return null;
+    const w = raw.payload;
+    if (
+      !isNonEmptyString(w.roomCode) ||
+      !isNonEmptyString(w.playerId) ||
+      typeof w.playerName !== 'string' ||
+      !isNonEmptyString(w.reconnectToken) ||
+      typeof w.isSpectator !== 'boolean' ||
+      typeof w.hostEpoch !== 'number' ||
+      !Number.isFinite(w.hostEpoch) ||
+      !isNonEmptyString(w.hostPeerId)
+    ) {
+      return null;
+    }
+    return {
+      kind: 'SESSION_WELCOME',
+      payload: raw.payload as unknown as SessionWelcomePayload,
+    };
+  }
+
+  if (raw.kind === 'HOST_HANDOVER') {
+    if (!isRecord(raw.payload)) return null;
+    const h = raw.payload;
+    if (
+      !isRecord(h.state) ||
+      !Array.isArray(h.chatMessages) ||
+      typeof h.chatSeq !== 'number' ||
+      !isRecord(h.playerTokens) ||
+      !isRecord(h.spectatorTokens) ||
+      typeof h.hostEpoch !== 'number' ||
+      typeof h.permanentRoom !== 'boolean'
+    ) {
+      return null;
+    }
+    return {
+      kind: 'HOST_HANDOVER',
+      payload: raw.payload as unknown as HostSnapshotPayload,
+    };
+  }
+
+  if (raw.kind === 'HOST_CHECKPOINT') {
+    if (!isRecord(raw.payload)) return null;
+    const c = raw.payload;
+    if (
+      typeof c.hostEpoch !== 'number' ||
+      typeof c.seq !== 'number' ||
+      !isNonEmptyString(c.backupPlayerId) ||
+      !isNonEmptyString(c.ivBase64) ||
+      !isNonEmptyString(c.ciphertextBase64) ||
+      (c.inlineKeyBase64 !== undefined && !isNonEmptyString(c.inlineKeyBase64))
+    ) {
+      return null;
+    }
+    return {
+      kind: 'HOST_CHECKPOINT',
+      payload: raw.payload as unknown as HostCheckpointPayload,
+    };
+  }
+
+  if (raw.kind === 'CHECKPOINT_KEY') {
+    if (!isRecord(raw.payload)) return null;
+    const k = raw.payload;
+    if (
+      typeof k.hostEpoch !== 'number' ||
+      typeof k.seq !== 'number' ||
+      !isNonEmptyString(k.keyBase64)
+    ) {
+      return null;
+    }
+    return {
+      kind: 'CHECKPOINT_KEY',
+      payload: raw.payload as unknown as CheckpointKeyPayload,
+    };
+  }
+
+  if (raw.kind === 'HOST_MIGRATING') {
+    if (!isRecord(raw.payload)) return null;
+    const m = raw.payload;
+    if (
+      !isNonEmptyString(m.roomCode) ||
+      !isNonEmptyString(m.newHostPlayerId) ||
+      !isNonEmptyString(m.newHostPeerId) ||
+      typeof m.hostEpoch !== 'number'
+    ) {
+      return null;
+    }
+    return {
+      kind: 'HOST_MIGRATING',
+      payload: raw.payload as unknown as HostMigratingPayload,
+    };
+  }
+
+  if (raw.kind === 'HOST_REDIRECT') {
+    if (!isRecord(raw.payload)) return null;
+    const r = raw.payload;
+    if (
+      !isNonEmptyString(r.roomCode) ||
+      !isNonEmptyString(r.hostPeerId) ||
+      typeof r.hostEpoch !== 'number'
+    ) {
+      return null;
+    }
+    return {
+      kind: 'HOST_REDIRECT',
+      payload: raw.payload as unknown as HostRedirectPayload,
     };
   }
 

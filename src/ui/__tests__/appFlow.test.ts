@@ -1,12 +1,49 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-// PeerJS はブラウザ専用のためスタブ化（ローカル対局では接続自体を行わない）
+// PeerJS はブラウザ専用のためスタブ化（常設ルーム自動開設試験にも対応）
 vi.mock('peerjs', () => {
   class FakePeer {
+    static openPeers = new Set<string>();
+    id: string;
     destroyed = false;
-    on() {}
-    destroy() {}
+    private handlers: Record<string, Array<(...args: unknown[]) => void>> = {};
+    constructor(id?: string) {
+      this.id = id && id.length > 0 ? id : 'stub-client-peer';
+      queueMicrotask(() => {
+        if (this.destroyed) return;
+        FakePeer.openPeers.add(this.id);
+        this.emit('open', this.id);
+      });
+    }
+    on(ev: string, cb: (...args: unknown[]) => void) {
+      this.handlers[ev] = this.handlers[ev] ?? [];
+      this.handlers[ev]!.push(cb);
+    }
+    emit(ev: string, ...args: unknown[]) {
+      for (const cb of this.handlers[ev] ?? []) cb(...args);
+    }
+    connect() {
+      const connHandlers: Record<string, Array<(...args: unknown[]) => void>> = {};
+      queueMicrotask(() => {
+        if (!this.destroyed) {
+          this.emit('error', { type: 'peer-unavailable', message: 'not found' });
+        }
+      });
+      return {
+        open: false,
+        on(ev: string, cb: (...args: unknown[]) => void) {
+          connHandlers[ev] = connHandlers[ev] ?? [];
+          connHandlers[ev]!.push(cb);
+        },
+        send() {},
+        close() {},
+      };
+    }
+    destroy() {
+      this.destroyed = true;
+      FakePeer.openPeers.delete(this.id);
+    }
   }
   return { default: FakePeer };
 });
@@ -264,5 +301,26 @@ describe('アプリ起動とローカルCPU対局', () => {
 
     expect(clickByText(root, '.table-chat-modal button', '閉じる')).toBe(true);
     expect(root.querySelector('.table-chat-modal')).toBeNull();
+  });
+
+  it('常設ルーム（銅の間）に誰もいない状態で入室すると自動でホスト立卓し待機ロビーへ入る', async () => {
+    localStorage.clear();
+    bootApp();
+    await loadMain();
+
+    const root = document.getElementById('app') as HTMLElement;
+    expect(root.textContent).toContain('常設ルーム（銅の間・銀の間・金の間）');
+    expect(clickByText(root, 'button', '銅の間に入る')).toBe(true);
+
+    let enteredLobby = false;
+    for (let i = 0; i < 40; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      if (root.textContent?.includes('銅の間 (BRONZE)')) {
+        enteredLobby = true;
+        break;
+      }
+    }
+    expect(enteredLobby).toBe(true);
+    expect(root.querySelector('.lobby-start-btn')).not.toBeNull();
   });
 });

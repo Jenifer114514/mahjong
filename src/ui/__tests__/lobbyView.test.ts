@@ -277,4 +277,154 @@ describe('renderWaitingRoom（CPU の後入れ）', () => {
     sPartial.destroy();
     sFull.destroy();
   });
+
+  it('常設ルーム（銅・銀・金の間）と保存済み再接続バナーを表示・操作できる', () => {
+    const onJoinPermanentRoom = vi.fn();
+    const onReconnectSession = vi.fn();
+    const onDiscardSavedSession = vi.fn();
+    const formState: LobbyFormState = {
+      playerName: 'テスト',
+      playerCount: 4,
+      gameLength: 'tonpuu',
+      tobi: true,
+      tsumoLoss: false,
+      allowKuitan: true,
+      allowAtozuke: true,
+      honbaBonus: true,
+      joinCode: '',
+      cpuCount: 0,
+      cpuLevel: 'normal',
+    };
+
+    const root = document.createElement('div');
+    renderLobbyEntry(
+      root,
+      formState,
+      {
+        onCreateRoom: () => {},
+        onJoinRoom: () => {},
+        onStartLocalGame: () => {},
+        onLeaveLobby: () => {},
+        onJoinPermanentRoom,
+        onReconnectSession,
+        onDiscardSavedSession,
+      },
+      false,
+      {
+        savedSession: {
+          roomCode: 'SILVER',
+          hostPeerId: 'arena-mj-SILVER',
+          hostEpoch: 0,
+          playerId: 'p1',
+          playerName: 'テスト',
+          reconnectToken: 'tok-1',
+          isSpectator: false,
+          updatedAt: Date.now(),
+        },
+      },
+    );
+
+    expect(root.querySelector('.reconnect-card')).not.toBeNull();
+    expect(root.textContent).toContain('銀の間');
+    expect(root.querySelectorAll('.permanent-room-item')).toHaveLength(3);
+    expect(clickByText(root, '銀の間に入る')).toBe(true);
+    expect(onJoinPermanentRoom).toHaveBeenCalledWith('SILVER', 'テスト');
+
+    expect(clickByText(root, '再接続する')).toBe(true);
+    expect(onReconnectSession).toHaveBeenCalledTimes(1);
+
+    expect(clickByText(root, '履歴を消す')).toBe(true);
+    expect(onDiscardSavedSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('待機ロビーではゲストへの「ホストを譲る」ボタンや観戦者バナーを表示する', () => {
+    const onTransferHost = vi.fn();
+    const onTransferHostAndLeave = vi.fn();
+    const view: StateView = {
+      roomCode: 'GOLD',
+      hostPlayerId: 'p0',
+      viewerPlayerId: 'p0',
+      viewerSeatIndex: 0,
+      phase: 'lobby',
+      ruleConfig: { playerCount: 4, gameLength: 'hanchan' },
+      round: null,
+      players: [
+        {
+          playerId: 'p0',
+          name: 'ホスト',
+          seatIndex: 0,
+          seatWind: 'E',
+          score: 25000,
+          isRiichi: false,
+          isDoubleRiichi: false,
+          discards: [],
+          melds: [],
+          kitaTiles: [],
+          handCount: 0,
+          hasDrawnTile: false,
+          connected: true,
+          isCurrentTurn: false,
+          isDealer: true,
+        },
+        {
+          playerId: 'p1',
+          name: 'ゲスト',
+          seatIndex: 1,
+          seatWind: 'S',
+          score: 25000,
+          isRiichi: false,
+          isDoubleRiichi: false,
+          discards: [],
+          melds: [],
+          kitaTiles: [],
+          handCount: 0,
+          hasDrawnTile: false,
+          connected: true,
+          isCurrentTurn: false,
+          isDealer: false,
+        },
+      ],
+      spectators: [{ spectatorId: 'sp1', name: '観戦太郎', connected: true }],
+      initialDealerIndex: 0,
+      kyotakuCount: 0,
+      finalKyotakuAward: null,
+      myHand: [],
+      myDrawnTile: null,
+      myCallOptions: null,
+      mySelfActions: null,
+      isFuriten: false,
+      kuikaeForbiddenKinds: [],
+      responseRemainingMs: null,
+    };
+
+    const root = document.createElement('div');
+    renderWaitingRoom(root, view, {
+      onCreateRoom: () => {},
+      onJoinRoom: () => {},
+      onStartLocalGame: () => {},
+      onLeaveLobby: () => {},
+      onTransferHost,
+      onTransferHostAndLeave,
+    });
+
+    expect(root.textContent).toContain('金の間 (GOLD)');
+    expect(root.textContent).toContain('観戦待機 (1人): 観戦太郎');
+    expect(clickByText(root, 'ホストを譲る')).toBe(true);
+    expect(onTransferHost).toHaveBeenCalledWith('p1');
+    expect(clickByText(root, 'ホストを譲って退出')).toBe(true);
+    expect(onTransferHostAndLeave).toHaveBeenCalledTimes(1);
+
+    const specRoot = document.createElement('div');
+    renderWaitingRoom(
+      specRoot,
+      { ...view, viewerPlayerId: 'sp1', isSpectator: true },
+      {
+        onCreateRoom: () => {},
+        onJoinRoom: () => {},
+        onStartLocalGame: () => {},
+        onLeaveLobby: () => {},
+      },
+    );
+    expect(specRoot.querySelector('.spectator-lobby-banner')).not.toBeNull();
+  });
 });

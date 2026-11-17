@@ -3360,3 +3360,234 @@ input {
     justify-content: center;
   }
 }
+
+/* ---------- 再接続バナー ---------- */
+.reconnect-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  border-color: rgba(124, 196, 255, 0.55);
+  background: linear-gradient(
+    180deg,
+    rgba(30, 74, 142, 0.35) 0%,
+    rgba(13, 27, 54, 0.92) 100%
+  );
+}
+
+.reconnect-info h2 {
+  margin: 0 0 4px;
+  font-size: 1rem;
+  color: #9ed4ff;
+}
+
+.reconnect-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ---------- 常設ルーム（銅・銀・金の間） ---------- */
+.permanent-rooms-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.permanent-rooms-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+@media (max-width: 780px) {
+  .permanent-rooms-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.permanent-room-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(10, 22, 44, 0.72);
+  border: 1px solid rgba(130, 178, 250, 0.28);
+}
+
+.permanent-room-item.is-bronze {
+  border-color: rgba(214, 142, 92, 0.55);
+}
+
+.permanent-room-item.is-silver {
+  border-color: rgba(186, 206, 232, 0.58);
+}
+
+.permanent-room-item.is-gold {
+  border-color: rgba(242, 198, 92, 0.65);
+}
+
+.permanent-room-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.permanent-room-tier {
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(79, 157, 255, 0.18);
+  color: #d7e7ff;
+}
+
+.permanent-room-tier.is-bronze {
+  background: rgba(214, 142, 92, 0.22);
+  color: #f3c49d;
+}
+
+.permanent-room-tier.is-silver {
+  background: rgba(186, 206, 232, 0.22);
+  color: #e4eefb;
+}
+
+.permanent-room-tier.is-gold {
+  background: rgba(242, 198, 92, 0.22);
+  color: #ffe394;
+}
+
+.permanent-room-code {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #9ab3d8;
+}
+
+.permanent-room-name {
+  margin: 0;
+  font-size: 1.08rem;
+  color: #f2f6ff;
+}
+
+.permanent-room-desc {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.permanent-room-rules {
+  font-size: 0.72rem;
+  color: #9fc2f5;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(6, 14, 30, 0.55);
+}
+
+.permanent-room-enter-btn {
+  margin-top: auto;
+  width: 100%;
+}
+
+/* ---------- ロビー・ホスト移譲 / 観戦表示 ---------- */
+.player-slot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.lobby-transfer-btn {
+  padding: 4px 10px;
+  font-size: 0.76rem;
+  white-space: nowrap;
+}
+
+.lobby-spectators-line {
+  margin: 6px 0 10px;
+}
+
+.spectator-lobby-banner {
+  margin: 8px 0 12px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgba(79, 157, 255, 0.16);
+  border: 1px solid rgba(124, 196, 255, 0.42);
+  color: #cfe6ff;
+  font-size: 0.86rem;
+}
+
+/* ---------- 卓上の観戦 HUD と視点切替 ---------- */
+.spectator-hud {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  z-index: 15;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(7, 15, 34, 0.84);
+  border: 1px solid rgba(124, 196, 255, 0.35);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+}
+
+.spectator-badge {
+  display: inline-flex;
+  align-self: flex-start;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(79, 157, 255, 0.25);
+  border: 1px solid rgba(124, 196, 255, 0.5);
+  color: #9ed4ff;
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.spectator-perspective-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.spectator-seat-btn {
+  padding: 3px 8px;
+  font-size: 0.72rem;
+  border-radius: 6px;
+  border: 1px solid rgba(160, 195, 245, 0.28);
+  background: rgba(18, 34, 68, 0.72);
+  color: #d6e4fa;
+  cursor: pointer;
+}
+
+.spectator-seat-btn.is-active {
+  background: rgba(79, 157, 255, 0.36);
+  border-color: #7cc4ff;
+  color: #ffffff;
+  font-weight: 700;
+}
+
+.spectator-hand-area {
+  gap: 2px;
+}
+
+/* ---------- 設定モーダル内のホスト引き継ぎ ---------- */
+.setting-handover-box {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(160, 195, 245, 0.2);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.setting-handover-btns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+

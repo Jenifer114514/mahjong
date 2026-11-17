@@ -15,7 +15,11 @@ import type {
   Action,
   ChatMessage,
   GameError,
+  HostCheckpointPayload,
   HostMessage,
+  HostMigratingPayload,
+  HostSnapshotPayload,
+  SessionWelcomePayload,
   StateView,
 } from '../types/message';
 import type { RuleConfig } from '../types/rule';
@@ -24,11 +28,30 @@ import type { TileKind } from '../types/tile';
 import {
   PEER_OPTIONS,
   generateRoomCode,
+  migratedHostPeerId,
+  normalizeRoomCode,
   parseClientMessage,
   roomCodeToPeerId,
 } from './protocol';
+import {
+  decryptCheckpoint,
+  encryptCheckpoint,
+  generateReconnectToken,
+} from './recovery';
+import { isPermanentRoomCode } from './rooms';
 
 export type HostConnectionStatus = 'initializing' | 'ready' | 'error' | 'closed';
+
+export interface PendingEncryptedTakeover {
+  hostEpoch: number;
+  seq: number;
+  ivBase64: string;
+  ciphertextBase64: string;
+  localPlayerId: string;
+  localReconnectToken: string;
+  fallbackView: StateView;
+  initialKeyBase64?: string;
+}
 
 export interface HostSessionCallbacks {
   onViewChange: (view: StateView) => void;
@@ -36,6 +59,13 @@ export interface HostSessionCallbacks {
   onError: (error: GameError) => void;
   onChatMessage?: (message: ChatMessage) => void;
   onChatHistory?: (messages: ChatMessage[]) => void;
+  onWelcome?: (welcome: SessionWelcomePayload) => void;
+  onPermanentRoomClaimConflict?: (roomCode: string) => void;
+  onHostSelfDemoted?: (
+    migration: HostMigratingPayload,
+    localReconnectToken: string,
+    localPlayerId: string,
+  ) => void;
 }
 
 export interface HostSessionOptions {
@@ -55,18 +85,44 @@ export interface HostSessionOptions {
    * 「いますぐCPUと対局」などの即開始モードでのみ true にする。
    */
   autoStart?: boolean;
+  /** 固定部屋コード（銅・銀・金の間など常設ルーム用） */
+  fixedRoomCode?: string;
+  /** ホスト委譲で引き継いだスナップショット */
+  initialSnapshot?: HostSnapshotPayload;
+  /** ホスト突然死後に復号鍵を待って復元するチェックポイント */
+  pendingTakeover?: PendingEncryptedTakeover;
+  /** 切断中のプレイヤー手番を自動ツモ切り代打ちするまでの猶予(ms) */
+  disconnectGraceMs?: number;
 }
 
 export class HostSession {
   private peer: Peer | null = null;
+  private beaconPeer: Peer | null = null;
+  private beaconRetryTimerId: ReturnType<typeof setTimeout> | null = null;
+  private beaconRetryCount = 0;
+  private reconnectPeerTimerId: ReturnType<typeof setTimeout> | null = null;
+  private reconnectPeerAttempts = 0;
+
   private state: GameState;
-  private readonly connections = new Map<string, DataConnection>();
+  private readonly participantConns = new Map<string, DataConnection>();
+  private readonly peerToParticipant = new Map<
+    string,
+    { kind: 'player' | 'spectator'; id: string }
+  >();
+  private readonly playerTokens = new Map<string, string>();
+  private readonly spectatorTokens = new Map<string, string>();
+
   private readonly callbacks: HostSessionCallbacks;
   private destroyed = false;
   private idRetryCount = 0;
   private responseTimerId: ReturnType<typeof setTimeout> | null = null;
+  private disconnectTurnTimerId: ReturnType<typeof setTimeout> | null = null;
+
   private readonly offline: boolean;
   private readonly autoStart: boolean;
+  private readonly fixedRoomCode: string | null;
+  private readonly disconnectGraceMs: number;
+
   /** 設定された CPU 数（ロビーで後から増やせるため可変） */
   private cpuCount: number;
   private readonly cpuDelayMs: number;
@@ -74,6 +130,14 @@ export class HostSession {
   private cpuToken = 0;
   private chatMessages: ChatMessage[] = [];
   private chatSeq = 0;
+  private hostEpoch = 0;
+  private checkpointSeq = 0;
+
+  private pendingTakeover: PendingEncryptedTakeover | null = null;
+  private pendingQueuedJoins: Array<{
+    conn: DataConnection;
+    message: Extract<ReturnType<typeof parseClientMessage>, { kind: 'JOIN' }>;
+  }> = [];
 
   constructor(
     hostName: string,
@@ -84,12 +148,60 @@ export class HostSession {
     this.callbacks = callbacks;
     this.offline = options.offline ?? false;
     this.autoStart = options.autoStart ?? false;
+    this.fixedRoomCode = options.fixedRoomCode
+      ? normalizeRoomCode(options.fixedRoomCode)
+      : null;
+    this.disconnectGraceMs = options.disconnectGraceMs ?? 15000;
     this.cpuCount = options.cpuCount ?? 0;
     this.cpuDelayMs = options.cpuDelayMs ?? 700;
-    this.cpuScheduler = options.cpuScheduler ?? ((fn, delay) => {
-      setTimeout(fn, delay);
-    });
-    const roomCode = generateRoomCode();
+    this.cpuScheduler =
+      options.cpuScheduler ??
+      ((fn, delay) => {
+        setTimeout(fn, delay);
+      });
+
+    if (options.initialSnapshot) {
+      const snap = options.initialSnapshot;
+      this.state = snap.state;
+      this.chatMessages = [...snap.chatMessages];
+      this.chatSeq = snap.chatSeq;
+      this.hostEpoch = snap.hostEpoch;
+      for (const [pid, tok] of Object.entries(snap.playerTokens)) {
+        this.playerTokens.set(pid, tok);
+      }
+      for (const [sid, tok] of Object.entries(snap.spectatorTokens)) {
+        this.spectatorTokens.set(sid, tok);
+      }
+      this.cpuCount = this.state.players.filter((p) =>
+        isCpuPlayerId(p.playerId),
+      ).length;
+      // 引き継ぎ元の古い接続状態は一旦オンラインとオフラインを整理する
+      this.state = {
+        ...this.state,
+        players: this.state.players.map((p) =>
+          p.playerId === this.state.hostPlayerId || isCpuPlayerId(p.playerId)
+            ? { ...p, connected: true }
+            : p,
+        ),
+      };
+      return;
+    }
+
+    if (options.pendingTakeover) {
+      const t = options.pendingTakeover;
+      this.hostEpoch = t.hostEpoch;
+      this.pendingTakeover = t;
+      this.state = createInitialGameState({
+        roomCode: t.fallbackView.roomCode,
+        hostPlayerId: t.localPlayerId,
+        hostName,
+        ruleConfig: t.fallbackView.ruleConfig,
+      });
+      this.playerTokens.set(t.localPlayerId, t.localReconnectToken);
+      return;
+    }
+
+    const roomCode = this.fixedRoomCode ?? generateRoomCode();
     const hostPeerId = roomCodeToPeerId(roomCode);
     this.state = createInitialGameState({
       roomCode,
@@ -97,10 +209,23 @@ export class HostSession {
       hostName,
       ruleConfig,
     });
+    this.playerTokens.set(hostPeerId, generateReconnectToken());
   }
 
   getRoomCode(): string {
     return this.offline ? 'LOCAL' : this.state.roomCode;
+  }
+
+  getHostEpoch(): number {
+    return this.hostEpoch;
+  }
+
+  getCurrentHostPeerId(): string {
+    return migratedHostPeerId(this.state.roomCode, this.hostEpoch);
+  }
+
+  getHostReconnectToken(): string | undefined {
+    return this.playerTokens.get(this.state.hostPlayerId);
   }
 
   /** ローカル対局（CPU戦）かどうか */
@@ -108,10 +233,23 @@ export class HostSession {
     return this.offline;
   }
 
+  /** 他のオンライン人間プレイヤーへホストを譲れるか */
+  getConnectedRemoteHumanIds(): string[] {
+    return this.state.players
+      .filter(
+        (p) =>
+          p.playerId !== this.state.hostPlayerId &&
+          !isCpuPlayerId(p.playerId) &&
+          p.connected &&
+          Boolean(this.participantConns.get(p.playerId)?.open),
+      )
+      .sort((a, b) => a.seatIndex - b.seatIndex)
+      .map((p) => p.playerId);
+  }
+
   start(): void {
     if (this.destroyed) return;
     if (this.offline) {
-      // ローカル対局: 通信を張らずに CPU 席だけ用意する
       this.callbacks.onStatusChange('ready', 'ローカル対局（CPU戦）');
       this.bootstrapCpuSeats();
       if (this.cpuCount <= 0) {
@@ -121,6 +259,28 @@ export class HostSession {
     }
     this.callbacks.onStatusChange('initializing', 'PeerJS サーバーに接続中...');
     this.openPeerWithCurrentRoomCode();
+
+    if (this.pendingTakeover) {
+      if (this.pendingTakeover.initialKeyBase64) {
+        const key = this.pendingTakeover.initialKeyBase64;
+        if (this.resolvePendingTakeoverWithKey(key)) {
+          return;
+        }
+      }
+      // 鍵待ち状態でも画面を出しつつ他参加者の再接続を受ける
+      this.callbacks.onViewChange(this.pendingTakeover.fallbackView);
+      return;
+    }
+
+    if (this.hostEpoch > 0) {
+      // 引き継ぎ直後のホスト開始: スナップショットがあれば即座にタイマーと状態同期を再開
+      this.syncResponseTimer();
+      this.syncDisconnectTurnTimer();
+      this.scheduleCpuTick();
+      this.startRedirectBeacon();
+      return;
+    }
+
     this.bootstrapCpuSeats();
     if (this.cpuCount <= 0) {
       this.emitHostView();
@@ -158,7 +318,6 @@ export class HostSession {
     const rules = deriveRules(this.state.ruleConfig);
     if (this.state.players.length >= rules.playerCount) return false;
 
-    // まだ使われていない CPU 番号を探す
     let index = 0;
     while (
       this.state.players.some((p) => p.playerId === cpuPlayerId(index))
@@ -173,16 +332,19 @@ export class HostSession {
     if (result.error) return false;
 
     this.cpuCount = Math.max(this.cpuCount, index + 1);
-    this.commitState(this.autoStart ? this.tryStartGame(result.state) : result.state);
+    this.commitState(
+      this.autoStart ? this.tryStartGame(result.state) : result.state,
+    );
     return true;
   }
 
   /** ロビーから CPU を 1 体減らす（最後に追加された CPU を抜く） */
   removeCpu(): boolean {
     if (this.destroyed || this.state.phase !== 'lobby') return false;
-    const cpuPlayers = this.state.players.filter((p) => isCpuPlayerId(p.playerId));
+    const cpuPlayers = this.state.players.filter((p) =>
+      isCpuPlayerId(p.playerId),
+    );
     if (cpuPlayers.length === 0) return false;
-    // CPU 番号が大きいものから抜く
     const target = [...cpuPlayers].sort((a, b) =>
       b.playerId.localeCompare(a.playerId, 'en', { numeric: true }),
     )[0]!;
@@ -221,6 +383,164 @@ export class HostSession {
     return true;
   }
 
+  /** 終局後に同じ部屋・メンバーでロビーへ戻る（常設ルーム等の連戦用） */
+  resetToLobby(): boolean {
+    if (this.destroyed || this.state.phase !== 'finished') return false;
+    const result = applyAction(this.state, {
+      type: 'RESET_TO_LOBBY',
+      playerId: this.state.hostPlayerId,
+    });
+    if (result.error) {
+      this.callbacks.onError(result.error);
+      return false;
+    }
+    const keptIds = new Set(result.state.players.map((p) => p.playerId));
+    for (const pid of [...this.playerTokens.keys()]) {
+      if (!keptIds.has(pid)) {
+        this.playerTokens.delete(pid);
+      }
+    }
+    const keptSpecIds = new Set(
+      (result.state.spectators ?? []).map((s) => s.spectatorId),
+    );
+    for (const sid of [...this.spectatorTokens.keys()]) {
+      if (!keptSpecIds.has(sid)) {
+        this.spectatorTokens.delete(sid);
+      }
+    }
+    this.commitState(result.state);
+    return true;
+  }
+
+  /**
+   * 他のオンライン参加者にホスト権限を委譲する。
+   * - `stayAsClient: false`（既定）: 部屋を抜けて他の人へ譲る（ロビーなら席を空け、対局中なら切断状態にする）
+   * - `stayAsClient: true`: 自分は参加者として残り、相手を新ホストにする
+   */
+  transferHost(
+    targetPlayerId?: string,
+    options: { stayAsClient?: boolean; destroyDelayMs?: number } = {},
+  ): boolean {
+    if (this.destroyed || this.offline || this.pendingTakeover) return false;
+    const candidates = this.getConnectedRemoteHumanIds();
+    const chosenId =
+      targetPlayerId && candidates.includes(targetPlayerId)
+        ? targetPlayerId
+        : candidates[0];
+    if (!chosenId) return false;
+
+    const targetConn = this.participantConns.get(chosenId);
+    if (!targetConn || !targetConn.open) return false;
+
+    const oldHostId = this.state.hostPlayerId;
+    const stayAsClient = options.stayAsClient ?? false;
+    let nextState = this.state;
+
+    const transferRes = applyAction(nextState, {
+      type: 'TRANSFER_HOST',
+      newHostPlayerId: chosenId,
+    });
+    if (transferRes.error) return false;
+    nextState = transferRes.state;
+
+    const nextTokens = new Map(this.playerTokens);
+    const oldHostToken = nextTokens.get(oldHostId) ?? generateReconnectToken();
+    nextTokens.set(oldHostId, oldHostToken);
+
+    if (!stayAsClient) {
+      if (nextState.phase === 'lobby') {
+        const leaveRes = applyAction(nextState, {
+          type: 'LEAVE_LOBBY',
+          playerId: oldHostId,
+        });
+        if (!leaveRes.error) {
+          nextState = leaveRes.state;
+          nextTokens.delete(oldHostId);
+        }
+      } else {
+        const dcRes = applyAction(nextState, {
+          type: 'SET_PLAYER_CONNECTED',
+          playerId: oldHostId,
+          connected: false,
+        });
+        if (!dcRes.error) {
+          nextState = dcRes.state;
+        }
+      }
+    }
+
+    const nextEpoch = this.hostEpoch + 1;
+    const newHostPeerId = migratedHostPeerId(this.state.roomCode, nextEpoch);
+    const snapshot: HostSnapshotPayload = {
+      state: nextState,
+      chatMessages: [...this.chatMessages],
+      chatSeq: this.chatSeq,
+      playerTokens: Object.fromEntries(nextTokens),
+      spectatorTokens: Object.fromEntries(this.spectatorTokens),
+      hostEpoch: nextEpoch,
+      permanentRoom: isPermanentRoomCode(this.state.roomCode),
+    };
+
+    const migratingPayload: HostMigratingPayload = {
+      roomCode: this.state.roomCode,
+      newHostPlayerId: chosenId,
+      newHostPeerId,
+      hostEpoch: nextEpoch,
+    };
+
+    // 他の参加者・観戦者へ先に移行先を通知する
+    for (const [pid, conn] of this.participantConns.entries()) {
+      if (pid === chosenId || !conn.open) continue;
+      this.sendToConn(conn, {
+        kind: 'HOST_MIGRATING',
+        payload: migratingPayload,
+      });
+    }
+
+    // 引き継ぎ先にはフルスナップショットを送る
+    this.sendToConn(targetConn, {
+      kind: 'HOST_HANDOVER',
+      payload: snapshot,
+    });
+
+    if (stayAsClient) {
+      this.callbacks.onHostSelfDemoted?.(
+        migratingPayload,
+        oldHostToken,
+        oldHostId,
+      );
+    }
+
+    // PeerJS 送信バッファが流れる猶予を少し置いて旧ホストを閉じる
+    const destroyDelay = options.destroyDelayMs ?? 120;
+    if (destroyDelay <= 0) {
+      this.destroy();
+    } else {
+      this.destroyed = true;
+      this.cpuToken++;
+      this.clearResponseTimer();
+      this.clearDisconnectTurnTimer();
+      setTimeout(() => {
+        for (const conn of this.participantConns.values()) {
+          conn.close();
+        }
+        this.participantConns.clear();
+        this.peerToParticipant.clear();
+        if (this.beaconPeer && !this.beaconPeer.destroyed) {
+          this.beaconPeer.destroy();
+        }
+        this.beaconPeer = null;
+        if (this.peer && !this.peer.destroyed) {
+          this.peer.destroy();
+        }
+        this.peer = null;
+        this.callbacks.onStatusChange('closed');
+      }, destroyDelay);
+    }
+
+    return true;
+  }
+
   /** ホストからチャットメッセージを送信し全参加者へ配信する */
   sendChat(text: string): boolean {
     if (this.destroyed) return false;
@@ -230,21 +550,26 @@ export class HostSession {
   private publishChat(senderId: string, rawText: string): boolean {
     const trimmed = rawText.trim().slice(0, 200);
     if (!trimmed) return false;
-    const sender = this.state.players.find((p) => p.playerId === senderId);
-    if (!sender) return false;
+    const playerSender = this.state.players.find(
+      (p) => p.playerId === senderId,
+    );
+    const spectatorSender = (this.state.spectators ?? []).find(
+      (s) => s.spectatorId === senderId,
+    );
+    const senderName = playerSender?.name ?? spectatorSender?.name;
+    if (!senderName) return false;
     const chatMessage: ChatMessage = {
       id: `chat-${++this.chatSeq}`,
-      senderId: sender.playerId,
-      senderName: sender.name,
+      senderId,
+      senderName,
       text: trimmed,
       timestamp: Date.now(),
     };
     this.chatMessages = [...this.chatMessages.slice(-49), chatMessage];
     this.callbacks.onChatMessage?.(chatMessage);
-    for (const player of this.state.players) {
-      if (player.playerId === this.state.hostPlayerId) continue;
-      const conn = this.connections.get(player.playerId);
-      if (conn && conn.open) {
+    for (const [pid, conn] of this.participantConns.entries()) {
+      if (pid === this.state.hostPlayerId) continue;
+      if (conn.open) {
         this.sendToConn(conn, {
           kind: 'CHAT_MESSAGE',
           payload: chatMessage,
@@ -276,12 +601,17 @@ export class HostSession {
   }
 
   private isCpuPlayer(playerId: string): boolean {
-    // ロビーで追加された CPU は番号が飛ぶことがあるため接頭辞で判定する
     return isCpuPlayerId(playerId);
   }
 
   private remapHostPlayerId(prevId: string, nextId: string): void {
     if (prevId === nextId) return;
+    const prevToken = this.playerTokens.get(prevId);
+    if (prevToken !== undefined) {
+      this.playerTokens.delete(prevId);
+      this.playerTokens.set(nextId, prevToken);
+    }
+
     const round = this.state.round;
     let nextRound = round;
     if (round?.pendingResponse) {
@@ -327,7 +657,7 @@ export class HostSession {
   }
 
   private openPeerWithCurrentRoomCode(): void {
-    const peerId = roomCodeToPeerId(this.state.roomCode);
+    const peerId = this.getCurrentHostPeerId();
     const peer = new Peer(peerId, PEER_OPTIONS);
     this.peer = peer;
 
@@ -339,9 +669,35 @@ export class HostSession {
         return;
       }
       opened = true;
-      this.remapHostPlayerId(this.state.hostPlayerId, id);
-      this.callbacks.onStatusChange('ready', '参加者待機中');
-      this.emitHostView();
+      this.reconnectPeerAttempts = 0;
+      if (this.hostEpoch === 0 && !this.fixedRoomCode) {
+        this.remapHostPlayerId(this.state.hostPlayerId, id);
+      }
+      const hostPlayer = this.state.players.find(
+        (p) => p.playerId === this.state.hostPlayerId,
+      );
+      const token =
+        this.playerTokens.get(this.state.hostPlayerId) ??
+        generateReconnectToken();
+      this.playerTokens.set(this.state.hostPlayerId, token);
+
+      this.callbacks.onWelcome?.({
+        roomCode: this.state.roomCode,
+        playerId: this.state.hostPlayerId,
+        playerName: hostPlayer?.name ?? 'ホスト',
+        reconnectToken: token,
+        isSpectator: false,
+        hostEpoch: this.hostEpoch,
+        hostPeerId: id,
+      });
+
+      this.callbacks.onStatusChange(
+        'ready',
+        this.hostEpoch > 0 ? 'ホストを引き継ぎました' : '参加者待機中',
+      );
+      if (!this.pendingTakeover) {
+        this.emitHostView();
+      }
     });
 
     peer.on('connection', (conn) => {
@@ -354,18 +710,33 @@ export class HostSession {
 
     peer.on('error', (err) => {
       if (this.destroyed) return;
-      if (!opened && err.type === 'unavailable-id' && this.idRetryCount < 5) {
-        this.idRetryCount++;
-        peer.destroy();
-        const nextCode = generateRoomCode();
-        const nextHostId = roomCodeToPeerId(nextCode);
-        this.state = {
-          ...this.state,
-          roomCode: nextCode,
-        };
-        this.remapHostPlayerId(this.state.hostPlayerId, nextHostId);
-        this.openPeerWithCurrentRoomCode();
-        return;
+      if (!opened && err.type === 'unavailable-id') {
+        if (this.hostEpoch === 0 && this.fixedRoomCode) {
+          // 常設ルームで既に別ホストが開設していた場合はクライアント参加へ回す
+          this.callbacks.onPermanentRoomClaimConflict?.(this.state.roomCode);
+          this.destroy();
+          return;
+        }
+        if (this.hostEpoch > 0 && this.idRetryCount < 5) {
+          this.idRetryCount++;
+          this.hostEpoch++;
+          peer.destroy();
+          this.openPeerWithCurrentRoomCode();
+          return;
+        }
+        if (this.idRetryCount < 5) {
+          this.idRetryCount++;
+          peer.destroy();
+          const nextCode = generateRoomCode();
+          const nextHostId = roomCodeToPeerId(nextCode);
+          this.state = {
+            ...this.state,
+            roomCode: nextCode,
+          };
+          this.remapHostPlayerId(this.state.hostPlayerId, nextHostId);
+          this.openPeerWithCurrentRoomCode();
+          return;
+        }
       }
 
       this.callbacks.onStatusChange(
@@ -375,53 +746,237 @@ export class HostSession {
     });
 
     peer.on('disconnected', () => {
-      if (!this.destroyed && !peer.destroyed) {
+      if (this.destroyed || peer.destroyed) return;
+      if (
+        typeof peer.reconnect === 'function' &&
+        this.reconnectPeerAttempts < 5
+      ) {
+        this.reconnectPeerAttempts++;
+        const delay = Math.min(4000, 600 * this.reconnectPeerAttempts);
         this.callbacks.onStatusChange(
-          'error',
-          'シグナリングサーバーから切断されました',
+          'initializing',
+          'シグナリングサーバーへ再接続中...',
         );
+        this.reconnectPeerTimerId = setTimeout(() => {
+          this.reconnectPeerTimerId = null;
+          if (this.destroyed || peer.destroyed) return;
+          try {
+            peer.reconnect();
+          } catch {
+            // Peer error listener handles fatal failures
+          }
+        }, delay);
+        return;
+      }
+      this.callbacks.onStatusChange(
+        'error',
+        'シグナリングサーバーから切断されました',
+      );
+    });
+  }
+
+  /**
+   * ホスト引き継ぎ後（hostEpoch > 0）に元の部屋コード（例: arena-mj-BRONZE）が空いたら
+   * リダイレクト用ビーコンとして確保し、後発入室・再接続を新ホストへ誘導する。
+   */
+  private startRedirectBeacon(): void {
+    if (
+      this.destroyed ||
+      this.offline ||
+      this.hostEpoch <= 0 ||
+      this.beaconPeer
+    ) {
+      return;
+    }
+    const basePeerId = roomCodeToPeerId(this.state.roomCode);
+    if (basePeerId === this.getCurrentHostPeerId()) return;
+
+    let candidate: Peer;
+    try {
+      candidate = new Peer(basePeerId, PEER_OPTIONS);
+    } catch {
+      return;
+    }
+    if (typeof candidate.on !== 'function') {
+      return;
+    }
+
+    let opened = false;
+    this.beaconPeer = candidate;
+
+    candidate.on('open', () => {
+      if (this.destroyed) {
+        candidate.destroy();
+        return;
+      }
+      opened = true;
+    });
+
+    candidate.on('connection', (conn) => {
+      if (this.destroyed) {
+        conn.close();
+        return;
+      }
+      const sendRedirect = () => {
+        this.sendToConn(conn, {
+          kind: 'HOST_REDIRECT',
+          payload: {
+            roomCode: this.state.roomCode,
+            hostPeerId: this.getCurrentHostPeerId(),
+            hostEpoch: this.hostEpoch,
+          },
+        });
+        setTimeout(() => conn.close(), 200);
+      };
+      if (conn.open) {
+        sendRedirect();
+      } else {
+        conn.on('open', sendRedirect);
+      }
+    });
+
+    candidate.on('error', (err) => {
+      if (this.destroyed) return;
+      if (!opened && err.type === 'unavailable-id') {
+        candidate.destroy();
+        this.beaconPeer = null;
+        if (this.beaconRetryCount < 12) {
+          this.beaconRetryCount++;
+          this.beaconRetryTimerId = setTimeout(() => {
+            this.beaconRetryTimerId = null;
+            this.startRedirectBeacon();
+          }, 10000);
+        }
       }
     });
   }
 
   private attachConnection(conn: DataConnection): void {
-    const peerId = conn.peer;
-
-    conn.on('open', () => {
-      if (this.destroyed) {
-        conn.close();
-        return;
-      }
-      const existing = this.connections.get(peerId);
-      if (existing && existing !== conn) {
-        existing.close();
-      }
-      this.connections.set(peerId, conn);
-    });
+    const connPeerId = conn.peer;
 
     conn.on('data', (raw) => {
       if (this.destroyed) return;
-      if (!this.connections.has(peerId) && conn.open) {
-        this.connections.set(peerId, conn);
-      }
       this.handleClientData(conn, raw);
     });
 
     conn.on('close', () => {
       if (this.destroyed) return;
-      if (this.connections.get(peerId) === conn) {
-        this.connections.delete(peerId);
-      }
-      this.handlePeerDisconnect(peerId);
+      this.handlePeerDisconnect(connPeerId);
     });
 
     conn.on('error', (err) => {
       if (this.destroyed) return;
       this.callbacks.onError({
         code: 'INVALID_MESSAGE',
-        message: `通信エラー (${peerId}): ${err.message}`,
+        message: `通信エラー (${connPeerId}): ${err.message}`,
       });
     });
+  }
+
+  private resolvePendingTakeoverWithKey(keyBase64: string): boolean {
+    if (!this.pendingTakeover) return false;
+    const t = this.pendingTakeover;
+    const json = decryptCheckpoint(t.ivBase64, t.ciphertextBase64, keyBase64);
+    if (!json) return false;
+
+    let snap: HostSnapshotPayload;
+    try {
+      snap = JSON.parse(json) as HostSnapshotPayload;
+    } catch {
+      return false;
+    }
+    if (!snap || !snap.state || !Array.isArray(snap.state.players)) {
+      return false;
+    }
+
+    const oldHostId = snap.state.hostPlayerId;
+    let restoredState = snap.state;
+
+    // 引き継ぎ後の新ホストとして自分を登録し、旧ホストは切断状態にする
+    const transferRes = applyAction(restoredState, {
+      type: 'TRANSFER_HOST',
+      newHostPlayerId: t.localPlayerId,
+    });
+    if (transferRes.error) return false;
+    restoredState = transferRes.state;
+
+    if (oldHostId !== t.localPlayerId) {
+      if (restoredState.phase === 'lobby') {
+        const leaveRes = applyAction(restoredState, {
+          type: 'LEAVE_LOBBY',
+          playerId: oldHostId,
+        });
+        if (!leaveRes.error) {
+          restoredState = leaveRes.state;
+        }
+      } else {
+        const dcRes = applyAction(restoredState, {
+          type: 'SET_PLAYER_CONNECTED',
+          playerId: oldHostId,
+          connected: false,
+        });
+        if (!dcRes.error) {
+          restoredState = dcRes.state;
+        }
+      }
+    }
+
+    // 他リモートプレイヤーは再接続が来るまで一旦切断扱いとし、接続済みのものは繋ぎ直す
+    restoredState = {
+      ...restoredState,
+      players: restoredState.players.map((p) => {
+        if (p.playerId === t.localPlayerId || isCpuPlayerId(p.playerId)) {
+          return { ...p, connected: true };
+        }
+        if (p.playerId === oldHostId) {
+          return { ...p, connected: false };
+        }
+        const hasOpen = Boolean(this.participantConns.get(p.playerId)?.open);
+        return { ...p, connected: hasOpen };
+      }),
+    };
+
+    this.state = restoredState;
+    this.chatMessages = [...snap.chatMessages];
+    this.chatSeq = snap.chatSeq;
+    this.playerTokens.clear();
+    for (const [pid, tok] of Object.entries(snap.playerTokens)) {
+      this.playerTokens.set(pid, tok);
+    }
+    this.playerTokens.set(t.localPlayerId, t.localReconnectToken);
+    this.spectatorTokens.clear();
+    for (const [sid, tok] of Object.entries(snap.spectatorTokens)) {
+      this.spectatorTokens.set(sid, tok);
+    }
+    this.cpuCount = this.state.players.filter((p) =>
+      isCpuPlayerId(p.playerId),
+    ).length;
+
+    this.pendingTakeover = null;
+    const newHostPlayer = this.state.players.find(
+      (p) => p.playerId === t.localPlayerId,
+    );
+    this.callbacks.onWelcome?.({
+      roomCode: this.state.roomCode,
+      playerId: t.localPlayerId,
+      playerName: newHostPlayer?.name ?? 'ホスト',
+      reconnectToken: t.localReconnectToken,
+      isSpectator: false,
+      hostEpoch: this.hostEpoch,
+      hostPeerId: this.getCurrentHostPeerId(),
+    });
+    this.commitState(this.state);
+    this.startRedirectBeacon();
+
+    // 待機していた JOIN リクエストを順番に処理する
+    const queued = [...this.pendingQueuedJoins];
+    this.pendingQueuedJoins = [];
+    for (const item of queued) {
+      if (item.conn.open) {
+        this.processJoinMessage(item.conn, item.message);
+      }
+    }
+    return true;
   }
 
   private handleClientData(conn: DataConnection, raw: unknown): void {
@@ -437,38 +992,45 @@ export class HostSession {
       return;
     }
 
-    const playerId = conn.peer;
-
-    if (message.kind === 'JOIN') {
-      const joinResult = applyAction(this.state, {
-        type: 'JOIN_PLAYER',
-        playerId,
-        name: message.playerName,
-      });
-
-      if (joinResult.error) {
-        this.sendToConn(conn, {
-          kind: 'ERROR',
-          payload: joinResult.error,
-        });
-        return;
-      }
-
-      // 参加後は待機ロビーを維持し、ホストの開始操作（または autoStart 時）で開局する
-      this.commitState(
-        this.autoStart ? this.tryStartGame(joinResult.state) : joinResult.state,
-      );
-      if (this.chatMessages.length > 0) {
-        this.sendToConn(conn, {
-          kind: 'CHAT_HISTORY',
-          payload: this.chatMessages,
-        });
+    if (message.kind === 'CHECKPOINT_KEY_SHARE') {
+      if (this.pendingTakeover) {
+        this.resolvePendingTakeoverWithKey(message.keyBase64);
       }
       return;
     }
 
+    if (message.kind === 'JOIN') {
+      if (this.pendingTakeover) {
+        this.pendingQueuedJoins.push({ conn, message });
+        return;
+      }
+      this.processJoinMessage(conn, message);
+      return;
+    }
+
+    if (this.pendingTakeover) {
+      return;
+    }
+
+    const mapped = this.peerToParticipant.get(conn.peer);
+    const participantId = mapped?.id ?? conn.peer;
+
     if (message.kind === 'CHAT') {
-      this.publishChat(playerId, message.text);
+      this.publishChat(participantId, message.text);
+      return;
+    }
+
+    if (
+      mapped?.kind === 'spectator' ||
+      !this.state.players.some((p) => p.playerId === participantId)
+    ) {
+      this.sendToConn(conn, {
+        kind: 'ERROR',
+        payload: {
+          code: 'UNAUTHORIZED_ACTION',
+          message: '観戦中は対局操作を行えません。',
+        },
+      });
       return;
     }
 
@@ -478,7 +1040,7 @@ export class HostSession {
       case 'DISCARD_TILE':
         engineAction = {
           type: 'DISCARD_TILE',
-          playerId,
+          playerId: participantId,
           tileId: message.action.tileId,
           now: Date.now(),
         };
@@ -486,20 +1048,20 @@ export class HostSession {
       case 'CALL_RESPONSE':
         engineAction = {
           type: 'CALL_RESPONSE',
-          playerId,
+          playerId: participantId,
           choice: message.action.choice,
         };
         break;
       case 'DECLARE_TSUMO':
         engineAction = {
           type: 'DECLARE_TSUMO',
-          playerId,
+          playerId: participantId,
         };
         break;
       case 'DECLARE_RIICHI':
         engineAction = {
           type: 'DECLARE_RIICHI',
-          playerId,
+          playerId: participantId,
           tileId: message.action.tileId,
           now: Date.now(),
         };
@@ -507,7 +1069,7 @@ export class HostSession {
       case 'DECLARE_ANKAN':
         engineAction = {
           type: 'DECLARE_ANKAN',
-          playerId,
+          playerId: participantId,
           kind: message.action.kind,
           now: Date.now(),
         };
@@ -515,7 +1077,7 @@ export class HostSession {
       case 'DECLARE_KAKAN':
         engineAction = {
           type: 'DECLARE_KAKAN',
-          playerId,
+          playerId: participantId,
           tileId: message.action.tileId,
           now: Date.now(),
         };
@@ -523,20 +1085,20 @@ export class HostSession {
       case 'DECLARE_KITA':
         engineAction = {
           type: 'DECLARE_KITA',
-          playerId,
+          playerId: participantId,
           tileId: message.action.tileId,
         };
         break;
       case 'DECLARE_KYUUSHU_KYUUHAI':
         engineAction = {
           type: 'DECLARE_KYUUSHU_KYUUHAI',
-          playerId,
+          playerId: participantId,
         };
         break;
       case 'ADVANCE_ROUND':
         engineAction = {
           type: 'ADVANCE_ROUND',
-          playerId,
+          playerId: participantId,
           shuffledDeck: shuffleWithCrypto(buildTileDeck(rules)),
         };
         break;
@@ -554,14 +1116,318 @@ export class HostSession {
     this.commitState(result.state);
   }
 
-  private handlePeerDisconnect(playerId: string): void {
-    const exists = this.state.players.some((p) => p.playerId === playerId);
+  private bindParticipantConn(
+    kind: 'player' | 'spectator',
+    participantId: string,
+    conn: DataConnection,
+  ): void {
+    const prevConn = this.participantConns.get(participantId);
+    if (prevConn && prevConn !== conn) {
+      this.peerToParticipant.delete(prevConn.peer);
+      if (prevConn.open) {
+        prevConn.close();
+      }
+    }
+    this.participantConns.set(participantId, conn);
+    this.peerToParticipant.set(conn.peer, { kind, id: participantId });
+  }
+
+  private processJoinMessage(
+    conn: DataConnection,
+    message: Extract<ReturnType<typeof parseClientMessage>, { kind: 'JOIN' }>,
+  ): void {
+    const token = message.reconnectToken;
+
+    // 1. トークンによるプレイヤー再接続
+    if (token) {
+      for (const [pid, savedToken] of this.playerTokens.entries()) {
+        if (savedToken !== token) continue;
+        const player = this.state.players.find((p) => p.playerId === pid);
+        if (!player) continue;
+
+        if (pid === this.state.hostPlayerId) {
+          // 既にホストになっている本人がクライアント再接続することは通常ないが念のため拒否せず扱う
+          break;
+        }
+
+        this.bindParticipantConn('player', pid, conn);
+        this.sendToConn(conn, {
+          kind: 'SESSION_WELCOME',
+          payload: {
+            roomCode: this.state.roomCode,
+            playerId: pid,
+            playerName: player.name,
+            reconnectToken: savedToken,
+            isSpectator: false,
+            hostEpoch: this.hostEpoch,
+            hostPeerId: this.getCurrentHostPeerId(),
+          },
+        });
+
+        if (!player.connected) {
+          const res = applyAction(this.state, {
+            type: 'SET_PLAYER_CONNECTED',
+            playerId: pid,
+            connected: true,
+          });
+          if (!res.error) {
+            this.commitState(res.state);
+          }
+        } else {
+          this.sendToConn(conn, {
+            kind: 'STATE_VIEW',
+            payload: toStateView(this.state, pid, Date.now(), {
+              hostEpoch: this.hostEpoch,
+            }),
+          });
+          this.broadcastCheckpoint();
+        }
+        if (this.chatMessages.length > 0) {
+          this.sendToConn(conn, {
+            kind: 'CHAT_HISTORY',
+            payload: this.chatMessages,
+          });
+        }
+        return;
+      }
+
+      // 2. トークンによる観戦者再接続
+      for (const [sid, savedToken] of this.spectatorTokens.entries()) {
+        if (savedToken !== token) continue;
+        const spectator = (this.state.spectators ?? []).find(
+          (s) => s.spectatorId === sid,
+        );
+        if (!spectator) continue;
+
+        this.bindParticipantConn('spectator', sid, conn);
+        this.sendToConn(conn, {
+          kind: 'SESSION_WELCOME',
+          payload: {
+            roomCode: this.state.roomCode,
+            playerId: sid,
+            playerName: spectator.name,
+            reconnectToken: savedToken,
+            isSpectator: true,
+            hostEpoch: this.hostEpoch,
+            hostPeerId: this.getCurrentHostPeerId(),
+          },
+        });
+        if (!spectator.connected) {
+          const res = applyAction(this.state, {
+            type: 'SET_SPECTATOR_CONNECTED',
+            spectatorId: sid,
+            connected: true,
+          });
+          if (!res.error) {
+            this.commitState(res.state);
+          }
+        } else {
+          this.sendToConn(conn, {
+            kind: 'STATE_VIEW',
+            payload: toStateView(this.state, sid, Date.now(), {
+              hostEpoch: this.hostEpoch,
+            }),
+          });
+        }
+        if (this.chatMessages.length > 0) {
+          this.sendToConn(conn, {
+            kind: 'CHAT_HISTORY',
+            payload: this.chatMessages,
+          });
+        }
+        return;
+      }
+    }
+
+    // 同一 PeerID による切断直後の再接続（テストや一時断救済）
+    const existingByPeer = this.state.players.find(
+      (p) => p.playerId === conn.peer && !p.connected,
+    );
+    if (existingByPeer) {
+      const existingToken =
+        this.playerTokens.get(existingByPeer.playerId) ??
+        generateReconnectToken();
+      this.playerTokens.set(existingByPeer.playerId, existingToken);
+      this.bindParticipantConn('player', existingByPeer.playerId, conn);
+      this.sendToConn(conn, {
+        kind: 'SESSION_WELCOME',
+        payload: {
+          roomCode: this.state.roomCode,
+          playerId: existingByPeer.playerId,
+          playerName: existingByPeer.name,
+          reconnectToken: existingToken,
+          isSpectator: false,
+          hostEpoch: this.hostEpoch,
+          hostPeerId: this.getCurrentHostPeerId(),
+        },
+      });
+      const res = applyAction(this.state, {
+        type: 'SET_PLAYER_CONNECTED',
+        playerId: existingByPeer.playerId,
+        connected: true,
+      });
+      if (!res.error) {
+        this.commitState(res.state);
+      }
+      if (this.chatMessages.length > 0) {
+        this.sendToConn(conn, {
+          kind: 'CHAT_HISTORY',
+          payload: this.chatMessages,
+        });
+      }
+      return;
+    }
+
+    const rules = deriveRules(this.state.ruleConfig);
+    const idUsed =
+      this.state.players.some((p) => p.playerId === conn.peer) ||
+      (this.state.spectators ?? []).some((s) => s.spectatorId === conn.peer);
+    const participantId = idUsed
+      ? `p-${generateReconnectToken().slice(0, 10)}`
+      : conn.peer;
+
+    const canJoinAsPlayer =
+      this.state.phase === 'lobby' &&
+      !message.preferSpectate &&
+      this.state.players.length < rules.playerCount;
+
+    if (canJoinAsPlayer) {
+      const joinResult = applyAction(this.state, {
+        type: 'JOIN_PLAYER',
+        playerId: participantId,
+        name: message.playerName,
+      });
+
+      if (joinResult.error) {
+        this.sendToConn(conn, {
+          kind: 'ERROR',
+          payload: joinResult.error,
+        });
+        return;
+      }
+
+      const issuedToken = generateReconnectToken();
+      this.playerTokens.set(participantId, issuedToken);
+      this.bindParticipantConn('player', participantId, conn);
+
+      const joinedPlayer = joinResult.state.players.find(
+        (p) => p.playerId === participantId,
+      )!;
+      this.sendToConn(conn, {
+        kind: 'SESSION_WELCOME',
+        payload: {
+          roomCode: this.state.roomCode,
+          playerId: participantId,
+          playerName: joinedPlayer.name,
+          reconnectToken: issuedToken,
+          isSpectator: false,
+          hostEpoch: this.hostEpoch,
+          hostPeerId: this.getCurrentHostPeerId(),
+        },
+      });
+
+      this.commitState(
+        this.autoStart
+          ? this.tryStartGame(joinResult.state)
+          : joinResult.state,
+      );
+      if (this.chatMessages.length > 0) {
+        this.sendToConn(conn, {
+          kind: 'CHAT_HISTORY',
+          payload: this.chatMessages,
+        });
+      }
+      return;
+    }
+
+    // 対局途中・満席時は観戦者として入室させる
+    const specResult = applyAction(this.state, {
+      type: 'JOIN_SPECTATOR',
+      spectatorId: participantId,
+      name: message.playerName,
+    });
+    if (specResult.error) {
+      this.sendToConn(conn, {
+        kind: 'ERROR',
+        payload: specResult.error,
+      });
+      return;
+    }
+
+    const issuedSpecToken = generateReconnectToken();
+    this.spectatorTokens.set(participantId, issuedSpecToken);
+    this.bindParticipantConn('spectator', participantId, conn);
+
+    const joinedSpec = (specResult.state.spectators ?? []).find(
+      (s) => s.spectatorId === participantId,
+    )!;
+    this.sendToConn(conn, {
+      kind: 'SESSION_WELCOME',
+      payload: {
+        roomCode: this.state.roomCode,
+        playerId: participantId,
+        playerName: joinedSpec.name,
+        reconnectToken: issuedSpecToken,
+        isSpectator: true,
+        hostEpoch: this.hostEpoch,
+        hostPeerId: this.getCurrentHostPeerId(),
+      },
+    });
+
+    this.commitState(specResult.state);
+    if (this.chatMessages.length > 0) {
+      this.sendToConn(conn, {
+        kind: 'CHAT_HISTORY',
+        payload: this.chatMessages,
+      });
+    }
+  }
+
+  private handlePeerDisconnect(connPeerId: string): void {
+    const entry = this.peerToParticipant.get(connPeerId);
+    this.peerToParticipant.delete(connPeerId);
+    const participantId = entry?.id ?? connPeerId;
+
+    const currentConn = this.participantConns.get(participantId);
+    if (currentConn && currentConn.peer !== connPeerId) {
+      // 既に新しい接続へ差し替わっている古いソケットの close は無視する
+      return;
+    }
+    this.participantConns.delete(participantId);
+
+    if (
+      entry?.kind === 'spectator' ||
+      (this.state.spectators ?? []).some((s) => s.spectatorId === participantId)
+    ) {
+      const action: Action =
+        this.state.phase === 'lobby'
+          ? { type: 'LEAVE_SPECTATOR', spectatorId: participantId }
+          : {
+              type: 'SET_SPECTATOR_CONNECTED',
+              spectatorId: participantId,
+              connected: false,
+            };
+      if (this.state.phase === 'lobby') {
+        this.spectatorTokens.delete(participantId);
+      }
+      const res = applyAction(this.state, action);
+      if (!res.error) {
+        this.commitState(res.state);
+      }
+      return;
+    }
+
+    const exists = this.state.players.some((p) => p.playerId === participantId);
     if (!exists) return;
+
+    if (this.state.phase === 'lobby') {
+      this.playerTokens.delete(participantId);
+    }
 
     const action: Action =
       this.state.phase === 'lobby'
-        ? { type: 'LEAVE_LOBBY', playerId }
-        : { type: 'SET_PLAYER_CONNECTED', playerId, connected: false };
+        ? { type: 'LEAVE_LOBBY', playerId: participantId }
+        : { type: 'SET_PLAYER_CONNECTED', playerId: participantId, connected: false };
 
     const result = applyAction(this.state, action);
     if (!result.error) {
@@ -656,7 +1522,9 @@ export class HostSession {
   private commitState(nextState: GameState): void {
     this.state = nextState;
     this.syncResponseTimer();
+    this.syncDisconnectTurnTimer();
     this.broadcastViews();
+    this.broadcastCheckpoint();
     this.scheduleCpuTick();
   }
 
@@ -669,13 +1537,12 @@ export class HostSession {
 
   /** CPU の手番・応答待ちが残っていれば次の一手を予約する */
   private scheduleCpuTick(): void {
-    if (this.destroyed || !this.hasAnyCpu()) return;
+    if (this.destroyed || this.pendingTakeover || !this.hasAnyCpu()) return;
     const phase = this.state.phase;
     if (phase === 'finished') return;
     if (phase === 'lobby' && this.missingCpuIds().length === 0) return;
 
     const token = ++this.cpuToken;
-    // 鳴き・ロンの応答は打牌より短く待ってテンポよく進める
     const delayMs =
       phase === 'awaiting_responses'
         ? Math.round(this.cpuDelayMs * 0.45)
@@ -694,7 +1561,9 @@ export class HostSession {
    * タイマー経由の自動進行のほか、テストから決定的に駆動する場合にも使う。
    */
   runCpuStepOnce(): boolean {
-    if (this.destroyed || !this.hasAnyCpu()) return false;
+    if (this.destroyed || this.pendingTakeover || !this.hasAnyCpu()) {
+      return false;
+    }
     const phase = this.state.phase;
 
     if (phase === 'lobby') {
@@ -714,7 +1583,9 @@ export class HostSession {
         name: cpuName(cpuIndexOf(missing[0]!, this.cpuCount)),
       });
       if (result.error) return false;
-      this.commitState(this.autoStart ? this.tryStartGame(result.state) : result.state);
+      this.commitState(
+        this.autoStart ? this.tryStartGame(result.state) : result.state,
+      );
       return true;
     }
 
@@ -764,7 +1635,6 @@ export class HostSession {
     const result = applyAction(this.state, engineAction);
     if (result.error) {
       if (decision.type !== 'DISCARD_TILE') {
-        // 選択が却下された場合はツモ切りでフォールバックする
         const view = toStateView(this.state, playerId, Date.now());
         if (view.myDrawnTile) {
           const fallback = applyAction(this.state, {
@@ -792,7 +1662,6 @@ export class HostSession {
     ).length;
     const missing: string[] = [];
     for (let i = 0; i < this.cpuCount - existing; i++) {
-      // 追加予定の CPU 番号は、空いている番号を順に使う
       let index = 0;
       while (
         this.state.players.some((p) => p.playerId === cpuPlayerId(index)) ||
@@ -803,7 +1672,10 @@ export class HostSession {
       missing.push(cpuPlayerId(index));
     }
     if (this.state.players.length + missing.length > rules.playerCount) {
-      return missing.slice(0, Math.max(0, rules.playerCount - this.state.players.length));
+      return missing.slice(
+        0,
+        Math.max(0, rules.playerCount - this.state.players.length),
+      );
     }
     return missing;
   }
@@ -819,6 +1691,7 @@ export class HostSession {
     this.clearResponseTimer();
     if (
       this.destroyed ||
+      this.pendingTakeover ||
       this.state.phase !== 'awaiting_responses' ||
       !this.state.round?.pendingResponse
     ) {
@@ -849,25 +1722,186 @@ export class HostSession {
     }, delayMs);
   }
 
+  private clearDisconnectTurnTimer(): void {
+    if (this.disconnectTurnTimerId !== null) {
+      clearTimeout(this.disconnectTurnTimerId);
+      this.disconnectTurnTimerId = null;
+    }
+  }
+
+  /** 切断中の人間プレイヤーの手番が止まらないよう猶予後にツモ切り代打ちする */
+  private syncDisconnectTurnTimer(): void {
+    this.clearDisconnectTurnTimer();
+    if (
+      this.destroyed ||
+      this.offline ||
+      this.pendingTakeover ||
+      this.disconnectGraceMs < 0 ||
+      this.state.phase !== 'playing' ||
+      !this.state.round
+    ) {
+      return;
+    }
+
+    const round = this.state.round;
+    const currentPlayer = this.state.players.find(
+      (p) => p.seatIndex === round.currentTurnIndex,
+    );
+    if (
+      !currentPlayer ||
+      this.isCpuPlayer(currentPlayer.playerId) ||
+      currentPlayer.connected ||
+      currentPlayer.playerId === this.state.hostPlayerId
+    ) {
+      return;
+    }
+
+    const scheduledTurnCount = round.turnCount;
+    const targetPlayerId = currentPlayer.playerId;
+
+    this.disconnectTurnTimerId = setTimeout(() => {
+      this.disconnectTurnTimerId = null;
+      if (this.destroyed || this.state.phase !== 'playing' || !this.state.round) {
+        return;
+      }
+      if (this.state.round.turnCount !== scheduledTurnCount) return;
+      const latestPlayer = this.state.players.find(
+        (p) => p.playerId === targetPlayerId,
+      );
+      if (!latestPlayer || latestPlayer.connected) return;
+
+      const forbidden = new Set(this.state.round.kuikaeForbiddenKinds);
+      const candidates = [
+        ...(latestPlayer.drawnTile ? [latestPlayer.drawnTile] : []),
+        ...latestPlayer.hand,
+      ];
+      const discardTile =
+        candidates.find((t) => !forbidden.has(t.kind)) ?? candidates[0];
+      if (!discardTile) return;
+
+      const res = applyAction(this.state, {
+        type: 'DISCARD_TILE',
+        playerId: targetPlayerId,
+        tileId: discardTile.id,
+        now: Date.now(),
+      });
+      if (!res.error) {
+        this.commitState(res.state);
+      }
+    }, this.disconnectGraceMs);
+  }
+
+  private broadcastCheckpoint(): void {
+    if (this.destroyed || this.offline || this.pendingTakeover) return;
+
+    const remoteHumans = this.state.players
+      .filter(
+        (p) =>
+          p.playerId !== this.state.hostPlayerId &&
+          !this.isCpuPlayer(p.playerId) &&
+          p.connected &&
+          Boolean(this.participantConns.get(p.playerId)?.open),
+      )
+      .sort((a, b) => a.seatIndex - b.seatIndex);
+
+    if (remoteHumans.length === 0) return;
+
+    const backup = remoteHumans[0]!;
+    const backupConn = this.participantConns.get(backup.playerId);
+    if (!backupConn || !backupConn.open) return;
+
+    const seq = ++this.checkpointSeq;
+    const snapshot: HostSnapshotPayload = {
+      state: this.state,
+      chatMessages: [...this.chatMessages],
+      chatSeq: this.chatSeq,
+      playerTokens: Object.fromEntries(this.playerTokens),
+      spectatorTokens: Object.fromEntries(this.spectatorTokens),
+      hostEpoch: this.hostEpoch,
+      permanentRoom: isPermanentRoomCode(this.state.roomCode),
+    };
+
+    const encrypted = encryptCheckpoint(JSON.stringify(snapshot));
+
+    if (remoteHumans.length >= 2) {
+      const payload: HostCheckpointPayload = {
+        hostEpoch: this.hostEpoch,
+        seq,
+        backupPlayerId: backup.playerId,
+        ivBase64: encrypted.ivBase64,
+        ciphertextBase64: encrypted.ciphertextBase64,
+      };
+      this.sendToConn(backupConn, {
+        kind: 'HOST_CHECKPOINT',
+        payload,
+      });
+
+      for (const other of remoteHumans.slice(1)) {
+        const otherConn = this.participantConns.get(other.playerId);
+        if (otherConn && otherConn.open) {
+          this.sendToConn(otherConn, {
+            kind: 'CHECKPOINT_KEY',
+            payload: {
+              hostEpoch: this.hostEpoch,
+              seq,
+              keyBase64: encrypted.keyBase64,
+            },
+          });
+        }
+      }
+      return;
+    }
+
+    // リモートの人間参加者が1名のみの場合は、その1名が突然断を引き継げるよう鍵を同梱する
+    this.sendToConn(backupConn, {
+      kind: 'HOST_CHECKPOINT',
+      payload: {
+        hostEpoch: this.hostEpoch,
+        seq,
+        backupPlayerId: backup.playerId,
+        ivBase64: encrypted.ivBase64,
+        ciphertextBase64: encrypted.ciphertextBase64,
+        inlineKeyBase64: encrypted.keyBase64,
+      },
+    });
+  }
+
   private emitHostView(): void {
     const now = Date.now();
     this.callbacks.onViewChange(
-      toStateView(this.state, this.state.hostPlayerId, now),
+      toStateView(this.state, this.state.hostPlayerId, now, {
+        hostEpoch: this.hostEpoch,
+      }),
     );
   }
 
   private broadcastViews(): void {
     const now = Date.now();
     this.callbacks.onViewChange(
-      toStateView(this.state, this.state.hostPlayerId, now),
+      toStateView(this.state, this.state.hostPlayerId, now, {
+        hostEpoch: this.hostEpoch,
+      }),
     );
     for (const player of this.state.players) {
       if (player.playerId === this.state.hostPlayerId) continue;
-      const conn = this.connections.get(player.playerId);
+      const conn = this.participantConns.get(player.playerId);
       if (conn && conn.open) {
         this.sendToConn(conn, {
           kind: 'STATE_VIEW',
-          payload: toStateView(this.state, player.playerId, now),
+          payload: toStateView(this.state, player.playerId, now, {
+            hostEpoch: this.hostEpoch,
+          }),
+        });
+      }
+    }
+    for (const spectator of this.state.spectators ?? []) {
+      const conn = this.participantConns.get(spectator.spectatorId);
+      if (conn && conn.open) {
+        this.sendToConn(conn, {
+          kind: 'STATE_VIEW',
+          payload: toStateView(this.state, spectator.spectatorId, now, {
+            hostEpoch: this.hostEpoch,
+          }),
         });
       }
     }
@@ -887,10 +1921,24 @@ export class HostSession {
     this.destroyed = true;
     this.cpuToken++;
     this.clearResponseTimer();
-    for (const conn of this.connections.values()) {
+    this.clearDisconnectTurnTimer();
+    if (this.beaconRetryTimerId !== null) {
+      clearTimeout(this.beaconRetryTimerId);
+      this.beaconRetryTimerId = null;
+    }
+    if (this.reconnectPeerTimerId !== null) {
+      clearTimeout(this.reconnectPeerTimerId);
+      this.reconnectPeerTimerId = null;
+    }
+    for (const conn of this.participantConns.values()) {
       conn.close();
     }
-    this.connections.clear();
+    this.participantConns.clear();
+    this.peerToParticipant.clear();
+    if (this.beaconPeer && !this.beaconPeer.destroyed) {
+      this.beaconPeer.destroy();
+    }
+    this.beaconPeer = null;
     if (this.peer && !this.peer.destroyed) {
       this.peer.destroy();
     }

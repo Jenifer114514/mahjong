@@ -4,6 +4,7 @@ import {
   isCpuPlayerId,
 } from '../cpu/player';
 import { deriveRules } from '../engine/rules';
+import { formatRoomDisplayName } from '../net/rooms';
 import type { PublicPlayerView, RoundView, StateView } from '../types/message';
 import type {
   AbortiveDrawReason,
@@ -58,6 +59,10 @@ export interface TableHandlers {
   onOpenSettings?: () => void;
   /** チャットパネルを開く */
   onOpenChat?: () => void;
+  /** 終局後に同じ部屋のままロビーに戻る（ホストのみ） */
+  onResetToLobby?: () => void;
+  /** 観戦中に下側へ配置する視点席を切り替える */
+  onChangePerspective?: (seatIndex: number) => void;
 }
 
 export interface TableUiState {
@@ -68,6 +73,7 @@ export interface TableUiState {
   selectedTileId?: string | null;
   roundEndStep?: RoundEndStep;
   unreadChatCount?: number;
+  perspectiveSeatIndex?: number;
 }
 
 const DEFAULT_TABLE_UI_STATE: TableUiState = {
@@ -128,12 +134,24 @@ export function renderGameTable(
   container.innerHTML = '';
 
   const playerCount = view.players.length;
-  const isHost = view.viewerPlayerId === view.hostPlayerId;
+  const isSpectator = Boolean(view.isSpectator);
+  const isHost = !isSpectator && view.viewerPlayerId === view.hostPlayerId;
 
   if (view.phase === 'finished') {
     renderFinishedScreen(container, view, handlers);
     return;
   }
+
+  const activeSeatIndex =
+    isSpectator && playerCount > 0 && uiState.perspectiveSeatIndex !== undefined
+      ? ((uiState.perspectiveSeatIndex % playerCount) + playerCount) %
+        playerCount
+      : view.viewerSeatIndex;
+
+  const perspectiveView: StateView =
+    activeSeatIndex === view.viewerSeatIndex
+      ? view
+      : { ...view, viewerSeatIndex: activeSeatIndex };
 
   const wrapper = document.createElement('div');
   wrapper.className = 'table-stage';
@@ -143,28 +161,33 @@ export function renderGameTable(
   felt.className = 'table-felt';
   applyOrientationClass(felt);
 
-  // 相対座席の割り当て（下:自分、右:下家、上:対面(4人のみ)、左:上家）
-  const selfPlayer = view.players.find((p) => p.seatIndex === view.viewerSeatIndex);
-  const rightPlayer = view.players.find(
-    (p) => p.seatIndex === (view.viewerSeatIndex + 1) % playerCount,
+  // 相対座席の割り当て（下:自分または視点席、右:下家、上:対面(4人のみ)、左:上家）
+  const selfPlayer = perspectiveView.players.find(
+    (p) => p.seatIndex === perspectiveView.viewerSeatIndex,
+  );
+  const rightPlayer = perspectiveView.players.find(
+    (p) => p.seatIndex === (perspectiveView.viewerSeatIndex + 1) % playerCount,
   );
   const topPlayer =
     playerCount === 4
-      ? view.players.find(
-          (p) => p.seatIndex === (view.viewerSeatIndex + 2) % playerCount,
+      ? perspectiveView.players.find(
+          (p) =>
+            p.seatIndex === (perspectiveView.viewerSeatIndex + 2) % playerCount,
         )
       : undefined;
   const leftPlayer =
     playerCount === 4
-      ? view.players.find(
-          (p) => p.seatIndex === (view.viewerSeatIndex + 3) % playerCount,
+      ? perspectiveView.players.find(
+          (p) =>
+            p.seatIndex === (perspectiveView.viewerSeatIndex + 3) % playerCount,
         )
-      : view.players.find(
-          (p) => p.seatIndex === (view.viewerSeatIndex + 2) % playerCount,
+      : perspectiveView.players.find(
+          (p) =>
+            p.seatIndex === (perspectiveView.viewerSeatIndex + 2) % playerCount,
         );
 
   if (topPlayer) {
-    felt.appendChild(renderOpponentSeat('top', topPlayer, view));
+    felt.appendChild(renderOpponentSeat('top', topPlayer, perspectiveView));
   } else {
     const emptyTop = document.createElement('div');
     emptyTop.className = 'seat-top seat-empty';
@@ -172,17 +195,17 @@ export function renderGameTable(
   }
 
   if (leftPlayer) {
-    felt.appendChild(renderOpponentSeat('left', leftPlayer, view));
+    felt.appendChild(renderOpponentSeat('left', leftPlayer, perspectiveView));
   } else {
     const emptyLeft = document.createElement('div');
     emptyLeft.className = 'seat-left seat-empty';
     felt.appendChild(emptyLeft);
   }
 
-  felt.appendChild(renderCenterHub(view));
+  felt.appendChild(renderCenterHub(perspectiveView));
 
   if (rightPlayer) {
-    felt.appendChild(renderOpponentSeat('right', rightPlayer, view));
+    felt.appendChild(renderOpponentSeat('right', rightPlayer, perspectiveView));
   } else {
     const emptyRight = document.createElement('div');
     emptyRight.className = 'seat-right seat-empty';
@@ -190,15 +213,25 @@ export function renderGameTable(
   }
 
   if (selfPlayer) {
-    felt.appendChild(renderSelfSeat(view, selfPlayer, handlers, uiState));
+    felt.appendChild(
+      isSpectator
+        ? renderSpectatedBottomSeat(selfPlayer)
+        : renderSelfSeat(perspectiveView, selfPlayer, handlers, uiState),
+    );
   }
 
   // 対局中は雀卓だけを表示する（チャット・設定・退出ボタンは右上に集約）
   felt.appendChild(renderTableChrome(handlers, uiState));
 
-  felt.appendChild(renderLeftActionBar(handlers, uiState));
+  if (isSpectator) {
+    felt.appendChild(
+      renderSpectatorHud(perspectiveView, activeSeatIndex, handlers),
+    );
+  } else {
+    felt.appendChild(renderLeftActionBar(handlers, uiState));
+  }
 
-  const doraPanel = renderDoraPanel(view);
+  const doraPanel = renderDoraPanel(perspectiveView);
   if (doraPanel) {
     felt.appendChild(doraPanel);
   }
@@ -839,9 +872,14 @@ function renderDoraPanel(view: StateView): HTMLElement | null {
   const mode = document.createElement('div');
   mode.className = 'dora-panel-mode';
   const lengthJa = view.ruleConfig.gameLength === 'tonpuu' ? '東風戦' : '半荘戦';
-  const roomLabel =
-    view.roomCode === 'LOCAL' ? 'ローカルCPU戦' : `部屋 ${view.roomCode}`;
-  mode.textContent = `${view.ruleConfig.playerCount}人${lengthJa}・${roomLabel}`;
+  const roomLabel = formatRoomDisplayName(view.roomCode);
+  const connectedSpecCount = (view.spectators ?? []).filter(
+    (s) => s.connected,
+  ).length;
+  mode.textContent =
+    connectedSpecCount > 0
+      ? `${view.ruleConfig.playerCount}人${lengthJa}・${roomLabel}（観戦${connectedSpecCount}）`
+      : `${view.ruleConfig.playerCount}人${lengthJa}・${roomLabel}`;
 
   panel.append(box, mode);
 
@@ -1755,6 +1793,86 @@ function renderSelfSeat(
   return box;
 }
 
+function renderSpectatedBottomSeat(player: PublicPlayerView): HTMLElement {
+  const box = document.createElement('div');
+  box.className = `seat-box seat-self seat-orient-self is-spectated${
+    player.isCurrentTurn ? ' is-turn' : ''
+  }`;
+  box.dataset.seat = 'self';
+
+  box.appendChild(renderSeatHeader(player, false));
+
+  const controls = document.createElement('div');
+  controls.className = 'self-controls';
+
+  const handDock = document.createElement('div');
+  handDock.className = 'self-hand-dock';
+
+  const meldsSlot = document.createElement('div');
+  meldsSlot.className = 'self-melds-dock';
+  const meldsEl = renderMeldsAndKita(player, 'self');
+  if (meldsEl) {
+    meldsSlot.appendChild(meldsEl);
+  }
+
+  const handArea = document.createElement('div');
+  handArea.className = 'hand-area spectator-hand-area';
+  for (let i = 0; i < player.handCount; i++) {
+    handArea.appendChild(createTileBackElement(false));
+  }
+  if (player.hasDrawnTile) {
+    const gap = document.createElement('div');
+    gap.className = 'drawn-gap';
+    handArea.appendChild(gap);
+    handArea.appendChild(createTileBackElement(false));
+  }
+
+  const rightSpacer = document.createElement('div');
+  rightSpacer.className = 'self-hand-spacer';
+
+  handDock.append(meldsSlot, handArea, rightSpacer);
+  controls.appendChild(handDock);
+  box.appendChild(controls);
+
+  box.appendChild(renderDiscardRiver(player, { side: 'self' }));
+  return box;
+}
+
+function renderSpectatorHud(
+  view: StateView,
+  activeSeatIndex: number,
+  handlers: TableHandlers,
+): HTMLElement {
+  const hud = document.createElement('div');
+  hud.className = 'spectator-hud';
+
+  const badge = document.createElement('span');
+  badge.className = 'spectator-badge';
+  const specCount = (view.spectators ?? []).filter((s) => s.connected).length;
+  badge.textContent = specCount > 1 ? `観戦中 (${specCount}人)` : '観戦中';
+  hud.appendChild(badge);
+
+  const switchRow = document.createElement('div');
+  switchRow.className = 'spectator-perspective-row';
+  const ordered = [...view.players].sort((a, b) => a.seatIndex - b.seatIndex);
+  for (const p of ordered) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = `spectator-seat-btn${
+      p.seatIndex === activeSeatIndex ? ' is-active' : ''
+    }`;
+    const windLabel = p.seatWind ? `${windToJa(p.seatWind)}:` : '';
+    btn.textContent = `${windLabel}${p.name}`;
+    btn.title = `${p.name} の視点に切り替え`;
+    btn.addEventListener('click', () => {
+      handlers.onChangePerspective?.(p.seatIndex);
+    });
+    switchRow.appendChild(btn);
+  }
+  hud.appendChild(switchRow);
+  return hud;
+}
+
 function buildScoreTable(
   players: PublicPlayerView[],
   ranked = false,
@@ -1864,14 +1982,32 @@ function renderFinishedScreen(
     panel.appendChild(leftover);
   }
 
+  const isHost =
+    !view.isSpectator && view.viewerPlayerId === view.hostPlayerId;
+  const btnRow = document.createElement('div');
+  btnRow.style.display = 'flex';
+  btnRow.style.gap = '8px';
+  btnRow.style.flexWrap = 'wrap';
+
+  if (isHost && handlers.onResetToLobby) {
+    const replayBtn = document.createElement('button');
+    replayBtn.type = 'button';
+    replayBtn.className = 'btn btn-primary';
+    replayBtn.textContent = '同じメンバーでロビーに戻る';
+    replayBtn.addEventListener('click', handlers.onResetToLobby);
+    btnRow.appendChild(replayBtn);
+  }
+
   const backBtn = document.createElement('button');
   backBtn.type = 'button';
-  backBtn.className = 'btn btn-primary';
-  backBtn.style.alignSelf = 'flex-start';
-  backBtn.textContent = 'ロビーに戻る';
+  backBtn.className =
+    isHost && handlers.onResetToLobby ? 'btn btn-secondary' : 'btn btn-primary';
+  backBtn.textContent =
+    isHost && handlers.onResetToLobby ? 'トップに戻る（退室）' : 'ロビーに戻る';
   backBtn.addEventListener('click', handlers.onReturnToLobby);
+  btnRow.appendChild(backBtn);
 
-  panel.appendChild(backBtn);
+  panel.appendChild(btnRow);
   const backdrop = document.createElement('div');
   backdrop.className = 'overlay-backdrop overlay-backdrop-finished';
   backdrop.appendChild(panel);

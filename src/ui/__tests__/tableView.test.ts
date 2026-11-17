@@ -636,4 +636,34 @@ describe('renderGameTable（横画面レイアウト）', () => {
     expect(tileA.classList.contains('mj-tile-selected')).toBe(false);
     expect(onSelectTile).toHaveBeenLastCalledWith(null);
   });
+
+  it('観戦モード時は観戦HUDと視点切替を表示し、下家席を含め全員の手牌が伏せ表示で自操作バーが出ない', () => {
+    let specState = reduce(state4, {
+      type: 'JOIN_SPECTATOR',
+      spectatorId: 'spec-view',
+      name: '観戦くん',
+    });
+    const view = toStateView(specState, 'spec-view', 0, {
+      perspectiveSeatIndex: 1,
+    });
+    const onChangePerspective = vi.fn();
+    const root = document.createElement('div');
+    renderGameTable(root, view, { ...noopHandlers, onChangePerspective });
+
+    expect(root.querySelector('.spectator-hud')).not.toBeNull();
+    expect(root.querySelector('.spectator-badge')?.textContent).toContain('観戦中');
+    expect(root.querySelector('.table-left-actions')).toBeNull();
+    expect(root.querySelector('.self-action-bar')).toBeNull();
+    expect(root.querySelector('.seat-self.is-spectated')).not.toBeNull();
+    // 観戦中の下辺手牌はすべて裏面表示（公開手牌ボタンなし）
+    expect(root.querySelectorAll('.seat-self .mj-tile-clickable')).toHaveLength(0);
+    expect(
+      root.querySelectorAll('.seat-self .hand-area .mj-tile-back').length,
+    ).toBeGreaterThanOrEqual(13);
+
+    const seatBtns = root.querySelectorAll<HTMLButtonElement>('.spectator-seat-btn');
+    expect(seatBtns.length).toBe(4);
+    seatBtns[2]!.click();
+    expect(onChangePerspective).toHaveBeenCalledWith(2);
+  });
 });
