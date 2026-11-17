@@ -161,6 +161,12 @@ describe('net/protocol', () => {
         action: { type: 'CALL_RESPONSE', choice: { type: 'chi', tileIds: ['only-one'] } },
       }),
     ).toBeNull();
+
+    expect(
+      parseClientMessage({ kind: 'CHAT', text: '  よろしく！  ' }),
+    ).toEqual({ kind: 'CHAT', text: 'よろしく！' });
+    expect(parseClientMessage({ kind: 'CHAT', text: '   ' })).toBeNull();
+    expect(parseClientMessage({ kind: 'CHAT', text: 'a'.repeat(201) })).toBeNull();
   });
 
   it('HostMessage の妥当なメッセージとエラーを受理し、不正なメッセージを拒否する', () => {
@@ -229,5 +235,28 @@ describe('net/protocol', () => {
 
     expect(parseHostMessage({ kind: 'UNKNOWN' })).toBeNull();
     expect(parseHostMessage({ kind: 'ERROR', payload: { code: 1 } })).toBeNull();
+
+    expect(
+      parseHostMessage({
+        kind: 'CHAT_MESSAGE',
+        payload: {
+          id: 'chat-1',
+          senderId: 'h1',
+          senderName: 'ホスト',
+          text: 'よろしく！',
+          timestamp: 12345,
+        },
+      }),
+    ).toEqual({
+      kind: 'CHAT_MESSAGE',
+      payload: {
+        id: 'chat-1',
+        senderId: 'h1',
+        senderName: 'ホスト',
+        text: 'よろしく！',
+        timestamp: 12345,
+      },
+    });
+    expect(parseHostMessage({ kind: 'CHAT_MESSAGE', payload: { id: '' } })).toBeNull();
   });
 });

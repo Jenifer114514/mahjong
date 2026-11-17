@@ -11,7 +11,13 @@ import { toStateView } from '../engine/projection';
 import { applyAction, createInitialGameState } from '../engine/reducer';
 import { deriveRules } from '../engine/rules';
 import { buildTileDeck, shuffleWithCrypto } from '../engine/wall';
-import type { Action, GameError, HostMessage, StateView } from '../types/message';
+import type {
+  Action,
+  ChatMessage,
+  GameError,
+  HostMessage,
+  StateView,
+} from '../types/message';
 import type { RuleConfig } from '../types/rule';
 import type { CallResponseChoice, GameState } from '../types/state';
 import type { TileKind } from '../types/tile';
@@ -28,6 +34,8 @@ export interface HostSessionCallbacks {
   onViewChange: (view: StateView) => void;
   onStatusChange: (status: HostConnectionStatus, detail?: string) => void;
   onError: (error: GameError) => void;
+  onChatMessage?: (message: ChatMessage) => void;
+  onChatHistory?: (messages: ChatMessage[]) => void;
 }
 
 export interface HostSessionOptions {
@@ -58,6 +66,8 @@ export class HostSession {
   private readonly cpuDelayMs: number;
   private readonly cpuScheduler: (fn: () => void, delayMs: number) => void;
   private cpuToken = 0;
+  private chatMessages: ChatMessage[] = [];
+  private chatSeq = 0;
 
   constructor(
     hostName: string,
@@ -201,6 +211,39 @@ export class HostSession {
     const started = this.maybeAutoStart(this.state);
     if (started === this.state) return false;
     this.commitState(started);
+    return true;
+  }
+
+  /** ホストからチャットメッセージを送信し全参加者へ配信する */
+  sendChat(text: string): boolean {
+    if (this.destroyed) return false;
+    return this.publishChat(this.state.hostPlayerId, text);
+  }
+
+  private publishChat(senderId: string, rawText: string): boolean {
+    const trimmed = rawText.trim().slice(0, 200);
+    if (!trimmed) return false;
+    const sender = this.state.players.find((p) => p.playerId === senderId);
+    if (!sender) return false;
+    const chatMessage: ChatMessage = {
+      id: `chat-${++this.chatSeq}`,
+      senderId: sender.playerId,
+      senderName: sender.name,
+      text: trimmed,
+      timestamp: Date.now(),
+    };
+    this.chatMessages = [...this.chatMessages.slice(-49), chatMessage];
+    this.callbacks.onChatMessage?.(chatMessage);
+    for (const player of this.state.players) {
+      if (player.playerId === this.state.hostPlayerId) continue;
+      const conn = this.connections.get(player.playerId);
+      if (conn && conn.open) {
+        this.sendToConn(conn, {
+          kind: 'CHAT_MESSAGE',
+          payload: chatMessage,
+        });
+      }
+    }
     return true;
   }
 
@@ -406,6 +449,17 @@ export class HostSession {
 
       // 設定した人数が揃ったら自動開局（CSPRNG で席順と山牌をシャッフル）
       this.commitState(this.maybeAutoStart(joinResult.state));
+      if (this.chatMessages.length > 0) {
+        this.sendToConn(conn, {
+          kind: 'CHAT_HISTORY',
+          payload: this.chatMessages,
+        });
+      }
+      return;
+    }
+
+    if (message.kind === 'CHAT') {
+      this.publishChat(playerId, message.text);
       return;
     }
 

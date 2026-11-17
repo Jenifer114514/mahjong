@@ -1,5 +1,11 @@
 import type { PeerOptions } from 'peerjs';
-import type { ClientMessage, GameError, HostMessage, StateView } from '../types/message';
+import type {
+  ChatMessage,
+  ClientMessage,
+  GameError,
+  HostMessage,
+  StateView,
+} from '../types/message';
 import type { CallResponseChoice } from '../types/state';
 import { ALL_TILE_KINDS, type TileKind } from '../types/tile';
 
@@ -103,6 +109,20 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
     return {
       kind: 'JOIN',
       playerName: raw.playerName,
+    };
+  }
+
+  if (raw.kind === 'CHAT') {
+    if (typeof raw.text !== 'string') {
+      return null;
+    }
+    const trimmed = raw.text.trim();
+    if (trimmed.length === 0 || trimmed.length > 200) {
+      return null;
+    }
+    return {
+      kind: 'CHAT',
+      text: trimmed,
     };
   }
 
@@ -220,6 +240,27 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
   return null;
 }
 
+function parseChatMessage(raw: unknown): ChatMessage | null {
+  if (!isRecord(raw)) return null;
+  if (
+    !isNonEmptyString(raw.id) ||
+    !isNonEmptyString(raw.senderId) ||
+    typeof raw.senderName !== 'string' ||
+    !isNonEmptyString(raw.text) ||
+    typeof raw.timestamp !== 'number' ||
+    !Number.isFinite(raw.timestamp)
+  ) {
+    return null;
+  }
+  return {
+    id: raw.id,
+    senderId: raw.senderId,
+    senderName: raw.senderName,
+    text: raw.text,
+    timestamp: raw.timestamp,
+  };
+}
+
 export function parseHostMessage(raw: unknown): HostMessage | null {
   if (!isRecord(raw) || typeof raw.kind !== 'string') {
     return null;
@@ -245,6 +286,29 @@ export function parseHostMessage(raw: unknown): HostMessage | null {
     return {
       kind: 'STATE_VIEW',
       payload: raw.payload as unknown as StateView,
+    };
+  }
+
+  if (raw.kind === 'CHAT_MESSAGE') {
+    const chat = parseChatMessage(raw.payload);
+    if (!chat) return null;
+    return {
+      kind: 'CHAT_MESSAGE',
+      payload: chat,
+    };
+  }
+
+  if (raw.kind === 'CHAT_HISTORY') {
+    if (!Array.isArray(raw.payload)) return null;
+    const list: ChatMessage[] = [];
+    for (const item of raw.payload) {
+      const parsed = parseChatMessage(item);
+      if (!parsed) return null;
+      list.push(parsed);
+    }
+    return {
+      kind: 'CHAT_HISTORY',
+      payload: list,
     };
   }
 

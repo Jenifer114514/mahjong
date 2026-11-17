@@ -481,11 +481,13 @@ describe('renderGameTable（横画面レイアウト）', () => {
     expect(bar!.textContent).not.toContain('リーチ中:');
   });
 
-  it('中央コンソールの4方向点数・隅の自風・ドラパネル供託棒・左端クイック操作(理/和/鳴/切)を描画し、右上には設定ボタンを出さない', () => {
+  it('中央コンソールの4方向点数・隅の自風・ドラパネル供託棒・左端クイック操作(理/和/鳴/切)・右上(チャット/設定/退出)を描画する', () => {
     const baseView = toStateView(state4, 'p0', 0);
     const onToggleAutoAgari = vi.fn();
     const onToggleAutoNoCall = vi.fn();
     const onToggleAutoTsumogiri = vi.fn();
+    const onOpenSettings = vi.fn();
+    const onOpenChat = vi.fn();
 
     const root = document.createElement('div');
     renderGameTable(
@@ -495,6 +497,8 @@ describe('renderGameTable（横画面レイアウト）', () => {
         ...noopHandlers,
         canLeaveGame: true,
         onLeaveGame: () => {},
+        onOpenSettings,
+        onOpenChat,
         onToggleAutoAgari,
         onToggleAutoNoCall,
         onToggleAutoTsumogiri,
@@ -504,6 +508,7 @@ describe('renderGameTable（横画面レイアウト）', () => {
         autoTsumogiriEnabled: true,
         autoAgariEnabled: false,
         autoNoCallEnabled: false,
+        unreadChatCount: 2,
       },
     );
 
@@ -530,10 +535,22 @@ describe('renderGameTable（横画面レイアウト）', () => {
     expect(onToggleAutoNoCall).toHaveBeenCalledWith(true);
     expect(onToggleAutoTsumogiri).toHaveBeenCalledWith(false);
 
-    // 右上には退出ボタンのみ表示され、設定ボタンは出さない
-    expect(root.querySelector('.table-chrome-settings')).toBeNull();
-    expect(root.querySelector('.table-settings-popover')).toBeNull();
-    expect(root.querySelector('.table-chrome-leave')).not.toBeNull();
+    // 右上にチャット・設定・退出ボタンが並び、クリックで各ハンドラが呼ばれる
+    const chromeButtons = Array.from(
+      root.querySelectorAll<HTMLButtonElement>('.table-chrome > .table-chrome-btn'),
+    );
+    expect(chromeButtons.map((b) => b.className)).toEqual([
+      expect.stringContaining('table-chrome-chat'),
+      expect.stringContaining('table-chrome-settings'),
+      expect.stringContaining('table-chrome-leave'),
+    ]);
+    const chatBtn = root.querySelector<HTMLButtonElement>('.table-chrome-chat')!;
+    const settingsBtn = root.querySelector<HTMLButtonElement>('.table-chrome-settings')!;
+    expect(chatBtn.querySelector('.chat-unread-badge')?.textContent).toBe('2');
+    chatBtn.click();
+    settingsBtn.click();
+    expect(onOpenChat).toHaveBeenCalledTimes(1);
+    expect(onOpenSettings).toHaveBeenCalledTimes(1);
 
     // 自分の手牌と副露ドックが存在する
     expect(root.querySelector('.self-hand-dock .self-melds-dock')).not.toBeNull();

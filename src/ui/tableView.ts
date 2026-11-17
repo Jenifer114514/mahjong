@@ -54,6 +54,10 @@ export interface TableHandlers {
   onLeaveGame?: () => void;
   /** 卓上に離脱ボタンを出すか */
   canLeaveGame?: boolean;
+  /** 設定パネルを開く */
+  onOpenSettings?: () => void;
+  /** チャットパネルを開く */
+  onOpenChat?: () => void;
 }
 
 export interface TableUiState {
@@ -63,6 +67,7 @@ export interface TableUiState {
   autoNoCallEnabled?: boolean;
   selectedTileId?: string | null;
   roundEndStep?: RoundEndStep;
+  unreadChatCount?: number;
 }
 
 const DEFAULT_TABLE_UI_STATE: TableUiState = {
@@ -72,6 +77,7 @@ const DEFAULT_TABLE_UI_STATE: TableUiState = {
   autoNoCallEnabled: false,
   selectedTileId: null,
   roundEndStep: 'details',
+  unreadChatCount: 0,
 };
 
 const MELD_TYPE_LABELS: Record<Meld['type'], string> = {
@@ -187,10 +193,8 @@ export function renderGameTable(
     felt.appendChild(renderSelfSeat(view, selfPlayer, handlers, uiState));
   }
 
-  // 対局中は雀卓だけを表示する（局情報・スコア・ドラは卓の中に集約）
-  if (handlers.canLeaveGame && handlers.onLeaveGame) {
-    felt.appendChild(renderTableChrome(handlers));
-  }
+  // 対局中は雀卓だけを表示する（チャット・設定・退出ボタンは右上に集約）
+  felt.appendChild(renderTableChrome(handlers, uiState));
 
   felt.appendChild(renderLeftActionBar(handlers, uiState));
 
@@ -851,18 +855,46 @@ function renderDoraPanel(view: StateView): HTMLElement | null {
   return panel;
 }
 
-/** 卓の右上に置く操作ボタン（退出） */
-function renderTableChrome(handlers: TableHandlers): HTMLElement {
+/** 卓の右上に置く操作ボタン（チャット・設定・退出） */
+function renderTableChrome(
+  handlers: TableHandlers,
+  uiState: TableUiState,
+): HTMLElement {
   const bar = document.createElement('div');
   bar.className = 'table-chrome';
 
-  const leave = document.createElement('button');
-  leave.type = 'button';
-  leave.className = 'table-chrome-btn table-chrome-leave';
-  leave.textContent = '退出';
-  leave.title = '対局を離れてロビーに戻る';
-  leave.addEventListener('click', () => handlers.onLeaveGame?.());
-  bar.appendChild(leave);
+  const unread = uiState.unreadChatCount ?? 0;
+  const chatBtn = document.createElement('button');
+  chatBtn.type = 'button';
+  chatBtn.className = `table-chrome-btn table-chrome-chat${unread > 0 ? ' has-unread' : ''}`;
+  chatBtn.title = 'チャットを開く';
+  chatBtn.textContent = 'チャット';
+  if (unread > 0) {
+    const badge = document.createElement('span');
+    badge.className = 'chat-unread-badge';
+    badge.textContent = unread > 9 ? '9+' : String(unread);
+    chatBtn.appendChild(badge);
+  }
+  chatBtn.addEventListener('click', () => handlers.onOpenChat?.());
+  bar.appendChild(chatBtn);
+
+  const settingsBtn = document.createElement('button');
+  settingsBtn.type = 'button';
+  settingsBtn.className = 'table-chrome-btn table-chrome-settings';
+  settingsBtn.textContent = '設定';
+  settingsBtn.title = '表示設定を開く';
+  settingsBtn.addEventListener('click', () => handlers.onOpenSettings?.());
+  bar.appendChild(settingsBtn);
+
+  if (handlers.canLeaveGame && handlers.onLeaveGame) {
+    const leave = document.createElement('button');
+    leave.type = 'button';
+    leave.className = 'table-chrome-btn table-chrome-leave';
+    leave.textContent = '退出';
+    leave.title = '対局を離れてロビーに戻る';
+    leave.addEventListener('click', () => handlers.onLeaveGame?.());
+    bar.appendChild(leave);
+  }
 
   return bar;
 }
