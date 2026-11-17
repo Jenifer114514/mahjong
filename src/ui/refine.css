@@ -1,0 +1,701 @@
+/* ===================================================================
+   UI リファイン層（styles.css の後に読み込む）
+   - 牌: 白い牌面 → 象牙色の側面 → 背の黄金色層 → 接地影 の多層構造で厚みを表現
+   - 卓・パネル・ボタン: ガラス調パネル、木枠、ベベル付きコンソール
+   レイアウト（サイズ・配置）は変えず、見た目だけを上書きする。
+   =================================================================== */
+
+:root {
+  --tile-face-top: #ffffff;
+  --tile-face-bottom: #f1ede2;
+  --tile-hairline: rgba(140, 128, 104, 0.7);
+  --tile-ivory-side: #e3d9c2;
+  --tile-back-a: #f2b24c;
+  --tile-back-b: #dc9029;
+  --tile-back-c: #bb7116;
+  --tile-back-d: #8c510b;
+
+  --panel-bg: linear-gradient(180deg, rgba(24, 33, 52, 0.9) 0%, rgba(9, 14, 24, 0.94) 100%);
+  --panel-border: rgba(196, 210, 236, 0.16);
+  --panel-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  --panel-shadow: 0 8px 22px rgba(0, 0, 0, 0.48);
+
+  --tile-3d-lg:
+    inset 0 1px 0 rgba(255, 255, 255, 1),
+    inset 1px 0 0 rgba(255, 255, 255, 0.65),
+    inset -1px 0 0 rgba(110, 95, 70, 0.14),
+    inset 0 -2px 2px rgba(120, 100, 70, 0.12),
+    0 1px 0 var(--tile-back-a),
+    0 2px 0 var(--tile-back-b),
+    0 3px 0 var(--tile-back-b),
+    0 4px 0 var(--tile-back-c),
+    0 5px 0 var(--tile-back-d),
+    0 7px 6px -1px rgba(0, 0, 0, 0.52),
+    0 13px 16px -5px rgba(0, 0, 0, 0.38);
+
+  --tile-3d-sm:
+    inset 0 1px 0 rgba(255, 255, 255, 1),
+    inset 0 -1px 1px rgba(120, 100, 70, 0.14),
+    0 1px 0 var(--tile-back-a),
+    0 2px 0 var(--tile-back-c),
+    0 3px 0 var(--tile-back-d),
+    0 4px 4px -1px rgba(0, 0, 0, 0.55);
+}
+
+/* ---------- 牌（表） ---------- */
+.mj-tile:not(.mj-tile-back) {
+  position: relative;
+  background-color: var(--tile-face-bottom);
+  border-color: var(--tile-hairline);
+  border-bottom-color: var(--tile-ivory-side);
+  border-radius: 4px;
+  box-shadow: var(--tile-3d-lg);
+}
+
+.mj-tile:not(.mj-tile-back):not(.mj-tile-face) {
+  background-image: linear-gradient(180deg, var(--tile-face-top) 0%, var(--tile-face-bottom) 100%);
+}
+
+.mj-tile.mj-tile-face {
+  border-color: var(--tile-hairline);
+  border-bottom-color: var(--tile-ivory-side);
+}
+
+/* 牌面の艶（左上からの反射光と下端の陰り） */
+.mj-tile:not(.mj-tile-back)::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background:
+    linear-gradient(
+      162deg,
+      rgba(255, 255, 255, 0.6) 0%,
+      rgba(255, 255, 255, 0.12) 26%,
+      rgba(255, 255, 255, 0) 52%,
+      rgba(96, 76, 44, 0.09) 100%
+    );
+}
+
+.mj-tile-sm:not(.mj-tile-back),
+.table-felt.is-landscape .mj-tile-sm:not(.mj-tile-back),
+.table-felt.is-landscape .discard-river > .mj-tile,
+.table-felt.is-landscape .discard-river > .mj-tile.mj-tile-sm,
+.table-felt.is-landscape .dora-panel-tiles > .mj-tile,
+.table-felt.is-landscape .dora-panel-tiles > .mj-tile.mj-tile-sm {
+  border-radius: 3px;
+  box-shadow: var(--tile-3d-sm);
+}
+
+.table-felt.is-landscape .hand-area > .mj-tile {
+  border-radius: 5px;
+}
+
+/* 自分の手牌: 立てた牌らしく影を深く */
+.hand-area > .mj-tile:not(.mj-tile-back) {
+  box-shadow: var(--tile-3d-lg);
+}
+
+/* 最新の捨て牌・鳴き牌は輪郭線ではなく発光で示す（立体感を壊さない） */
+.mj-tile-latest {
+  outline: none;
+  box-shadow:
+    0 0 0 1.5px #63b3ff,
+    0 0 10px rgba(99, 179, 255, 0.75),
+    var(--tile-3d-sm) !important;
+}
+
+.mj-tile-called {
+  outline: none;
+  box-shadow:
+    0 0 0 1.5px var(--accent-gold),
+    var(--tile-3d-sm) !important;
+}
+
+.mj-tile-tsumogiri {
+  opacity: 1;
+  filter: brightness(0.86) saturate(0.85);
+}
+
+/* ---------- 手牌の操作（持ち上げ） ---------- */
+.mj-tile-clickable {
+  transition:
+    transform 0.16s cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 0.16s ease,
+    filter 0.16s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mj-tile-clickable:hover,
+.mj-tile-clickable:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px rgba(240, 201, 92, 0.85),
+    var(--tile-3d-lg);
+}
+
+.mj-tile-clickable:focus-visible {
+  box-shadow:
+    0 0 0 2.5px var(--accent-gold),
+    0 0 0 5px rgba(240, 201, 92, 0.3),
+    var(--tile-3d-lg);
+}
+
+.mj-tile-clickable.mj-tile-selected,
+.mj-tile-clickable.mj-tile-selected:hover,
+.mj-tile-clickable.mj-tile-selected:focus-visible {
+  outline: none;
+  filter: brightness(1.03);
+  box-shadow:
+    0 0 0 2px var(--accent-gold),
+    0 0 16px rgba(240, 201, 92, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 1),
+    0 1px 0 var(--tile-back-a),
+    0 2px 0 var(--tile-back-b),
+    0 3px 0 var(--tile-back-b),
+    0 4px 0 var(--tile-back-c),
+    0 5px 0 var(--tile-back-d),
+    0 18px 18px -6px rgba(0, 0, 0, 0.6);
+}
+
+.mj-tile-riichi-candidate {
+  outline: none;
+  box-shadow:
+    0 0 0 2px var(--accent-gold),
+    0 0 12px rgba(240, 201, 92, 0.6),
+    var(--tile-3d-lg);
+}
+
+.mj-tile-disabled {
+  opacity: 0.5;
+  filter: grayscale(55%) brightness(0.78);
+}
+
+/* ---------- 牌（裏）: 黄金色の背＋白い腹 ---------- */
+.table-felt.is-landscape .opponent-hand .mj-tile-back,
+.dora-panel-tiles .dora-slot-back {
+  background:
+    linear-gradient(162deg, rgba(255, 236, 190, 0.55) 0%, rgba(255, 236, 190, 0) 40%),
+    linear-gradient(180deg, #f5bd5c 0%, #e09530 55%, #c47819 100%);
+  border-color: #8a5210;
+  border-bottom-color: #ece5d3;
+  border-radius: 3px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 240, 205, 0.75),
+    inset 0 -1px 0 rgba(110, 60, 0, 0.35),
+    0 1px 0 #d6cdb7,
+    0 2px 0 #b9ae95,
+    0 4px 5px -1px rgba(0, 0, 0, 0.55);
+}
+
+.table-felt.is-landscape .hand-orient-left .mj-tile-back {
+  background: linear-gradient(90deg, #c47819 0%, #e09530 45%, #f5bd5c 100%);
+  border-left-color: #ece5d3;
+}
+
+.table-felt.is-landscape .hand-orient-right .mj-tile-back {
+  background: linear-gradient(270deg, #c47819 0%, #e09530 45%, #f5bd5c 100%);
+  border-right-color: #ece5d3;
+}
+
+.table-felt.is-landscape .hand-orient-left .mj-tile-back,
+.table-felt.is-landscape .hand-orient-right .mj-tile-back {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 240, 205, 0.6),
+    0 1px 0 #b9ae95,
+    0 3px 4px -1px rgba(0, 0, 0, 0.55);
+}
+
+.mj-tile-back.mj-tile-back-meld {
+  background: linear-gradient(180deg, #f5bd5c 0%, #e09530 55%, #c47819 100%);
+  border-color: #8a5210;
+  border-bottom-color: #ece5d3;
+  border-radius: 3px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 240, 205, 0.75),
+    0 1px 0 #d6cdb7,
+    0 3px 4px -1px rgba(0, 0, 0, 0.55);
+}
+
+/* ---------- 卓 ---------- */
+.table-felt.is-landscape {
+  background:
+    radial-gradient(ellipse 62% 55% at 50% 46%, rgba(108, 158, 236, 0.2) 0%, rgba(108, 158, 236, 0) 70%),
+    repeating-linear-gradient(45deg, rgba(255, 255, 255, 0.014) 0 2px, rgba(0, 0, 0, 0.022) 2px 4px),
+    radial-gradient(ellipse at 50% 48%, #2b4d88 0%, #1b335f 55%, #0b1630 100%);
+  border-image: linear-gradient(180deg, #6a3c1f 0%, #3f2110 45%, #231007 100%) 1;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 214, 160, 0.16),
+    inset 0 22px 34px -22px rgba(0, 0, 0, 0.65),
+    inset 0 0 96px rgba(3, 8, 20, 0.7);
+}
+
+/* ---------- 共通パネル（ガラス調） ---------- */
+.seat-header,
+.dora-panel-box,
+.table-chrome-btn,
+.table-felt.is-landscape .call-action-bar,
+.table-felt.is-landscape .self-action-bar {
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  box-shadow: var(--panel-highlight), var(--panel-shadow);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+
+.seat-header {
+  border-radius: 12px;
+}
+
+.seat-header.is-turn {
+  border-color: rgba(240, 201, 92, 0.75);
+  background:
+    linear-gradient(180deg, rgba(240, 201, 92, 0.12) 0%, rgba(240, 201, 92, 0) 60%),
+    var(--panel-bg);
+  box-shadow:
+    var(--panel-highlight),
+    0 0 0 1px rgba(240, 201, 92, 0.3),
+    0 0 18px rgba(240, 201, 92, 0.22),
+    var(--panel-shadow);
+}
+
+.seat-avatar {
+  border-radius: 10px;
+  border-color: rgba(215, 185, 110, 0.45);
+  box-shadow:
+    inset 0 0 8px rgba(0, 0, 0, 0.55),
+    0 2px 6px rgba(0, 0, 0, 0.4);
+}
+
+.dora-panel-box {
+  border-radius: 12px;
+  border-color: rgba(214, 194, 140, 0.32);
+}
+
+.table-felt.is-landscape .call-action-bar {
+  border-color: rgba(240, 201, 92, 0.55);
+  border-radius: 12px;
+}
+
+.table-felt.is-landscape .self-action-bar {
+  border-color: rgba(89, 217, 153, 0.45);
+  border-radius: 12px;
+}
+
+.table-chrome-btn {
+  min-height: 32px;
+  border-radius: 999px;
+  padding: 6px 13px;
+}
+
+.table-chrome-btn:hover,
+.table-chrome-btn:focus-visible {
+  outline: none;
+  border-color: rgba(240, 201, 92, 0.6);
+  background:
+    linear-gradient(180deg, rgba(240, 201, 92, 0.1) 0%, rgba(240, 201, 92, 0) 100%),
+    var(--panel-bg);
+}
+
+.table-left-actions {
+  border-radius: 14px;
+  border: 1px solid var(--panel-border);
+  background: var(--panel-bg);
+  box-shadow: var(--panel-highlight), var(--panel-shadow);
+  opacity: 0.84;
+}
+
+.left-action-tab {
+  border-bottom-color: rgba(255, 255, 255, 0.07);
+}
+
+.left-action-tab.is-active {
+  color: #ffe08a;
+  background: linear-gradient(180deg, rgba(240, 201, 92, 0.26) 0%, rgba(240, 201, 92, 0.1) 100%);
+  text-shadow: 0 0 8px rgba(240, 201, 92, 0.5);
+}
+
+/* ---------- 中央コンソール（ベベル＋液晶） ---------- */
+.center-hub {
+  border-radius: 18px;
+  border: 1px solid rgba(160, 174, 204, 0.32);
+  background:
+    linear-gradient(160deg, rgba(255, 255, 255, 0.07) 0%, rgba(255, 255, 255, 0) 38%),
+    linear-gradient(160deg, #2c3547 0%, #171c27 58%, #0d1119 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    inset 0 -2px 0 rgba(0, 0, 0, 0.5),
+    inset 0 0 0 3px rgba(7, 10, 17, 0.7),
+    0 2px 0 #0b0f17,
+    0 4px 0 #070a10,
+    0 16px 30px rgba(0, 0, 0, 0.62);
+}
+
+.console-core {
+  border-radius: 9px;
+  border: 1px solid rgba(120, 140, 175, 0.3);
+  background:
+    radial-gradient(ellipse at 50% 30%, rgba(80, 130, 200, 0.16) 0%, rgba(80, 130, 200, 0) 70%),
+    linear-gradient(180deg, #121927 0%, #0a0e16 100%);
+  box-shadow:
+    inset 0 2px 8px rgba(0, 0, 0, 0.8),
+    0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.round-label {
+  text-shadow: 0 0 10px rgba(243, 214, 120, 0.45);
+}
+
+.compass-wind {
+  border-radius: 6px;
+  background: linear-gradient(180deg, #263248 0%, #141b29 100%);
+  border-color: rgba(170, 190, 225, 0.28);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    0 2px 0 rgba(0, 0, 0, 0.45);
+}
+
+.compass-wind.is-dealer {
+  background: linear-gradient(180deg, #d63a3a 0%, #8e1b1b 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.3),
+    0 2px 0 #4a0d0d;
+}
+
+.stick-icon {
+  border-radius: 3px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.7),
+    0 1px 2px rgba(0, 0, 0, 0.55);
+}
+
+/* ---------- ボタン ---------- */
+.btn {
+  border-radius: 10px;
+  transition:
+    transform 0.1s ease,
+    box-shadow 0.15s ease,
+    filter 0.15s ease,
+    opacity 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.btn:not(:disabled):active {
+  transform: translateY(1px);
+  filter: brightness(0.94);
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--accent-gold);
+  outline-offset: 2px;
+}
+
+.btn-primary {
+  background: linear-gradient(180deg, #4a90ff 0%, #2a66df 100%);
+  border-color: rgba(150, 195, 255, 0.5);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    0 2px 0 #1a3f8c,
+    0 8px 18px rgba(38, 102, 224, 0.35);
+}
+
+.btn-secondary {
+  background: linear-gradient(180deg, rgba(120, 165, 240, 0.18) 0%, rgba(80, 125, 210, 0.1) 100%);
+  border-color: rgba(140, 185, 250, 0.26);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.btn-call,
+.btn-kita,
+.btn-abortive,
+.btn-ron,
+.btn-riichi {
+  border-radius: 999px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    0 2px 0 rgba(0, 0, 0, 0.4),
+    0 6px 14px rgba(0, 0, 0, 0.35);
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.35);
+}
+
+.btn-call {
+  background: linear-gradient(180deg, #3d9b72 0%, #24684a 100%);
+}
+
+.btn-kita {
+  background: linear-gradient(180deg, #3179a0 0%, #1e5069 100%);
+}
+
+.btn-abortive {
+  background: linear-gradient(180deg, #8a6230 0%, #5c3f1b 100%);
+}
+
+.btn-ron {
+  background: linear-gradient(180deg, #df3d38 0%, #a2221f 100%);
+}
+
+/* ---------- ロビー ---------- */
+.top-bar {
+  border-radius: 14px;
+  border-color: var(--panel-border);
+  background: var(--panel-bg);
+  box-shadow: var(--panel-highlight), var(--panel-shadow);
+}
+
+.app-title {
+  color: #e9f1ff;
+}
+
+.card {
+  border-radius: 16px;
+  border-color: var(--panel-border);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035) 0%, rgba(255, 255, 255, 0) 40%),
+    var(--bg-panel);
+  box-shadow: var(--panel-highlight), 0 14px 32px rgba(3, 8, 20, 0.5);
+}
+
+.card h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #e6eefc;
+  letter-spacing: 0.02em;
+}
+
+.card h2::before {
+  content: '';
+  flex: 0 0 auto;
+  width: 4px;
+  height: 1em;
+  border-radius: 2px;
+  background: linear-gradient(180deg, #f6d77a 0%, #d9a83a 100%);
+}
+
+.text-input {
+  min-height: 44px;
+  font-size: 16px;
+  border-radius: 10px;
+  border-color: rgba(140, 180, 245, 0.22);
+  background: rgba(4, 9, 20, 0.72);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.35);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.text-input:focus {
+  outline: none;
+  border-color: rgba(240, 201, 92, 0.7);
+  box-shadow:
+    inset 0 2px 4px rgba(0, 0, 0, 0.35),
+    0 0 0 3px rgba(240, 201, 92, 0.18);
+}
+
+.text-input.code-input {
+  font-size: 1.1rem;
+}
+
+.seg-btn {
+  min-height: 44px;
+  border-radius: 10px;
+  border-color: rgba(140, 180, 245, 0.18);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.seg-btn.is-active {
+  border-color: rgba(240, 201, 92, 0.75);
+  background: linear-gradient(180deg, rgba(240, 201, 92, 0.18) 0%, rgba(240, 201, 92, 0.06) 100%);
+  color: #fff4d3;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 0 0 1px rgba(240, 201, 92, 0.2);
+}
+
+.lobby-wrap .btn {
+  min-height: 44px;
+}
+
+/* ===================================================================
+   参考デザイン寄せ: 明るいロイヤルブルーの卓、内側の明るい卓面、
+   ガンメタルの中央コンソール、厚いオレンジ背の牌
+   =================================================================== */
+:root {
+  --tile-back-a: #ffb84a;
+  --tile-back-b: #f39a22;
+  --tile-back-c: #d97a0c;
+  --tile-back-d: #9e5104;
+
+  --tile-3d-lg:
+    inset 0 1px 0 rgba(255, 255, 255, 1),
+    inset 1px 0 0 rgba(255, 255, 255, 0.7),
+    inset -1px 0 0 rgba(110, 95, 70, 0.12),
+    inset 0 -3px 3px rgba(150, 130, 95, 0.14),
+    0 1px 0 #e9e3d4,
+    0 2px 0 #ddd4bf,
+    0 3px 0 var(--tile-back-a),
+    0 4px 0 var(--tile-back-b),
+    0 5px 0 var(--tile-back-b),
+    0 6px 0 var(--tile-back-c),
+    0 7px 0 var(--tile-back-c),
+    0 8px 0 var(--tile-back-d),
+    0 10px 6px -1px rgba(0, 0, 0, 0.5),
+    0 16px 18px -6px rgba(0, 0, 0, 0.4);
+
+  --tile-3d-sm:
+    inset 0 1px 0 rgba(255, 255, 255, 1),
+    inset 0 -1px 1px rgba(150, 130, 95, 0.16),
+    0 1px 0 #ddd4bf,
+    0 2px 0 var(--tile-back-a),
+    0 3px 0 var(--tile-back-b),
+    0 4px 0 var(--tile-back-d),
+    0 5px 4px -1px rgba(0, 0, 0, 0.5);
+}
+
+/* 卓: 外周は深い青、中央の四角は明るい卓面（::before の枠線と同じ 29/18/42/60% に一致） */
+.table-felt.is-landscape {
+  background:
+    radial-gradient(ellipse 26% 30% at 50% 47%, rgba(150, 200, 255, 0.16) 0%, rgba(150, 200, 255, 0) 100%),
+    radial-gradient(ellipse at 50% 40%, #3364b4 0%, #2b58a4 70%, #26509a 100%) 50% 45% / 42% 60% no-repeat,
+    repeating-linear-gradient(45deg, rgba(255, 255, 255, 0.016) 0 2px, rgba(0, 0, 0, 0.026) 2px 4px),
+    radial-gradient(ellipse 80% 75% at 50% 46%, #2c5aa6 0%, #234b92 45%, #173670 80%, #0e2552 100%);
+  border: 6px solid #2a1709;
+  border-image: none;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 210, 150, 0.22),
+    inset 0 0 0 3px rgba(10, 18, 40, 0.55),
+    inset 0 26px 40px -26px rgba(0, 0, 0, 0.6),
+    inset 0 0 90px rgba(5, 14, 36, 0.55);
+}
+
+/* 相手の山: 立てた牌の背をオレンジで、手前の腹を白で厚く見せる */
+.table-felt.is-landscape .opponent-hand .mj-tile-back {
+  background:
+    linear-gradient(162deg, rgba(255, 240, 200, 0.6) 0%, rgba(255, 240, 200, 0) 45%),
+    linear-gradient(180deg, #ffbd52 0%, #f39a22 55%, #d97a0c 100%);
+  border-color: #9e5104;
+  border-bottom-color: #f4f0e6;
+  border-radius: 3px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 244, 214, 0.85),
+    inset 0 -1px 0 rgba(120, 60, 0, 0.35),
+    0 1px 0 #d8cfb9,
+    0 2px 0 #bdb196,
+    0 4px 6px -1px rgba(0, 0, 0, 0.55);
+}
+
+.table-felt.is-landscape .hand-orient-left .mj-tile-back {
+  background:
+    linear-gradient(90deg, #d97a0c 0%, #f39a22 45%, #ffbd52 100%);
+  border-bottom-color: #9e5104;
+  border-left-color: #f4f0e6;
+}
+
+.table-felt.is-landscape .hand-orient-right .mj-tile-back {
+  background:
+    linear-gradient(270deg, #d97a0c 0%, #f39a22 45%, #ffbd52 100%);
+  border-bottom-color: #9e5104;
+  border-right-color: #f4f0e6;
+}
+
+.table-felt.is-landscape .hand-orient-left .mj-tile-back,
+.table-felt.is-landscape .hand-orient-right .mj-tile-back {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 244, 214, 0.7),
+    0 1px 0 #bdb196,
+    0 2px 0 #9b8f74,
+    0 4px 5px -1px rgba(0, 0, 0, 0.55);
+}
+
+.mj-tile-back.mj-tile-back-meld,
+.dora-panel-tiles .dora-slot-back {
+  background:
+    linear-gradient(162deg, rgba(255, 240, 200, 0.6) 0%, rgba(255, 240, 200, 0) 45%),
+    linear-gradient(180deg, #ffbd52 0%, #f39a22 55%, #d97a0c 100%);
+  border-color: #9e5104;
+  border-bottom-color: #f4f0e6;
+}
+
+/* 中央コンソール: ガンメタルの筐体＋黒い液晶窓 */
+.center-hub {
+  border-radius: 16px;
+  border: 1px solid rgba(210, 218, 232, 0.38);
+  background:
+    linear-gradient(160deg, rgba(255, 255, 255, 0.16) 0%, rgba(255, 255, 255, 0) 42%),
+    linear-gradient(160deg, #5d6572 0%, #3a404b 55%, #262a32 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    inset 0 -2px 0 rgba(0, 0, 0, 0.45),
+    inset 0 0 0 4px rgba(20, 24, 30, 0.55),
+    0 2px 0 #1b1e24,
+    0 4px 0 #121418,
+    0 6px 0 #0b0c0f,
+    0 18px 30px rgba(0, 0, 0, 0.55);
+}
+
+.console-core {
+  border-radius: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.7);
+  background:
+    radial-gradient(ellipse at 50% 25%, rgba(120, 170, 255, 0.12) 0%, rgba(120, 170, 255, 0) 70%),
+    linear-gradient(180deg, #0d1118 0%, #06080c 100%);
+  box-shadow:
+    inset 0 2px 6px rgba(0, 0, 0, 0.9),
+    0 1px 0 rgba(255, 255, 255, 0.18);
+}
+
+.round-label {
+  color: #ffe58a;
+  text-shadow: 0 0 8px rgba(255, 214, 90, 0.55);
+}
+
+.console-score-val {
+  color: #ffd75e;
+  text-shadow: 0 0 6px rgba(255, 200, 60, 0.4);
+}
+
+.console-score.is-turn .console-score-val {
+  color: #fff3c4;
+}
+
+.compass-wind {
+  background: linear-gradient(180deg, #1f242c 0%, #0f1217 100%);
+  border-color: rgba(220, 226, 238, 0.3);
+  color: #e8ecf4;
+}
+
+/* 名札: 参考のように暗い半透明プレート */
+.seat-header {
+  background: linear-gradient(180deg, rgba(14, 22, 40, 0.78) 0%, rgba(6, 10, 20, 0.86) 100%);
+  border-color: rgba(170, 196, 240, 0.2);
+}
+
+.seat-avatar {
+  border-color: rgba(255, 214, 140, 0.6);
+}
+
+/* 右上のボタン: 角丸の暗い半透明 */
+.table-chrome-btn {
+  border-radius: 10px;
+  background: rgba(8, 14, 28, 0.62);
+  border-color: rgba(190, 210, 245, 0.22);
+  color: #dfe8f8;
+}
+
+/* 左の操作タブ: 濃紺に金文字 */
+.table-left-actions {
+  background: linear-gradient(180deg, rgba(10, 18, 36, 0.9) 0%, rgba(4, 8, 18, 0.92) 100%);
+  border-color: rgba(240, 201, 92, 0.28);
+  opacity: 0.94;
+}
+
+.left-action-tab {
+  color: #f2d27a;
+  font-weight: 700;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mj-tile-clickable,
+  .btn {
+    transition: none;
+  }
+}
