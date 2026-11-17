@@ -36,7 +36,6 @@ class MahjongApp {
   private autoTsumogiriEnabled = true;
   private autoAgariEnabled = false;
   private autoNoCallEnabled = false;
-  private settingsOpen = false;
   private autoTsumogiriTimerId: ReturnType<typeof setTimeout> | null = null;
   private autoAssistTimerId: ReturnType<typeof setTimeout> | null = null;
   private countdownDeadline: number | null = null;
@@ -382,7 +381,6 @@ class MahjongApp {
     this.actionInFlight = false;
     this.riichiSelectingMode = false;
     this.leaveConfirmPending = false;
-    this.settingsOpen = false;
     this.errorBanner = null;
     this.statusText = '未接続';
     this.statusKind = 'normal';
@@ -657,10 +655,6 @@ class MahjongApp {
             }
             this.render();
           },
-          onToggleSettings: (open) => {
-            this.settingsOpen = open;
-            this.render();
-          },
           onAdvanceRound: () => {
             if (this.activeSession?.role === 'host' && !this.actionInFlight) {
               this.actionInFlight = true;
@@ -675,7 +669,6 @@ class MahjongApp {
           autoTsumogiriEnabled: this.autoTsumogiriEnabled,
           autoAgariEnabled: this.autoAgariEnabled,
           autoNoCallEnabled: this.autoNoCallEnabled,
-          settingsOpen: this.settingsOpen,
         },
       );
     }

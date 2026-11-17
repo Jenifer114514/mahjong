@@ -429,12 +429,11 @@ describe('renderGameTable（横画面レイアウト）', () => {
     expect(bar!.textContent).not.toContain('リーチ中:');
   });
 
-  it('中央コンソールの4方向点数・隅の自風・ドラパネル供託棒・左端クイック操作(理/和/鳴/切)と設定ポップオーバーを描画する', () => {
+  it('中央コンソールの4方向点数・隅の自風・ドラパネル供託棒・左端クイック操作(理/和/鳴/切)を描画し、右上には設定ボタンを出さない', () => {
     const baseView = toStateView(state4, 'p0', 0);
     const onToggleAutoAgari = vi.fn();
     const onToggleAutoNoCall = vi.fn();
     const onToggleAutoTsumogiri = vi.fn();
-    const onToggleSettings = vi.fn();
 
     const root = document.createElement('div');
     renderGameTable(
@@ -447,14 +446,12 @@ describe('renderGameTable（横画面レイアウト）', () => {
         onToggleAutoAgari,
         onToggleAutoNoCall,
         onToggleAutoTsumogiri,
-        onToggleSettings,
       },
       {
         riichiSelectingMode: false,
         autoTsumogiriEnabled: true,
         autoAgariEnabled: false,
         autoNoCallEnabled: false,
-        settingsOpen: true,
       },
     );
 
@@ -481,10 +478,10 @@ describe('renderGameTable（横画面レイアウト）', () => {
     expect(onToggleAutoNoCall).toHaveBeenCalledWith(true);
     expect(onToggleAutoTsumogiri).toHaveBeenCalledWith(false);
 
-    // 右上に設定・退出ボタンと設定ポップオーバーが表示される
-    expect(root.querySelector('.table-chrome-settings')).not.toBeNull();
+    // 右上には退出ボタンのみ表示され、設定ボタンは出さない
+    expect(root.querySelector('.table-chrome-settings')).toBeNull();
+    expect(root.querySelector('.table-settings-popover')).toBeNull();
     expect(root.querySelector('.table-chrome-leave')).not.toBeNull();
-    expect(root.querySelector('.table-settings-popover')).not.toBeNull();
 
     // 自分の手牌と副露ドックが存在する
     expect(root.querySelector('.self-hand-dock .self-melds-dock')).not.toBeNull();

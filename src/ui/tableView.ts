@@ -44,7 +44,6 @@ export interface TableHandlers {
   onToggleAutoTsumogiri?: (enabled: boolean) => void;
   onToggleAutoAgari?: (enabled: boolean) => void;
   onToggleAutoNoCall?: (enabled: boolean) => void;
-  onToggleSettings?: (open: boolean) => void;
   onAdvanceRound: () => void;
   onReturnToLobby: () => void;
   /** 対局中に卓上から部屋を離れる（トップバーを出さないため） */
@@ -58,7 +57,6 @@ export interface TableUiState {
   autoTsumogiriEnabled: boolean;
   autoAgariEnabled?: boolean;
   autoNoCallEnabled?: boolean;
-  settingsOpen?: boolean;
 }
 
 const DEFAULT_TABLE_UI_STATE: TableUiState = {
@@ -66,7 +64,6 @@ const DEFAULT_TABLE_UI_STATE: TableUiState = {
   autoTsumogiriEnabled: true,
   autoAgariEnabled: false,
   autoNoCallEnabled: false,
-  settingsOpen: false,
 };
 
 const MELD_TYPE_LABELS: Record<Meld['type'], string> = {
@@ -184,9 +181,8 @@ export function renderGameTable(
   }
 
   // 対局中は雀卓だけを表示する（局情報・スコア・ドラは卓の中に集約）
-  const chrome = renderTableChrome(view, handlers, uiState);
-  if (chrome) {
-    felt.appendChild(chrome);
+  if (handlers.canLeaveGame && handlers.onLeaveGame) {
+    felt.appendChild(renderTableChrome(handlers));
   }
 
   felt.appendChild(renderLeftActionBar(handlers, uiState));
@@ -861,91 +857,18 @@ function renderDoraPanel(view: StateView): HTMLElement | null {
   return panel;
 }
 
-/** 卓の右上に置く操作ボタン（設定・退出） */
-function renderTableChrome(
-  view: StateView,
-  handlers: TableHandlers,
-  uiState: TableUiState,
-): HTMLElement | null {
-  const showLeave = Boolean(handlers.canLeaveGame && handlers.onLeaveGame);
-  const showSettings = Boolean(handlers.onToggleSettings);
-  if (!showLeave && !showSettings) {
-    return null;
-  }
-
+/** 卓の右上に置く操作ボタン（退出） */
+function renderTableChrome(handlers: TableHandlers): HTMLElement {
   const bar = document.createElement('div');
   bar.className = 'table-chrome';
 
-  if (showSettings) {
-    const settingsBtn = document.createElement('button');
-    settingsBtn.type = 'button';
-    settingsBtn.className = `table-chrome-btn table-chrome-settings${
-      uiState.settingsOpen ? ' is-open' : ''
-    }`;
-    settingsBtn.textContent = '設定';
-    settingsBtn.title = '対局補助とルール確認';
-    settingsBtn.addEventListener('click', () =>
-      handlers.onToggleSettings?.(!uiState.settingsOpen),
-    );
-    bar.appendChild(settingsBtn);
-  }
-
-  if (showLeave) {
-    const leave = document.createElement('button');
-    leave.type = 'button';
-    leave.className = 'table-chrome-btn table-chrome-leave';
-    leave.textContent = '退出';
-    leave.title = '対局を離れてロビーに戻る';
-    leave.addEventListener('click', () => handlers.onLeaveGame?.());
-    bar.appendChild(leave);
-  }
-
-  if (uiState.settingsOpen && showSettings) {
-    const rules = deriveRules(view.ruleConfig);
-    const pop = document.createElement('div');
-    pop.className = 'table-settings-popover';
-
-    const title = document.createElement('div');
-    title.className = 'table-settings-title';
-    title.textContent = '対局設定・ルール';
-    pop.appendChild(title);
-
-    const makeToggle = (
-      label: string,
-      active: boolean,
-      onClick?: () => void,
-    ): HTMLButtonElement => {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = `table-settings-toggle${active ? ' is-on' : ''}`;
-      btn.textContent = `${label}: ${active ? 'ON' : 'OFF'}`;
-      if (onClick) btn.addEventListener('click', onClick);
-      return btn;
-    };
-
-    pop.append(
-      makeToggle('自動和了 (和)', Boolean(uiState.autoAgariEnabled), () =>
-        handlers.onToggleAutoAgari?.(!uiState.autoAgariEnabled),
-      ),
-      makeToggle('鳴き無し (鳴)', Boolean(uiState.autoNoCallEnabled), () =>
-        handlers.onToggleAutoNoCall?.(!uiState.autoNoCallEnabled),
-      ),
-      makeToggle('自動ツモ切り (切)', uiState.autoTsumogiriEnabled, () =>
-        handlers.onToggleAutoTsumogiri?.(!uiState.autoTsumogiriEnabled),
-      ),
-    );
-
-    const ruleSummary = document.createElement('div');
-    ruleSummary.className = 'table-settings-rules';
-    ruleSummary.textContent = [
-      `${rules.playerCount}人 ${rules.gameLength === 'tonpuu' ? '東風' : '半荘'}`,
-      rules.allowKuitan ? '喰いタンあり' : '喰いタンなし',
-      rules.allowAtozuke ? '後付けあり' : '先付け',
-      rules.tobi ? 'トビあり' : 'トビなし',
-    ].join(' / ');
-    pop.appendChild(ruleSummary);
-    bar.appendChild(pop);
-  }
+  const leave = document.createElement('button');
+  leave.type = 'button';
+  leave.className = 'table-chrome-btn table-chrome-leave';
+  leave.textContent = '退出';
+  leave.title = '対局を離れてロビーに戻る';
+  leave.addEventListener('click', () => handlers.onLeaveGame?.());
+  bar.appendChild(leave);
 
   return bar;
 }

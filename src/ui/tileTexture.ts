@@ -149,14 +149,14 @@ function drawIvoryBase({ ctx, width: w, height: h }: FaceDrawContext): void {
   ctx.fillRect(0, 0, w, h);
 
   // 上端・左端の柔らかいハイライト縁
-  const rimInset = Math.max(1, w * 0.025);
+  const rimInset = Math.max(1, w * 0.022);
   roundRectPath(
     ctx,
     rimInset,
     rimInset,
     w - rimInset * 2,
     h - rimInset * 2,
-    Math.min(w, h) * 0.08,
+    Math.min(w, h) * 0.035,
   );
   ctx.strokeStyle = 'rgba(255, 255, 255, 0.48)';
   ctx.lineWidth = Math.max(0.8, w * 0.014);

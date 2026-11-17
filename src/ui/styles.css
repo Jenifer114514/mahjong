@@ -446,9 +446,9 @@ input {
 
 /* Tile component */
 .mj-tile {
-  width: 38px;
-  height: 54px;
-  border-radius: 6px;
+  width: 44px;
+  height: 61px;
+  border-radius: 2.5px;
   background: linear-gradient(180deg, #ffffff 0%, var(--tile-bg) 100%);
   border: 1px solid #b8ae92;
   border-bottom: 4px solid var(--tile-edge);
@@ -459,13 +459,13 @@ input {
   line-height: 1;
   user-select: none;
   padding: 2px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.42);
 }
 
 .mj-tile-sm {
-  width: 28px;
-  height: 40px;
-  border-radius: 4px;
+  width: 31px;
+  height: 43px;
+  border-radius: 2px;
   border-bottom-width: 3px;
 }
 
@@ -499,16 +499,17 @@ input {
 }
 
 .mj-tile-back {
-  width: 18px;
-  height: 26px;
+  width: 22px;
+  height: 31px;
+  border-radius: 2px;
   background: linear-gradient(180deg, #2d8770 0%, var(--tile-back) 100%);
   border-color: #184e40;
   border-bottom-color: #123c31;
 }
 
 .mj-tile-back.mj-tile-back-meld {
-  width: 28px;
-  height: 40px;
+  width: 31px;
+  height: 43px;
 }
 
 .mj-tile-disabled {
@@ -1188,21 +1189,6 @@ input {
     font-size: 0.9rem;
   }
 
-  .table-felt.is-landscape .mj-tile {
-    width: 30px;
-    height: 43px;
-  }
-
-  .table-felt.is-landscape .mj-tile-sm {
-    width: 22px;
-    height: 31px;
-  }
-
-  .table-felt.is-landscape .mj-tile-back.mj-tile-back-meld {
-    width: 22px;
-    height: 31px;
-  }
-
   .mj-tile-honor {
     font-size: 1rem;
   }
@@ -1216,17 +1202,17 @@ input {
    雀魂風の卓上配置レイアウト
    - 外周木枠＋深い青藍色の卓マット＋中央四角ピット＆対角ライン
    - 5×5 グリッド + seat-box display:contents により、4つの河を中央コンソールへ密着
-   - 左上: ドラ5枠+供託/本場棒、右上: 設定/退出、左端: 理/和/鳴/切バー
+   - 左上: ドラ5枠+供託/本場棒、右上: 退出、左端: 理/和/鳴/切バー
    =================================================================== */
 
 .table-felt.is-landscape {
-  --river-tile-w: 25px;
-  --river-tile-h: 35px;
-  --hand-tile-w: 44px;
-  --hand-tile-h: 60px;
-  --console-size: 158px;
-  --dora-panel-w: 162px;
-  --dora-panel-h: 88px;
+  --river-tile-w: 31px;
+  --river-tile-h: 43px;
+  --hand-tile-w: 54px;
+  --hand-tile-h: 74px;
+  --console-size: 154px;
+  --dora-panel-w: 190px;
+  --dora-panel-h: 98px;
   --side-hand-inset: 104px;
 
   position: relative;
@@ -1292,20 +1278,23 @@ input {
   display: none;
 }
 
-/* ---------- 自分の手牌サイズ（大きく視認性重視） ---------- */
+/* ---------- 自分の手牌サイズ（大きく角張った意匠） ---------- */
 .table-felt.is-landscape .hand-area > .mj-tile {
   width: var(--hand-tile-w);
   height: var(--hand-tile-h);
+  border-radius: 2.5px;
 }
 
 .table-felt.is-landscape .mj-tile-sm {
   width: var(--river-tile-w);
   height: var(--river-tile-h);
+  border-radius: 2px;
 }
 
 .table-felt.is-landscape .mj-tile-back.mj-tile-back-meld {
   width: var(--river-tile-w);
   height: var(--river-tile-h);
+  border-radius: 2px;
 }
 
 /* 河の牌は --river-tile-w/h に一本化 */
@@ -1313,6 +1302,7 @@ input {
 .table-felt.is-landscape .discard-river > .mj-tile.mj-tile-sm {
   width: var(--river-tile-w);
   height: var(--river-tile-h);
+  border-radius: 2px;
   flex: 0 0 auto;
 }
 
@@ -1331,7 +1321,7 @@ input {
   background: linear-gradient(180deg, #efb14c 0%, #d48622 100%);
   border: 1px solid #915813;
   border-bottom: 4px solid #ece7da;
-  border-radius: 3px;
+  border-radius: 2px;
   box-shadow: 0 2px 5px rgba(0, 0, 0, 0.48);
 }
 
@@ -1344,8 +1334,8 @@ input {
 }
 
 .table-felt.is-landscape .hand-orient-top .mj-tile-back {
-  width: 21px;
-  height: 29px;
+  width: 24px;
+  height: 33px;
   flex: 0 0 auto;
 }
 
@@ -1376,8 +1366,8 @@ input {
 
 .table-felt.is-landscape .hand-orient-left .mj-tile-back,
 .table-felt.is-landscape .hand-orient-right .mj-tile-back {
-  width: 20px;
-  height: 16px;
+  width: 23px;
+  height: 19px;
   flex: 0 1 auto;
   min-height: 8px;
   border-bottom: 2px solid #ece7da;
@@ -2124,7 +2114,7 @@ input {
   background: linear-gradient(180deg, #efb14c 0%, #d48622 100%);
   border: 1px solid #915813;
   border-bottom: 3px solid #ece7da;
-  border-radius: 3px;
+  border-radius: 2px;
 }
 
 .dora-panel-sticks {
@@ -2185,7 +2175,7 @@ input {
   letter-spacing: 0.02em;
 }
 
-/* ---------- 卓上の操作（右上: 設定・退出） ---------- */
+/* ---------- 卓上の操作（右上: 退出） ---------- */
 .table-chrome {
   position: absolute;
   top: 8px;
@@ -2209,58 +2199,10 @@ input {
 }
 
 .table-chrome-btn:hover,
-.table-chrome-btn:focus-visible,
-.table-chrome-btn.is-open {
+.table-chrome-btn:focus-visible {
   color: var(--accent-gold);
   border-color: var(--border-gold);
   background: rgba(18, 26, 42, 0.94);
-}
-
-.table-settings-popover {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  width: 210px;
-  padding: 10px;
-  border-radius: 8px;
-  background: rgba(11, 16, 26, 0.95);
-  border: 1px solid var(--border-gold);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.65);
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.table-settings-title {
-  font-size: 0.74rem;
-  font-weight: 800;
-  color: var(--accent-gold);
-}
-
-.table-settings-toggle {
-  text-align: left;
-  padding: 5px 8px;
-  border-radius: 5px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  background: rgba(255, 255, 255, 0.05);
-  color: var(--text-muted);
-  font-size: 0.72rem;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.table-settings-toggle.is-on {
-  background: rgba(56, 193, 114, 0.2);
-  border-color: rgba(56, 193, 114, 0.6);
-  color: #9bf5bf;
-}
-
-.table-settings-rules {
-  font-size: 0.64rem;
-  color: var(--text-muted);
-  line-height: 1.4;
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
-  padding-top: 5px;
 }
 
 /* ---------- 左端の縦型クイック補助バー（理 / 和 / 鳴 / 切） ---------- */
@@ -2464,13 +2406,13 @@ input {
 /* ---------- 狭い横画面レスポンシブ（スマホ・小型ウィンドウ対応） ---------- */
 @media (orientation: landscape) and (max-height: 680px) {
   .table-felt.is-landscape {
-    --river-tile-w: 21px;
-    --river-tile-h: 30px;
-    --hand-tile-w: 38px;
-    --hand-tile-h: 52px;
+    --river-tile-w: 26px;
+    --river-tile-h: 36px;
+    --hand-tile-w: 46px;
+    --hand-tile-h: 63px;
     --console-size: 136px;
-    --dora-panel-w: 140px;
-    --dora-panel-h: 74px;
+    --dora-panel-w: 162px;
+    --dora-panel-h: 84px;
     --side-hand-inset: 84px;
     padding: 6px 14px 8px;
     border-left-width: 10px;
@@ -2478,8 +2420,8 @@ input {
   }
 
   .table-felt.is-landscape .hand-orient-top .mj-tile-back {
-    width: 17px;
-    height: 24px;
+    width: 20px;
+    height: 28px;
   }
 
   .seat-avatar {
@@ -2506,13 +2448,13 @@ input {
 
 @media (orientation: landscape) and (max-height: 560px) {
   .table-felt.is-landscape {
-    --river-tile-w: 18px;
-    --river-tile-h: 25px;
-    --hand-tile-w: 32px;
-    --hand-tile-h: 44px;
+    --river-tile-w: 22px;
+    --river-tile-h: 30px;
+    --hand-tile-w: 38px;
+    --hand-tile-h: 52px;
     --console-size: 118px;
-    --dora-panel-w: 120px;
-    --dora-panel-h: 64px;
+    --dora-panel-w: 140px;
+    --dora-panel-h: 74px;
     --side-hand-inset: 72px;
     padding: 4px 10px 6px;
     gap: 3px;
@@ -2521,14 +2463,14 @@ input {
   }
 
   .table-felt.is-landscape .hand-orient-top .mj-tile-back {
-    width: 14px;
-    height: 20px;
+    width: 17px;
+    height: 24px;
   }
 
   .table-felt.is-landscape .hand-orient-left .mj-tile-back,
   .table-felt.is-landscape .hand-orient-right .mj-tile-back {
-    width: 15px;
-    height: 12px;
+    width: 18px;
+    height: 14px;
   }
 
   .round-label {
@@ -2582,13 +2524,13 @@ input {
 
 @media (orientation: landscape) and (max-height: 430px) {
   .table-felt.is-landscape {
-    --river-tile-w: 15px;
-    --river-tile-h: 21px;
-    --hand-tile-w: 27px;
-    --hand-tile-h: 37px;
-    --console-size: 98px;
-    --dora-panel-w: 104px;
-    --dora-panel-h: 52px;
+    --river-tile-w: 18px;
+    --river-tile-h: 25px;
+    --hand-tile-w: 32px;
+    --hand-tile-h: 44px;
+    --console-size: 96px;
+    --dora-panel-w: 120px;
+    --dora-panel-h: 62px;
     --side-hand-inset: 60px;
     padding: 3px 6px;
     gap: 2px;
@@ -2609,14 +2551,14 @@ input {
   }
 
   .table-felt.is-landscape .hand-orient-top .mj-tile-back {
-    width: 11px;
-    height: 16px;
+    width: 14px;
+    height: 19px;
   }
 
   .table-felt.is-landscape .hand-orient-left .mj-tile-back,
   .table-felt.is-landscape .hand-orient-right .mj-tile-back {
-    width: 13px;
-    height: 9px;
+    width: 15px;
+    height: 11px;
     min-height: 6px;
   }
 
