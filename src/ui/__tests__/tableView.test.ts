@@ -382,4 +382,50 @@ describe('renderGameTable（横画面レイアウト）', () => {
     expect(onDiscardTile).toHaveBeenCalledTimes(1);
     expect(onDiscardTile).toHaveBeenCalledWith(drawn.id);
   });
+
+  it('ローカルCPU戦では「部屋 LOCAL」を出さず「ローカルCPU戦」を表示し、round_end 時はリーチバーを出さない', () => {
+    const baseView = toStateView(state4, 'p0', 0);
+    const localView: StateView = {
+      ...baseView,
+      roomCode: 'LOCAL',
+      phase: 'round_end',
+      players: baseView.players.map((p) =>
+        p.playerId === baseView.viewerPlayerId ? { ...p, isRiichi: true } : p,
+      ),
+    };
+
+    const root = document.createElement('div');
+    renderGameTable(root, localView, noopHandlers);
+    expect(root.textContent).not.toContain('部屋 LOCAL');
+    expect(root.textContent).toContain('ローカルCPU戦');
+    expect(root.querySelector('.self-action-bar')).toBeNull();
+  });
+
+  it('他家の手番中に自分がリーチ済みなら「リーチ待機中:」で表示する', () => {
+    const baseView = toStateView(state4, 'p0', 0);
+    const otherSeat = baseView.players.find(
+      (p) => p.playerId !== baseView.viewerPlayerId,
+    )!.seatIndex;
+    const waitingView: StateView = {
+      ...baseView,
+      phase: 'playing',
+      mySelfActions: null,
+      players: baseView.players.map((p) => ({
+        ...p,
+        isCurrentTurn: p.seatIndex === otherSeat,
+        isRiichi: p.playerId === baseView.viewerPlayerId,
+      })),
+      round: {
+        ...baseView.round!,
+        currentTurnIndex: otherSeat,
+      },
+    };
+
+    const root = document.createElement('div');
+    renderGameTable(root, waitingView, noopHandlers);
+    const bar = root.querySelector('.self-action-bar');
+    expect(bar).not.toBeNull();
+    expect(bar!.textContent).toContain('リーチ待機中:');
+    expect(bar!.textContent).not.toContain('リーチ中:');
+  });
 });

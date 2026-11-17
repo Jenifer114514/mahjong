@@ -164,5 +164,7 @@ describe('renderWaitingRoom（CPU の後入れ）', () => {
       expect.objectContaining({ cpuLevel: 'easy' }),
       3,
     );
+    expect(root.textContent).not.toContain('人払い');
+    expect(root.textContent).toContain('対人戦と同じく');
   });
 });

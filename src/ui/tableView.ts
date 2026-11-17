@@ -898,8 +898,10 @@ function renderCenterHub(view: StateView): HTMLElement {
   const sub = document.createElement('div');
   sub.className = 'hub-sub';
   const lengthJa = view.ruleConfig.gameLength === 'tonpuu' ? '東風戦' : '半荘戦';
+  const roomLabel =
+    view.roomCode === 'LOCAL' ? 'ローカルCPU戦' : `部屋 ${view.roomCode}`;
   sub.textContent = round
-    ? `${view.ruleConfig.playerCount}人 ${lengthJa} (${round.roundIndex + 1} / ${round.totalRounds}局) ・ 部屋 ${view.roomCode}`
+    ? `${view.ruleConfig.playerCount}人 ${lengthJa} (${round.roundIndex + 1} / ${round.totalRounds}局) ・ ${roomLabel}`
     : '';
 
   hub.appendChild(sub);
@@ -1270,6 +1272,9 @@ function renderSelfTurnActionsBar(
   uiState: TableUiState,
   canDiscardNow: boolean,
 ): HTMLElement | null {
+  if (view.phase !== 'playing') {
+    return null;
+  }
   const actions = canDiscardNow ? view.mySelfActions : null;
   const hasTurnAction = Boolean(
     actions &&
@@ -1289,7 +1294,8 @@ function renderSelfTurnActionsBar(
 
   const label = document.createElement('span');
   label.className = 'hub-sub';
-  label.textContent = player.isRiichi && !hasTurnAction ? 'リーチ中:' : '手番アクション:';
+  label.textContent =
+    player.isRiichi && !hasTurnAction ? 'リーチ待機中:' : '手番アクション:';
   bar.appendChild(label);
 
   const btns = document.createElement('div');
