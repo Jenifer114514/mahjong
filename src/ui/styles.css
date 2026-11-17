@@ -9,8 +9,8 @@
   --accent-red: #e55353;
   --text-main: #f4f7f5;
   --text-muted: #9eb5ae;
-  --tile-bg: #fbfaf4;
-  --tile-edge: #cfc6ad;
+  --tile-bg: #f3f1ea;
+  --tile-edge: #d8d4c8;
   --tile-back: #256f5c;
 }
 
@@ -474,8 +474,8 @@ input {
 .mj-tile.mj-tile-face {
   position: relative;
   padding: 0;
-  border-color: rgba(140, 128, 96, 0.7);
-  background-color: #f7f0df;
+  border-color: rgba(162, 158, 146, 0.8);
+  background-color: #f3f1ea;
   background-repeat: no-repeat;
   image-rendering: auto;
 }
@@ -493,10 +493,9 @@ input {
   border: 0;
 }
 
-/* 赤ドラは縁取りで一目で分かるようにする */
-.mj-tile.mj-tile-red {
-  border-color: rgba(196, 45, 52, 0.75);
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(196, 45, 52, 0.45);
+/* 赤ドラ（フォールバック文字表示用。実物準拠で枠色は他牌と揃える） */
+.mj-tile.mj-tile-red:not(.mj-tile-face) {
+  color: #cf232e;
 }
 
 .mj-tile-back {
@@ -719,33 +718,33 @@ input {
 }
 
 .tile-man {
-  color: #a81c1c;
+  color: #632530;
 }
 
 .tile-pin {
-  color: #174999;
+  color: #1e2736;
 }
 
 .tile-sou {
-  color: #157347;
+  color: #1e2736;
 }
 
 .tile-honor-dark {
-  color: #1e2428;
+  color: #1e2736;
 }
 
 .tile-honor-green {
-  color: #157347;
+  color: #1e2736;
 }
 
 .tile-honor-red {
-  color: #c92020;
+  color: #632530;
 }
 
 .tile-honor-haku .mj-tile-honor {
   width: 68%;
   height: 68%;
-  border: 2px solid #96a4b0;
+  border: none;
   border-radius: 3px;
 }
 

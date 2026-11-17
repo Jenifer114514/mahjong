@@ -13,6 +13,7 @@ import {
   drawTileFace,
   RED_FIVE_KINDS,
   TILE_FACE_ASPECT,
+  TILE_INK,
   waitForTileFonts,
 } from '../tileTexture';
 
@@ -148,36 +149,52 @@ describe('tileTexture', () => {
     expect(atlas.cells).toHaveLength(0);
   });
 
-  it('白は無地（文字を描かない）、東は 1 文字だけ描く', () => {
+  it('白は無地（文字を描かない）、東はベクター筆文字を彫刻 3 層で描く', () => {
     const { factory, created } = createRecordingGlobal();
 
-    drawTileFace(
-      (() => {
-        const c = factory(200, 263);
-        return c.ctx;
-      })(),
-      '5z' as TileKind,
-      { width: 200, height: 263 },
-    );
-    const hakuTexts = created
-      .at(-1)!
-      .ctx.calls.filter((call) => call.name === 'fillText');
-    expect(hakuTexts).toHaveLength(0);
+    const haku = factory(200, 263);
+    const hakuFills: string[] = [];
+    const origHakuFill = haku.ctx.fill as (...args: unknown[]) => void;
+    haku.ctx.fill = (...args: unknown[]) => {
+      hakuFills.push(String(haku.ctx.fillStyle).toLowerCase());
+      origHakuFill(...args);
+    };
+    drawTileFace(haku.ctx as unknown as CanvasRenderingContext2D, '5z' as TileKind, {
+      width: 200,
+      height: 263,
+    });
+    expect(haku.calls.filter((call) => call.name === 'fillText')).toHaveLength(0);
+    expect(hakuFills).toHaveLength(0);
 
-    drawnTexts('1z', factory, created);
-    expect(drawnTexts('1z', factory, created)).toEqual(expect.arrayContaining(['東']));
-    // 彫刻表現のため同じ文字を 3 回（明部・影・本体）重ねる
-    expect(drawnTexts('1z', factory, created).filter((t) => t === '東')).toHaveLength(3);
+    const east = factory(200, 263);
+    const eastFills: string[] = [];
+    const origEastFill = east.ctx.fill as (...args: unknown[]) => void;
+    east.ctx.fill = (...args: unknown[]) => {
+      eastFills.push(String(east.ctx.fillStyle).toLowerCase());
+      origEastFill(...args);
+    };
+    drawTileFace(east.ctx as unknown as CanvasRenderingContext2D, '1z' as TileKind, {
+      width: 200,
+      height: 263,
+    });
+    // 彫刻表現（明部・影・藍黒本体）の 3 層パスを描画
+    expect(eastFills).toHaveLength(3);
+    expect(eastFills.at(-1)).toBe(TILE_INK.ink.toLowerCase());
+
+    // fontFamily 明示指定時は fillText フォールバックも機能する
+    const texts = drawnTexts('1z', factory, created, DEFAULT_FONT_FAMILY);
+    expect(texts).toEqual(expect.arrayContaining(['東']));
+    expect(texts.filter((t) => t === '東')).toHaveLength(3);
   });
 
-  it('萬子は 数字（黒）+ 萬（赤）で描く', () => {
+  it('萬子は数字（藍黒）+ 萬（臙脂）で描き、5萬は「伍」を用いる', () => {
     const { factory } = createRecordingGlobal();
-    const { ctx, calls } = factory(200, 263);
+    const { ctx } = factory(200, 263);
     const fills: string[] = [];
-    const originalFillText = ctx.fillText as (...args: unknown[]) => void;
-    ctx.fillText = (...args: unknown[]) => {
-      fills.push(String(ctx.fillStyle));
-      originalFillText(...args);
+    const origFill = ctx.fill as (...args: unknown[]) => void;
+    ctx.fill = (...args: unknown[]) => {
+      fills.push(String(ctx.fillStyle).toLowerCase());
+      origFill(...args);
     };
 
     drawTileFace(ctx as unknown as CanvasRenderingContext2D, '1m', {
@@ -185,25 +202,41 @@ describe('tileTexture', () => {
       height: 263,
     });
 
-    const texts = calls
+    // 数字 3 層 + 萬 3 層 = 6 層
+    expect(fills).toHaveLength(6);
+    expect(fills[2]).toBe(TILE_INK.ink.toLowerCase());
+    expect(fills[5]).toBe(TILE_INK.maroon.toLowerCase());
+
+    // 5萬は「伍」「萬」を使用
+    const f5 = factory(200, 263);
+    const f5Fills: string[] = [];
+    const origF5Text = f5.ctx.fillText as (...args: unknown[]) => void;
+    f5.ctx.fillText = (...args: unknown[]) => {
+      f5Fills.push(String(f5.ctx.fillStyle).toLowerCase());
+      origF5Text(...args);
+    };
+    drawTileFace(f5.ctx as unknown as CanvasRenderingContext2D, '5m', {
+      width: 200,
+      height: 263,
+      fontFamily: DEFAULT_FONT_FAMILY,
+    });
+    const texts5 = f5.calls
       .filter((call) => call.name === 'fillText')
       .map((call) => String(call.args[0]));
-    expect(texts).toContain('一');
-    expect(texts).toContain('萬');
-    // 數字は黒系、萬は赤系
-    const numberColor = fills[texts.lastIndexOf('一')];
-    const manColor = fills[texts.lastIndexOf('萬')];
-    expect(numberColor?.toLowerCase()).toBe('#1f1d1a');
-    expect(manColor?.toLowerCase()).toBe('#c3222b');
+    expect(texts5).toContain('伍');
+    expect(texts5).toContain('萬');
+    expect(f5Fills[texts5.lastIndexOf('伍')]).toBe(TILE_INK.ink.toLowerCase());
+    expect(f5Fills[texts5.lastIndexOf('萬')]).toBe(TILE_INK.maroon.toLowerCase());
   });
 
-  it('赤ドラの五萬は図柄全体が赤になる', () => {
+  it('赤ドラの五萬は図柄全体（伍・萬）が鮮紅色になる', () => {
     const { factory } = createRecordingGlobal();
-    const { ctx, calls } = factory(200, 263);
+    const { ctx } = factory(200, 263);
     const fills: string[] = [];
-    ctx.fillText = (...args: unknown[]) => {
-      fills.push(String(ctx.fillStyle));
-      calls.push({ name: 'fillText', args });
+    const origFill = ctx.fill as (...args: unknown[]) => void;
+    ctx.fill = (...args: unknown[]) => {
+      fills.push(String(ctx.fillStyle).toLowerCase());
+      origFill(...args);
     };
 
     drawTileFace(ctx as unknown as CanvasRenderingContext2D, '5m', {
@@ -212,14 +245,12 @@ describe('tileTexture', () => {
       isRed: true,
     });
 
-    const texts = calls
-      .filter((call) => call.name === 'fillText')
-      .map((call) => String(call.args[0]));
-    expect(texts).toContain('五');
-    expect(fills[texts.lastIndexOf('五')]?.toLowerCase()).toBe('#c3222b');
+    expect(fills).toHaveLength(6);
+    expect(fills[2]).toBe(TILE_INK.red.toLowerCase());
+    expect(fills[5]).toBe(TILE_INK.red.toLowerCase());
   });
 
-  it('赤ドラの五筒は 5 つの丸すべてが赤になる（通常の五筒は外周4つが青）', () => {
+  it('通常5筒は外4つ藍黒＋中1つ臙脂、赤5筒は外4つ鮮紅＋中央輝石になる', () => {
     const { factory } = createRecordingGlobal();
 
     const normal = factory(200, 263);
@@ -248,13 +279,68 @@ describe('tileTexture', () => {
       isRed: true,
     });
 
-    // 通常の5p: 外周4つの的は青 (#1b4f9c)、中央1つのみ赤 (#c3222b)
-    expect(normalFills.filter((c) => c === '#1b4f9c').length).toBeGreaterThan(0);
-    expect(normalFills.filter((c) => c === '#c3222b')).toHaveLength(3);
+    // 通常の5p: 藍黒 (#1e2736) と中央の臙脂 (#632530) を使う
+    expect(normalFills.filter((c) => c === TILE_INK.ink.toLowerCase()).length).toBeGreaterThan(0);
+    expect(normalFills.filter((c) => c === TILE_INK.maroon.toLowerCase()).length).toBeGreaterThan(0);
 
-    // 赤5p: 5つの的すべてが赤（青い的は 0、赤は 5 * 3 = 15 回）
-    expect(redFills.filter((c) => c === '#1b4f9c')).toHaveLength(0);
-    expect(redFills.filter((c) => c === '#c3222b')).toHaveLength(15);
+    // 赤5p: 藍黒はなく、外4つの鮮紅 (#cf232e) ＋ 中央の輝石 (#6f6554, #ffffff) になる
+    expect(redFills.filter((c) => c === TILE_INK.ink.toLowerCase())).toHaveLength(0);
+    expect(redFills.filter((c) => c === TILE_INK.red.toLowerCase())).toHaveLength(12);
+    expect(redFills).toContain('#6f6554');
+    expect(redFills).toContain('#ffffff');
+  });
+
+  it('6筒・7筒・8筒・8索・發/中が写真の意匠（2+4・3+4・2×4・M/W型・藍黒發/臙脂中）で描かれる', () => {
+    const { factory } = createRecordingGlobal();
+
+    // 8索は斜め4本を含む8本の竹（rotate が 4 回呼ばれる）
+    const s8 = factory(200, 263);
+    drawTileFace(s8.ctx as unknown as CanvasRenderingContext2D, '8s', {
+      width: 200,
+      height: 263,
+    });
+    expect(s8.calls.filter((c) => c.name === 'rotate')).toHaveLength(4);
+
+    // 8筒は 2 列 (x=0.32, 0.68) × 4 段で全 8 個が同じ 2 つの X 座標のみに並ぶ
+    const p8 = factory(200, 263);
+    const p8Xs = new Set<number>();
+    const origArc8 = p8.ctx.arc as (...args: unknown[]) => void;
+    p8.ctx.arc = (cx: number, cy: number, r: number, s: number, e: number) => {
+      p8Xs.add(Math.round(cx));
+      origArc8(cx, cy, r, s, e);
+    };
+    drawTileFace(p8.ctx as unknown as CanvasRenderingContext2D, '8p', {
+      width: 200,
+      height: 263,
+    });
+    expect([...p8Xs].sort((a, b) => a - b)).toEqual([64, 136]);
+
+    // 發は藍黒 (#1e2736)、中は臙脂 (#632530)
+    const hatsu = factory(200, 263);
+    const hatsuFills: string[] = [];
+    const origHatsuFill = hatsu.ctx.fill as (...args: unknown[]) => void;
+    hatsu.ctx.fill = (...args: unknown[]) => {
+      hatsuFills.push(String(hatsu.ctx.fillStyle).toLowerCase());
+      origHatsuFill(...args);
+    };
+    drawTileFace(hatsu.ctx as unknown as CanvasRenderingContext2D, '6z', {
+      width: 200,
+      height: 263,
+    });
+    expect(hatsuFills.at(-1)).toBe(TILE_INK.ink.toLowerCase());
+
+    const chun = factory(200, 263);
+    const chunFills: string[] = [];
+    const origChunFill = chun.ctx.fill as (...args: unknown[]) => void;
+    chun.ctx.fill = (...args: unknown[]) => {
+      chunFills.push(String(chun.ctx.fillStyle).toLowerCase());
+      origChunFill(...args);
+    };
+    drawTileFace(chun.ctx as unknown as CanvasRenderingContext2D, '7z', {
+      width: 200,
+      height: 263,
+    });
+    expect(chunFills.at(-1)).toBe(TILE_INK.maroon.toLowerCase());
   });
 
   it('全 34 種 + 赤ドラを例外なく描ける', () => {
@@ -352,11 +438,13 @@ function drawnTexts(
   kind: TileKind,
   factory: ReturnType<typeof createRecordingGlobal>['factory'],
   created: ReturnType<typeof createRecordingGlobal>['created'],
+  fontFamily?: string,
 ): string[] {
   const ctx = factory(200, 263).ctx;
   drawTileFace(ctx as unknown as CanvasRenderingContext2D, kind, {
     width: 200,
     height: 263,
+    fontFamily,
   });
   return created
     .at(-1)!
