@@ -312,4 +312,62 @@ describe('reducer & validateAction: 合法性検証', () => {
       { tile: discardTarget, isTsumogiri: false },
     ]);
   });
+
+  it('ロビー待機中にホストは UPDATE_RULE_CONFIG で人数・長さ・詳細設定を変更でき、持ち点も追従する', () => {
+    let state = createInitialGameState({
+      roomCode: 'RULE01',
+      hostPlayerId: 'host',
+      hostName: 'ホスト',
+      ruleConfig: { playerCount: 4, gameLength: 'tonpuu' },
+    });
+    state = reduce(state, { type: 'JOIN_PLAYER', playerId: 'p2', name: 'P2' });
+    expect(state.players.every((p) => p.score === 25000)).toBe(true);
+
+    // ゲストはルール変更不可
+    const nonHost = applyAction(state, {
+      type: 'UPDATE_RULE_CONFIG',
+      playerId: 'p2',
+      patch: { gameLength: 'hanchan' },
+    });
+    expect(nonHost.error?.code).toBe('UNAUTHORIZED_ACTION');
+
+    // 3人麻雀・半荘・喰いタンOFF・ツモ損ON に変更
+    const updated = applyAction(state, {
+      type: 'UPDATE_RULE_CONFIG',
+      playerId: 'host',
+      patch: {
+        playerCount: 3,
+        gameLength: 'hanchan',
+        allowKuitan: false,
+        tsumoLoss: true,
+      },
+    });
+    expect(updated.error).toBeNull();
+    expect(updated.state.ruleConfig.playerCount).toBe(3);
+    expect(updated.state.ruleConfig.gameLength).toBe('hanchan');
+    expect(updated.state.ruleConfig.allowKuitan).toBe(false);
+    expect(updated.state.ruleConfig.tsumoLoss).toBe(true);
+    expect(updated.state.players.every((p) => p.score === 35000)).toBe(true);
+
+    // 4人参加している場合は 3人麻雀へ縮小できない
+    let fourPlayers = createInitialGameState({
+      roomCode: 'RULE02',
+      hostPlayerId: 'host',
+      hostName: 'ホスト',
+      ruleConfig: { playerCount: 4, gameLength: 'tonpuu' },
+    });
+    for (let i = 2; i <= 4; i++) {
+      fourPlayers = reduce(fourPlayers, {
+        type: 'JOIN_PLAYER',
+        playerId: `p${i}`,
+        name: `P${i}`,
+      });
+    }
+    const shrinkErr = applyAction(fourPlayers, {
+      type: 'UPDATE_RULE_CONFIG',
+      playerId: 'host',
+      patch: { playerCount: 3 },
+    });
+    expect(shrinkErr.error?.code).toBe('ROOM_FULL');
+  });
 });

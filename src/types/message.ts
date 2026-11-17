@@ -93,6 +93,11 @@ export type Action =
       type: 'SET_PLAYER_CONNECTED';
       playerId: string;
       connected: boolean;
+    }
+  | {
+      type: 'UPDATE_RULE_CONFIG';
+      playerId: string;
+      patch: Partial<RuleConfig>;
     };
 
 export interface PublicPlayerView {

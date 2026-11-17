@@ -121,12 +121,11 @@ export function renderGameTable(
 ): void {
   container.innerHTML = '';
 
-  const rules = deriveRules(view.ruleConfig);
   const playerCount = view.players.length;
   const isHost = view.viewerPlayerId === view.hostPlayerId;
 
   if (view.phase === 'finished') {
-    renderFinishedScreen(container, view, rules.initialPoints, handlers);
+    renderFinishedScreen(container, view, handlers);
     return;
   }
 
@@ -227,7 +226,6 @@ export function renderGameTable(
       container,
       view,
       isHost,
-      rules.initialPoints,
       handlers,
       uiState,
     );
@@ -310,7 +308,6 @@ function renderRoundEndOverlay(
   container: HTMLElement,
   view: StateView,
   isHost: boolean,
-  initialPoints: number,
   handlers: TableHandlers,
   uiState: TableUiState = DEFAULT_TABLE_UI_STATE,
 ): void {
@@ -582,7 +579,6 @@ function renderRoundEndOverlay(
     scoresWrap.appendChild(
       buildScoreTable(
         view.players,
-        initialPoints,
         false,
         round.roundScoreDeltas,
         view.initialDealerIndex,
@@ -1103,13 +1099,6 @@ function renderSeatHeader(
   const identity = document.createElement('div');
   identity.className = 'seat-identity';
 
-  if (player.seatWind) {
-    const windBadge = document.createElement('span');
-    windBadge.className = `wind-badge${player.isDealer ? ' is-dealer' : ''}`;
-    windBadge.textContent = windToJa(player.seatWind);
-    identity.appendChild(windBadge);
-  }
-
   if (isCpuPlayerId(player.playerId)) {
     const cpuBadge = document.createElement('span');
     cpuBadge.className = 'cpu-badge';
@@ -1152,11 +1141,10 @@ function renderSeatHeader(
     identity.appendChild(dc);
   }
 
-  const score = document.createElement('div');
-  score.className = 'seat-score';
-  score.textContent = `${player.score.toLocaleString()}点`;
-
-  info.append(nameSpan, identity, score);
+  info.appendChild(nameSpan);
+  if (identity.childElementCount > 0) {
+    info.appendChild(identity);
+  }
   header.append(cardTop, info);
   return header;
 }
@@ -1737,7 +1725,6 @@ function renderSelfSeat(
 
 function buildScoreTable(
   players: PublicPlayerView[],
-  initialPoints: number,
   ranked = false,
   roundScoreDeltas?: Record<string, number>,
   initialDealerIndex = 0,
@@ -1750,13 +1737,11 @@ function buildScoreTable(
   const table = document.createElement('table');
   table.className = 'score-table';
   const thead = document.createElement('thead');
-  thead.innerHTML = `<tr>${ranked ? '<th>順位</th>' : ''}<th>プレイヤー</th>${hasRoundDelta ? '<th class="num">今局増減</th>' : ''}<th class="num">持ち点</th><th class="num">通算収支</th></tr>`;
+  thead.innerHTML = `<tr>${ranked ? '<th>順位</th>' : ''}<th>プレイヤー</th>${hasRoundDelta ? '<th class="num">今局増減</th>' : ''}<th class="num">持ち点</th></tr>`;
   table.appendChild(thead);
 
   const tbody = document.createElement('tbody');
   list.forEach((p, idx) => {
-    const diff = p.score - initialPoints;
-    const diffStr = diff > 0 ? `+${diff.toLocaleString()}` : diff.toLocaleString();
     const tr = document.createElement('tr');
     if (ranked) {
       const rankTd = document.createElement('td');
@@ -1783,11 +1768,7 @@ function buildScoreTable(
     const scoreTd = document.createElement('td');
     scoreTd.className = 'num';
     scoreTd.textContent = `${p.score.toLocaleString()}点`;
-
-    const diffTd = document.createElement('td');
-    diffTd.className = `num${diff > 0 ? ' delta-pos' : diff < 0 ? ' delta-neg' : ''}`;
-    diffTd.textContent = diffStr;
-    tr.append(scoreTd, diffTd);
+    tr.appendChild(scoreTd);
     tbody.appendChild(tr);
   });
 
@@ -1812,11 +1793,10 @@ function rankPlayersByScore<T extends { seatIndex: number; score: number }>(
 function renderFinishedScreen(
   container: HTMLElement,
   view: StateView,
-  initialPoints: number,
   handlers: TableHandlers,
 ): void {
   const panel = document.createElement('div');
-  panel.className = 'overlay-panel';
+  panel.className = 'overlay-panel finished-panel';
   applyOrientationClass(panel);
 
   const title = document.createElement('h2');
@@ -1828,7 +1808,6 @@ function renderFinishedScreen(
 
   const table = buildScoreTable(
     view.players,
-    initialPoints,
     true,
     undefined,
     view.initialDealerIndex,

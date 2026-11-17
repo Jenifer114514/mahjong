@@ -105,6 +105,9 @@ export class HostSession {
     this.callbacks.onStatusChange('initializing', 'PeerJS サーバーに接続中...');
     this.openPeerWithCurrentRoomCode();
     this.bootstrapCpuSeats();
+    if (this.cpuCount <= 0) {
+      this.emitHostView();
+    }
   }
 
   /** 設定された人数分の CPU 席をロビーに追加し、揃っていれば開局する */
@@ -173,6 +176,31 @@ export class HostSession {
     if (result.error) return false;
     this.cpuCount = Math.max(0, this.cpuCount - 1);
     this.commitState(result.state);
+    return true;
+  }
+
+  /** ロビー中にホストがルール設定を変更し、全参加者へ反映する */
+  updateRuleConfig(patch: Partial<RuleConfig>): boolean {
+    if (this.destroyed || this.state.phase !== 'lobby') return false;
+    const result = applyAction(this.state, {
+      type: 'UPDATE_RULE_CONFIG',
+      playerId: this.state.hostPlayerId,
+      patch,
+    });
+    if (result.error) {
+      this.callbacks.onError(result.error);
+      return false;
+    }
+    this.commitState(result.state);
+    return true;
+  }
+
+  /** 人数が揃っているロビーからホストが明示的に対局を開始する */
+  startGame(): boolean {
+    if (this.destroyed || this.state.phase !== 'lobby') return false;
+    const started = this.maybeAutoStart(this.state);
+    if (started === this.state) return false;
+    this.commitState(started);
     return true;
   }
 
@@ -581,6 +609,7 @@ export class HostSession {
     if (this.destroyed || !this.hasAnyCpu()) return;
     const phase = this.state.phase;
     if (phase === 'finished') return;
+    if (phase === 'lobby' && this.missingCpuIds().length === 0) return;
 
     const token = ++this.cpuToken;
     // 鳴き・ロンの応答は打牌より短く待ってテンポよく進める

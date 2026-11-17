@@ -287,4 +287,30 @@ describe('HostSession の CPU 統合', () => {
 
     session.destroy();
   });
+
+  it('ロビーで updateRuleConfig により人数・長さ・ON/OFF設定を変更し startGame で開始できる', () => {
+    const { session, views } = createSession(0, 4);
+    session.start();
+
+    expect(session.addCpu()).toBe(true);
+    expect(session.addCpu()).toBe(true);
+    expect(views.at(-1)!.phase).toBe('lobby');
+    expect(views.at(-1)!.players).toHaveLength(3);
+
+    // 4人→3人へ切り替え（まだロビーのまま詳細設定を触れる）
+    expect(session.updateRuleConfig({ playerCount: 3, gameLength: 'hanchan', allowKuitan: false, tsumoLoss: true })).toBe(true);
+    const afterUpdate = views.at(-1)!;
+    expect(afterUpdate.phase).toBe('lobby');
+    expect(afterUpdate.ruleConfig.playerCount).toBe(3);
+    expect(afterUpdate.ruleConfig.gameLength).toBe('hanchan');
+    expect(afterUpdate.ruleConfig.allowKuitan).toBe(false);
+    expect(afterUpdate.ruleConfig.tsumoLoss).toBe(true);
+    expect(afterUpdate.players.every((p) => p.score === 35000)).toBe(true);
+
+    // 揃った席から明示的に開始できる
+    expect(session.startGame()).toBe(true);
+    expect(['playing', 'awaiting_responses']).toContain(views.at(-1)!.phase);
+
+    session.destroy();
+  });
 });

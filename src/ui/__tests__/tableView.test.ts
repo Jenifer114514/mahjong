@@ -299,10 +299,14 @@ describe('renderGameTable（横画面レイアウト）', () => {
     expect(nextStepBtn.textContent).toBe('次へ');
     nextStepBtn.click();
 
-    // 2段階目: 点数移行テーブルと次局へボタンが表示される
+    // 2段階目: 点数移行テーブルと次局へボタンが表示される（通算収支列は出さない）
     expect(overlay.dataset.resultStep).toBe('scores');
     expect(overlay.querySelector('.ura-dora-box')).toBeNull();
     expect(overlay.querySelectorAll('.score-table tbody tr')).toHaveLength(4);
+    const roundEndHeaders = Array.from(
+      overlay.querySelectorAll('.score-table thead th'),
+    ).map((th) => th.textContent);
+    expect(roundEndHeaders).toEqual(['プレイヤー', '今局増減', '持ち点']);
     const advanceBtn = Array.from(overlay.querySelectorAll('button')).find((b) =>
       ['次の局へ', '結果を見る'].includes(b.textContent ?? ''),
     )!;
@@ -354,7 +358,7 @@ describe('renderGameTable（横画面レイアウト）', () => {
     ).toBe(true);
   });
 
-  it('終局時は overlay-backdrop-finished 内に結果パネルを描画する', () => {
+  it('終局時は overlay-backdrop-finished 内に結果パネルを描画し、通算収支列は出さない', () => {
     const baseView = toStateView(state4, 'p0', 0);
     const finishedView: StateView = {
       ...baseView,
@@ -364,9 +368,15 @@ describe('renderGameTable（横画面レイアウト）', () => {
     const root = document.createElement('div');
     renderGameTable(root, finishedView, noopHandlers);
 
-    expect(
-      root.querySelector('.overlay-backdrop.overlay-backdrop-finished .overlay-panel'),
-    ).not.toBeNull();
+    const panel = root.querySelector(
+      '.overlay-backdrop.overlay-backdrop-finished .overlay-panel.finished-panel',
+    );
+    expect(panel).not.toBeNull();
+    const headers = Array.from(panel!.querySelectorAll('.score-table thead th')).map(
+      (th) => th.textContent,
+    );
+    expect(headers).toEqual(['順位', 'プレイヤー', '持ち点']);
+    expect(panel!.textContent).not.toContain('通算収支');
   });
 
   it('リーチ中でもツモ牌は2回タップ（選択→再タップ）で手動ツモ切りできる（手牌側は固定）', () => {
@@ -530,7 +540,7 @@ describe('renderGameTable（横画面レイアウト）', () => {
     expect(root.querySelector('.self-hand-dock .hand-area')).not.toBeNull();
   });
 
-  it('プレイヤー表示はアバターアイコンの下に名前を縦配置し、自分の表示は卓の左下空き領域へ独立配置し、中央方位表示が各家方向を向く', () => {
+  it('プレイヤー表示には東南西北・点数を出さずアイコンと名前・状態のみ表示し、中央方位・点数は中央コンソールに出す', () => {
     const baseView = toStateView(state4, 'p0', 0);
     const root = document.createElement('div');
     renderGameTable(root, baseView, noopHandlers);
@@ -541,21 +551,23 @@ describe('renderGameTable（横画面レイアウト）', () => {
     expect(selfHeader).not.toBeNull();
     expect(selfHeader!.querySelector('.seat-name')!.textContent).toContain('あなた');
 
-    // 全4人ともアバター上にバッジを重ねず、アイコン(seat-card-top) → 名前(seat-name) → 自風バッジ群(seat-identity) → 点数(seat-score) の縦順になっている
+    // 左右席の .seat-header は各席コンテナ直下に配置される（CSS Grid で手牌と河の間に配置）
+    expect(root.querySelector('.seat-orient-left > .seat-header')).not.toBeNull();
+    expect(root.querySelector('.seat-orient-right > .seat-header')).not.toBeNull();
+
+    // 全4人ともアバター(seat-card-top) → 情報(seat-card-info -> seat-name) の縦順で、東南西北(.wind-badge)・点数(.seat-score)は出さない
     const headers = Array.from(root.querySelectorAll('.seat-header'));
     expect(headers).toHaveLength(4);
     for (const header of headers) {
       const children = Array.from(header.children);
       expect(children[0]!.classList.contains('seat-card-top')).toBe(true);
       expect(children[0]!.querySelector('.seat-avatar')).not.toBeNull();
-      expect(children[0]!.querySelector('.wind-badge')).toBeNull();
+      expect(header.querySelector('.wind-badge')).toBeNull();
+      expect(header.querySelector('.seat-score')).toBeNull();
 
       expect(children[1]!.classList.contains('seat-card-info')).toBe(true);
       const infoChildren = Array.from(children[1]!.children);
       expect(infoChildren[0]!.classList.contains('seat-name')).toBe(true);
-      expect(infoChildren[1]!.classList.contains('seat-identity')).toBe(true);
-      expect(infoChildren[1]!.querySelector('.wind-badge')).not.toBeNull();
-      expect(infoChildren[2]!.classList.contains('seat-score')).toBe(true);
     }
 
     // 中央コンソールの東西南北が4隅すべて揃う
