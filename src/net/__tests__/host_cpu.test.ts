@@ -3,12 +3,34 @@ import { isCpuPlayerId } from '../../cpu/player';
 import type { StateView } from '../../types/message';
 import type { RuleConfig } from '../../types/rule';
 
+const { peerInstances } = vi.hoisted(() => ({
+  peerInstances: [] as Array<{
+    id: string;
+    handlers: Record<string, Array<(...args: unknown[]) => void>>;
+    emit: (event: string, ...args: unknown[]) => void;
+  }>,
+}));
+
 // PeerJS はブラウザ向けのため、テストでは接続部分のみスタブ化する
 vi.mock('peerjs', () => {
   class FakePeer {
-    on() {}
-    destroy() {}
+    id: string;
+    handlers: Record<string, Array<(...args: unknown[]) => void>> = {};
     destroyed = false;
+    constructor(id = '') {
+      this.id = id;
+      peerInstances.push(this);
+    }
+    on(event: string, cb: (...args: unknown[]) => void) {
+      this.handlers[event] = this.handlers[event] ?? [];
+      this.handlers[event]!.push(cb);
+    }
+    emit(event: string, ...args: unknown[]) {
+      for (const cb of this.handlers[event] ?? []) cb(...args);
+    }
+    destroy() {
+      this.destroyed = true;
+    }
   }
   return { default: FakePeer };
 });
@@ -204,5 +226,65 @@ describe('HostSession の CPU 統合', () => {
     session.destroy();
     expect(session.runCpuStepOnce()).toBe(false);
     expect(() => drain(10)).not.toThrow();
+  });
+
+  it('offline かつ cpuCount=0 でも start() 時に初期ロビー StateView を配信する', () => {
+    const views: StateView[] = [];
+    const session = new HostSession(
+      'ホスト',
+      { playerCount: 4, gameLength: 'tonpuu' },
+      {
+        onViewChange: (view) => views.push(view),
+        onStatusChange: () => {},
+        onError: () => {},
+      },
+      {
+        offline: true,
+        cpuCount: 0,
+        cpuDelayMs: 0,
+        cpuScheduler: () => {},
+      },
+    );
+    session.start();
+
+    expect(views).toHaveLength(1);
+    expect(views[0]!.phase).toBe('lobby');
+    expect(views[0]!.players).toHaveLength(1);
+    session.destroy();
+  });
+
+  it('Peer の open / unavailable-id で idx===0 ではなく元の hostPlayerId 一致で席を更新する', () => {
+    peerInstances.length = 0;
+    const { session, drain, views } = createSession(3, 4);
+    session.start();
+    drain();
+
+    // 開局して席順がシャッフルされた状態でも正しくホスト席だけ差し替わること
+    const initialHostId = views.at(-1)!.viewerPlayerId;
+    const cpuIdsBefore = views
+      .at(-1)!
+      .players.filter((p) => isCpuPlayerId(p.playerId))
+      .map((p) => p.playerId)
+      .sort();
+
+    // 1回目 Peer で unavailable-id を発火 → 新コードで2回目 Peer を作り open を発火
+    const firstPeer = peerInstances.at(-1)!;
+    firstPeer.emit('error', { type: 'unavailable-id' });
+    const secondPeer = peerInstances.at(-1)!;
+    expect(secondPeer).not.toBe(firstPeer);
+    secondPeer.emit('open', secondPeer.id);
+
+    const updatedView = views.at(-1)!;
+    expect(updatedView.viewerPlayerId).toBe(secondPeer.id);
+    expect(updatedView.viewerPlayerId).not.toBe(initialHostId);
+    expect(updatedView.players.filter((p) => p.playerId === secondPeer.id)).toHaveLength(1);
+    expect(
+      updatedView.players
+        .filter((p) => isCpuPlayerId(p.playerId))
+        .map((p) => p.playerId)
+        .sort(),
+    ).toEqual(cpuIdsBefore);
+
+    session.destroy();
   });
 });

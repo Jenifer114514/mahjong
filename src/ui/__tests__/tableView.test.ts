@@ -307,11 +307,125 @@ describe('renderGameTable（横画面レイアウト）', () => {
 
     const overlay = root.querySelector('.overlay-panel')!;
     expect(overlay).not.toBeNull();
+    expect(root.querySelector('.overlay-backdrop.overlay-backdrop-modal .overlay-panel')).toBe(
+      overlay,
+    );
+    expect(root.querySelector('.table-stage')).not.toBeNull();
     expect(overlay.querySelectorAll('.score-table tbody tr')).toHaveLength(4);
     expect(
       Array.from(overlay.querySelectorAll('button')).some((b) =>
         ['次の局へ', '結果を見る'].includes(b.textContent ?? ''),
       ),
     ).toBe(true);
+  });
+
+  it('終局時は overlay-backdrop-finished 内に結果パネルを描画する', () => {
+    const baseView = toStateView(state4, 'p0', 0);
+    const finishedView: StateView = {
+      ...baseView,
+      phase: 'finished',
+      round: null,
+    };
+    const root = document.createElement('div');
+    renderGameTable(root, finishedView, noopHandlers);
+
+    expect(
+      root.querySelector('.overlay-backdrop.overlay-backdrop-finished .overlay-panel'),
+    ).not.toBeNull();
+  });
+
+  it('リーチ中でもツモ牌はクリックして手動ツモ切りできる（手牌側は固定）', () => {
+    const baseView = toStateView(state4, 'p0', 0);
+    const drawn = baseView.myDrawnTile ?? baseView.myHand[0]!;
+    const hand = baseView.myDrawnTile
+      ? baseView.myHand
+      : baseView.myHand.slice(1);
+    const currentSeat = baseView.round!.currentTurnIndex;
+    const riichiView: StateView = {
+      ...baseView,
+      phase: 'playing',
+      myHand: hand,
+      myDrawnTile: drawn,
+      kuikaeForbiddenKinds: [],
+      players: baseView.players.map((p) =>
+        p.playerId === baseView.viewerPlayerId
+          ? { ...p, isCurrentTurn: true, isRiichi: true }
+          : { ...p, isCurrentTurn: p.seatIndex === currentSeat && false },
+      ),
+      round: {
+        ...baseView.round!,
+        currentTurnIndex: baseView.players.find(
+          (p) => p.playerId === baseView.viewerPlayerId,
+        )!.seatIndex,
+      },
+    };
+
+    const onDiscardTile = vi.fn();
+    const root = document.createElement('div');
+    renderGameTable(root, riichiView, { ...noopHandlers, onDiscardTile });
+
+    const handButtons = Array.from(
+      root.querySelectorAll<HTMLButtonElement>('.seat-self .hand-area > .mj-tile'),
+    );
+    const closedHandButtons = handButtons.slice(0, hand.length);
+    const drawnTileEl = handButtons[hand.length]!;
+
+    expect(handButtons).toHaveLength(hand.length + 1);
+    for (const btn of closedHandButtons) {
+      expect(btn.disabled).toBe(true);
+    }
+    expect(drawnTileEl).not.toBeNull();
+    expect(drawnTileEl.disabled).toBe(false);
+    expect(drawnTileEl.classList.contains('mj-tile-clickable')).toBe(true);
+
+    drawnTileEl.click();
+    expect(onDiscardTile).toHaveBeenCalledTimes(1);
+    expect(onDiscardTile).toHaveBeenCalledWith(drawn.id);
+  });
+
+  it('ローカルCPU戦では「部屋 LOCAL」を出さず「ローカルCPU戦」を表示し、round_end 時はリーチバーを出さない', () => {
+    const baseView = toStateView(state4, 'p0', 0);
+    const localView: StateView = {
+      ...baseView,
+      roomCode: 'LOCAL',
+      phase: 'round_end',
+      players: baseView.players.map((p) =>
+        p.playerId === baseView.viewerPlayerId ? { ...p, isRiichi: true } : p,
+      ),
+    };
+
+    const root = document.createElement('div');
+    renderGameTable(root, localView, noopHandlers);
+    expect(root.textContent).not.toContain('部屋 LOCAL');
+    expect(root.textContent).toContain('ローカルCPU戦');
+    expect(root.querySelector('.self-action-bar')).toBeNull();
+  });
+
+  it('他家の手番中に自分がリーチ済みなら「リーチ待機中:」で表示する', () => {
+    const baseView = toStateView(state4, 'p0', 0);
+    const otherSeat = baseView.players.find(
+      (p) => p.playerId !== baseView.viewerPlayerId,
+    )!.seatIndex;
+    const waitingView: StateView = {
+      ...baseView,
+      phase: 'playing',
+      mySelfActions: null,
+      players: baseView.players.map((p) => ({
+        ...p,
+        isCurrentTurn: p.seatIndex === otherSeat,
+        isRiichi: p.playerId === baseView.viewerPlayerId,
+      })),
+      round: {
+        ...baseView.round!,
+        currentTurnIndex: otherSeat,
+      },
+    };
+
+    const root = document.createElement('div');
+    renderGameTable(root, waitingView, noopHandlers);
+    const bar = root.querySelector('.self-action-bar');
+    expect(bar).not.toBeNull();
+    expect(bar!.textContent).toContain('リーチ待機中:');
+    expect(bar!.textContent).not.toContain('リーチ中:');
   });
 });

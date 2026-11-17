@@ -5,7 +5,6 @@ import {
   getPrewarmedTileSpriteSheet,
   SPRITE_COLUMNS,
   SPRITE_ROWS,
-  TILE_FACE_ASPECT,
   type TileSpriteSheet,
 } from './tileTexture';
 
@@ -75,10 +74,8 @@ export interface TileElementOptions {
 let spriteSheet: TileSpriteSheet | null = null;
 let spriteSheetTried = false;
 
-/** スプライトシートのセル高さ（CSS px）。`.mj-tile` の高さに合わせる。 */
+/** スプライトシートの基準セル高さ（CSS px、DPR を掛けて描画） */
 const SPRITE_CELL_HEIGHT = 54;
-/** `.mj-tile-sm` の高さ */
-const SPRITE_CELL_SMALL_HEIGHT = 40;
 
 function getSpriteSheet(): TileSpriteSheet | null {
   // 事前生成済み（フォント読み込み後に生成されたもの）を優先して使う
@@ -102,26 +99,25 @@ function getSpriteSheet(): TileSpriteSheet | null {
 
 /**
  * 牌面を canvas 画像で描く。使えない場合は false を返し、呼び出し側が文字描画に落ちる。
- * スプライトシートは 1 枚を共有し、牌ごとに background-position / background-size だけを変える。
+ * スプライトシートは 1 枚を共有し、CSS の牌サイズ（大小・メディアクエリ・枠線幅）に
+ * 追随するよう background-size / background-position を % 指定で設定する。
  */
-function applyTileFaceImage(el: HTMLElement, tile: Tile, small: boolean): boolean {
+function applyTileFaceImage(el: HTMLElement, tile: Tile): boolean {
   const sheet = getSpriteSheet();
   if (!sheet) return false;
 
   const position = sheet.getPosition(tile.kind, tile.isRed);
   if (!position) return false;
 
-  // 表示上のセルサイズ（CSS px）から、シート px → CSS px の縮尺を出す
-  const cssCellHeight = small ? SPRITE_CELL_SMALL_HEIGHT : SPRITE_CELL_HEIGHT;
-  const cssCellWidth = cssCellHeight * TILE_FACE_ASPECT;
-  const ratio = cssCellHeight / sheet.cellHeight;
+  const col = sheet.cellWidth > 0 ? Math.round(position.x / sheet.cellWidth) : 0;
+  const row = sheet.cellHeight > 0 ? Math.round(position.y / sheet.cellHeight) : 0;
+  const xPercent = SPRITE_COLUMNS > 1 ? (col / (SPRITE_COLUMNS - 1)) * 100 : 0;
+  const yPercent = SPRITE_ROWS > 1 ? (row / (SPRITE_ROWS - 1)) * 100 : 0;
 
   el.classList.add('mj-tile-face');
   el.style.backgroundImage = `url("${sheet.imageUrl}")`;
-  el.style.backgroundSize = `${cssCellWidth * SPRITE_COLUMNS}px ${
-    cssCellHeight * SPRITE_ROWS
-  }px`;
-  el.style.backgroundPosition = `-${position.x * ratio}px -${position.y * ratio}px`;
+  el.style.backgroundSize = `${SPRITE_COLUMNS * 100}% ${SPRITE_ROWS * 100}%`;
+  el.style.backgroundPosition = `${xPercent}% ${yPercent}%`;
   el.style.backgroundRepeat = 'no-repeat';
   return true;
 }
@@ -160,7 +156,7 @@ export function createTileElement(
   el.dataset.tileKind = tile.kind;
   if (tile.isRed) el.classList.add('mj-tile-red');
 
-  if (applyTileFaceImage(el, tile, Boolean(options.small))) {
+  if (applyTileFaceImage(el, tile)) {
     const face = document.createElement('span');
     face.className = 'mj-tile-face-alt';
     face.textContent = formatTileLabel(tile.kind);

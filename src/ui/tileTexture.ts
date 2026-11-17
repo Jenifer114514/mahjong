@@ -361,16 +361,6 @@ function drawPinzuOne(face: FaceDrawContext, redFive: boolean): void {
   for (const ring of rings) {
     ctx.beginPath();
     ctx.arc(cx, cy, r * ring.scale, 0, TAU);
-    const gradient = ctx.createRadialGradient(
-      cx - r * ring.scale * 0.3,
-      cy - r * ring.scale * 0.3,
-      r * ring.scale * 0.1,
-      cx,
-      cy,
-      r * ring.scale,
-    );
-    gradient.addColorStop(0, ring.color);
-    gradient.addColorStop(1, 'rgba(0, 0, 0, 0.28)');
     ctx.fillStyle = ring.color;
     ctx.fill();
     ctx.strokeStyle = 'rgba(0, 0, 0, 0.18)';
@@ -396,7 +386,7 @@ function drawPinzu(face: FaceDrawContext, n: number, redFive: boolean): void {
   );
 
   for (const pip of layout) {
-    const color = redFive && pip.color === 'red' ? INK.red : pipColorValue(pip.color);
+    const color = redFive ? INK.red : pipColorValue(pip.color);
     drawPip(face, face.width * pip.x, face.height * pip.y, radius, color);
   }
 }
@@ -409,18 +399,17 @@ interface StickSpec {
   x: number;
   y: number;
   red?: boolean;
-  rotate?: number;
 }
 
 const SOUZU_LAYOUTS: Record<number, StickSpec[]> = {
   2: [
-    { x: 0.38, y: 0.5 },
-    { x: 0.62, y: 0.5 },
+    { x: 0.5, y: 0.28 },
+    { x: 0.5, y: 0.72 },
   ],
   3: [
-    { x: 0.5, y: 0.2 },
-    { x: 0.3, y: 0.5 },
-    { x: 0.7, y: 0.5 },
+    { x: 0.5, y: 0.28 },
+    { x: 0.3, y: 0.72 },
+    { x: 0.7, y: 0.72 },
   ],
   4: [
     { x: 0.3, y: 0.28 },

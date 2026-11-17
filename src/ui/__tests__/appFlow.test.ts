@@ -48,6 +48,7 @@ describe('アプリ起動とローカルCPU対局', () => {
 
     const root = document.getElementById('app') as HTMLElement;
     expect(root.querySelector('.app-shell')).not.toBeNull();
+    expect(root.querySelector('.app-title')?.textContent).toBe('PeerJS 対戦リーチ麻雀');
     expect(root.textContent).toContain('部屋を作る（ホスト）');
     expect(root.textContent).toContain('いますぐCPUと対局');
     // 4人麻雀の既定は CPU 3 体
@@ -88,11 +89,12 @@ describe('アプリ起動とローカルCPU対局', () => {
     const root = document.getElementById('app') as HTMLElement;
     clickByText(root, 'button', 'CPU対局をはじめる');
 
-    // 自分の手番になるまで待つ（CPU 3体が打牌を終えるまで）
+    // 自分の手番になるまで待つ（CPU 3体が打牌を終えるまで。途中で鳴き確認が出たらスルー）
     let acted = false;
     let before = 0;
     for (let i = 0; i < 200 && !acted; i++) {
       await new Promise((resolve) => setTimeout(resolve, 40));
+      clickByText(root, '.call-action-bar button', 'スルー');
       const clickable = root.querySelectorAll<HTMLElement>(
         '.seat-self .hand-area .mj-tile-clickable',
       );
@@ -112,4 +114,30 @@ describe('アプリ起動とローカルCPU対局', () => {
     }
     expect(acted, '自分の捨て牌が 1 枚増える').toBe(true);
   }, 30000);
+
+  it('対局中に退出を押すとアプリ内確認モーダルが出て、キャンセルで続行・確定でロビーへ戻る', async () => {
+    bootApp();
+    await loadMain();
+
+    const root = document.getElementById('app') as HTMLElement;
+    expect(clickByText(root, 'button', 'CPU対局をはじめる')).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    const leaveBtn = root.querySelector<HTMLButtonElement>('.table-chrome-leave')!;
+    expect(leaveBtn).not.toBeNull();
+    leaveBtn.click();
+
+    const modal = root.querySelector('.leave-confirm-modal');
+    expect(modal).not.toBeNull();
+    expect(modal!.textContent).toContain('対局を離れますか？');
+
+    expect(clickByText(root, '.leave-confirm-modal button', '対局を続ける')).toBe(true);
+    expect(root.querySelector('.leave-confirm-modal')).toBeNull();
+    expect(root.querySelector('.table-stage')).not.toBeNull();
+
+    root.querySelector<HTMLButtonElement>('.table-chrome-leave')!.click();
+    expect(clickByText(root, '.leave-confirm-modal button', 'ロビーに戻る')).toBe(true);
+    expect(root.querySelector('.table-stage')).toBeNull();
+    expect(root.textContent).toContain('部屋を作る（ホスト）');
+  });
 });

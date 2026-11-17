@@ -32,6 +32,7 @@ class MahjongApp {
   private busy = false;
   private actionInFlight = false;
   private riichiSelectingMode = false;
+  private leaveConfirmPending = false;
   private autoTsumogiriEnabled = true;
   private autoTsumogiriTimerId: ReturnType<typeof setTimeout> | null = null;
   private countdownDeadline: number | null = null;
@@ -304,6 +305,7 @@ class MahjongApp {
     this.busy = false;
     this.actionInFlight = false;
     this.riichiSelectingMode = false;
+    this.leaveConfirmPending = false;
     this.errorBanner = null;
     this.statusText = '未接続';
     this.statusKind = 'normal';
@@ -325,13 +327,60 @@ class MahjongApp {
     fn(this.activeSession.session);
   }
 
-  /** 対局中に卓上から部屋を抜ける（誤タップ防止のため確認する） */
+  /** 対局中に卓上から部屋を抜ける（誤タップ防止のためアプリ内ダイアログで確認する） */
   private confirmLeaveGame(): void {
-    const ok =
-      typeof window === 'undefined' ||
-      typeof window.confirm !== 'function' ||
-      window.confirm('対局を離れてロビーに戻りますか？（進行状況は失われます）');
-    if (ok) this.returnToLobby();
+    if (this.currentView?.phase === 'finished') {
+      this.returnToLobby();
+      return;
+    }
+    this.leaveConfirmPending = true;
+    this.render();
+  }
+
+  private renderLeaveConfirmModal(): HTMLElement {
+    const backdrop = document.createElement('div');
+    backdrop.className = 'overlay-backdrop overlay-backdrop-modal leave-confirm-modal';
+    backdrop.setAttribute('role', 'dialog');
+    backdrop.setAttribute('aria-modal', 'true');
+
+    const panel = document.createElement('div');
+    panel.className = 'overlay-panel';
+    panel.style.maxWidth = '420px';
+
+    const title = document.createElement('h3');
+    title.style.margin = '0';
+    title.style.color = 'var(--accent-gold)';
+    title.textContent = '対局を離れますか？';
+
+    const desc = document.createElement('p');
+    desc.className = 'hub-sub';
+    desc.style.margin = '0';
+    desc.textContent = 'ロビーに戻ると、現在の対局の進行状況は失われます。';
+
+    const actions = document.createElement('div');
+    actions.style.display = 'flex';
+    actions.style.justifyContent = 'flex-end';
+    actions.style.gap = '8px';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'btn btn-secondary';
+    cancelBtn.textContent = '対局を続ける';
+    cancelBtn.addEventListener('click', () => {
+      this.leaveConfirmPending = false;
+      this.render();
+    });
+
+    const leaveBtn = document.createElement('button');
+    leaveBtn.type = 'button';
+    leaveBtn.className = 'btn btn-danger';
+    leaveBtn.textContent = 'ロビーに戻る';
+    leaveBtn.addEventListener('click', () => this.returnToLobby());
+
+    actions.append(cancelBtn, leaveBtn);
+    panel.append(title, desc, actions);
+    backdrop.appendChild(panel);
+    return backdrop;
   }
 
   /** 縦持ち時に対局画面をローテーション案内で覆う（ロビーでは表示しない） */
@@ -369,7 +418,7 @@ class MahjongApp {
 
     const title = document.createElement('div');
     title.className = 'app-title';
-    title.textContent = 'PeerJS 対戦リーチ麻雀（第6段階）';
+    title.textContent = 'PeerJS 対戦リーチ麻雀';
 
     const rightControls = document.createElement('div');
     rightControls.style.display = 'flex';
@@ -531,6 +580,9 @@ class MahjongApp {
     }
 
     this.root.appendChild(shell);
+    if (this.leaveConfirmPending && inGame) {
+      this.root.appendChild(this.renderLeaveConfirmModal());
+    }
     this.syncOrientationOverlay();
   }
 }

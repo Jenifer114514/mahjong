@@ -133,7 +133,7 @@ function chiitoiShanten(counts: readonly number[]): number {
   return 6 - pairs + Math.max(0, 7 - kinds);
 }
 
-function kokushiShanten(counts: readonly number[]): number {
+export function kokushiShanten(counts: readonly number[]): number {
   let kinds = 0;
   let hasPair = false;
   for (const idx of TERMINAL_OR_HONOR_INDICES) {
@@ -182,22 +182,26 @@ export interface ShantenWithUkeire {
 
 /**
  * 13 枚（または 3n+1 枚）の手牌について向聴数と受け入れを計算する。
- * `visibleCounts` は他家の捨て牌・副露など既知の牌の枚数（自分の手牌は含めない）。
+ * `visibleCounts` は他家の捨て牌・副露・抜北・自分の副露/抜北など手牌外の既知枚数。
+ * `allowedKinds` を渡した場合は使用牌種（3人麻雀での 2m..8m 除外等）だけを有効牌として数える。
  */
 export function analyzeHand(
   counts: readonly number[],
   meldCount: number,
   visibleCounts: readonly number[],
+  allowedKinds?: ReadonlySet<TileKind>,
+  copiesPerKind = 4,
 ): ShantenWithUkeire {
   const shanten = handShanten(counts, meldCount);
   let ukeire = 0;
   let ukeireKinds = 0;
   const next = [...counts];
   for (let idx = 0; idx < KIND_COUNT; idx++) {
-    if ((next[idx] ?? 0) >= 4) continue;
+    if (allowedKinds && !allowedKinds.has(ALL_TILE_KINDS[idx]!)) continue;
+    if ((next[idx] ?? 0) >= copiesPerKind) continue;
     next[idx] = (next[idx] ?? 0) + 1;
     if (handShanten(next, meldCount) < shanten) {
-      const remaining = 4 - (counts[idx] ?? 0) - (visibleCounts[idx] ?? 0);
+      const remaining = copiesPerKind - (counts[idx] ?? 0) - (visibleCounts[idx] ?? 0);
       if (remaining > 0) {
         ukeire += remaining;
         ukeireKinds += 1;

@@ -526,7 +526,10 @@ function renderRoundEndOverlay(
     overlay.appendChild(waitMsg);
   }
 
-  container.appendChild(overlay);
+  const backdrop = document.createElement('div');
+  backdrop.className = 'overlay-backdrop overlay-backdrop-modal';
+  backdrop.appendChild(overlay);
+  container.appendChild(backdrop);
 }
 
 function renderMeldGroup(
@@ -895,8 +898,10 @@ function renderCenterHub(view: StateView): HTMLElement {
   const sub = document.createElement('div');
   sub.className = 'hub-sub';
   const lengthJa = view.ruleConfig.gameLength === 'tonpuu' ? '東風戦' : '半荘戦';
+  const roomLabel =
+    view.roomCode === 'LOCAL' ? 'ローカルCPU戦' : `部屋 ${view.roomCode}`;
   sub.textContent = round
-    ? `${view.ruleConfig.playerCount}人 ${lengthJa} (${round.roundIndex + 1} / ${round.totalRounds}局) ・ 部屋 ${view.roomCode}`
+    ? `${view.ruleConfig.playerCount}人 ${lengthJa} (${round.roundIndex + 1} / ${round.totalRounds}局) ・ ${roomLabel}`
     : '';
 
   hub.appendChild(sub);
@@ -1267,6 +1272,9 @@ function renderSelfTurnActionsBar(
   uiState: TableUiState,
   canDiscardNow: boolean,
 ): HTMLElement | null {
+  if (view.phase !== 'playing') {
+    return null;
+  }
   const actions = canDiscardNow ? view.mySelfActions : null;
   const hasTurnAction = Boolean(
     actions &&
@@ -1286,7 +1294,8 @@ function renderSelfTurnActionsBar(
 
   const label = document.createElement('span');
   label.className = 'hub-sub';
-  label.textContent = player.isRiichi && !hasTurnAction ? 'リーチ中:' : '手番アクション:';
+  label.textContent =
+    player.isRiichi && !hasTurnAction ? 'リーチ待機中:' : '手番アクション:';
   bar.appendChild(label);
 
   const btns = document.createElement('div');
@@ -1529,16 +1538,11 @@ function renderSelfSeat(
       );
     } else {
       const blocked = forbiddenSet.has(drawn.kind);
-      const lockedByRiichi = canDiscardNow && player.isRiichi;
       handArea.appendChild(
         createTileElement(drawn, {
           clickable: canDiscardNow && !blocked,
-          disabled: canDiscardNow && (blocked || lockedByRiichi),
-          disabledReason: blocked
-            ? '喰い替え禁止のため切れません'
-            : lockedByRiichi
-              ? 'リーチ後はツモ切りしかできません'
-              : undefined,
+          disabled: canDiscardNow && blocked,
+          disabledReason: blocked ? '喰い替え禁止のため切れません' : undefined,
           onClick: () => handlers.onDiscardTile(drawn.id),
         }),
       );
@@ -1685,7 +1689,10 @@ function renderFinishedScreen(
   backBtn.addEventListener('click', handlers.onReturnToLobby);
 
   panel.appendChild(backBtn);
-  container.appendChild(panel);
+  const backdrop = document.createElement('div');
+  backdrop.className = 'overlay-backdrop overlay-backdrop-finished';
+  backdrop.appendChild(panel);
+  container.appendChild(backdrop);
 }
 
 /** CPU 名のラベル（ロビー表示用の再エクスポート） */

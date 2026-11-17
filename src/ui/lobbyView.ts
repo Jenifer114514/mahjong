@@ -386,7 +386,7 @@ export function renderLobbyEntry(
   localNote.className = 'hub-sub';
   localNote.style.margin = '0 0 10px';
   localNote.textContent =
-    '部屋コードの共有なしで、選んだ人数・ルールのまま CPU を相手に対局します。人払いと同じく横画面に最適化されます。';
+    '部屋コードの共有なしで、選んだ人数・ルールのまま CPU を相手に対局します。対人戦と同じく横画面に最適化されます。';
 
   const localBtn = document.createElement('button');
   localBtn.type = 'button';

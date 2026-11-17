@@ -4,9 +4,7 @@
  * 横持ち（または PC）では通常の雀卓を表示する。
  */
 
-export const FORCE_LANDSCAPE_CLASS = 'force-landscape';
-
-export function isLandscapeViewport(): boolean {
+function isLandscapeViewport(): boolean {
   if (typeof window === 'undefined') return true;
   const vw = window.innerWidth;
   const vh = window.innerHeight;
@@ -14,7 +12,7 @@ export function isLandscapeViewport(): boolean {
   return vw > vh * 0.95;
 }
 
-export function isCoarsePointer(): boolean {
+function isCoarsePointer(): boolean {
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
     return false;
   }
@@ -76,19 +74,4 @@ export function watchOrientation(onChange: () => void): () => void {
       orientation.removeEventListener('change', handler);
     }
   };
-}
-
-/** 対応ブラウザなら全画面＋横向きロックを試みる（失敗は無視） */
-export async function tryLockLandscape(): Promise<void> {
-  if (typeof document === 'undefined') return;
-  try {
-    const orientation = (screen as unknown as {
-      orientation?: { lock?: (o: string) => Promise<void> };
-    }).orientation;
-    if (orientation?.lock) {
-      await orientation.lock('landscape');
-    }
-  } catch {
-    // 全画面でない場合などは失敗するので無視する
-  }
 }

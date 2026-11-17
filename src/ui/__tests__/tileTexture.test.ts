@@ -219,6 +219,44 @@ describe('tileTexture', () => {
     expect(fills[texts.lastIndexOf('五')]?.toLowerCase()).toBe('#c3222b');
   });
 
+  it('赤ドラの五筒は 5 つの丸すべてが赤になる（通常の五筒は外周4つが青）', () => {
+    const { factory } = createRecordingGlobal();
+
+    const normal = factory(200, 263);
+    const normalFills: string[] = [];
+    const origNormalFill = normal.ctx.fill as (...args: unknown[]) => void;
+    normal.ctx.fill = (...args: unknown[]) => {
+      normalFills.push(String(normal.ctx.fillStyle).toLowerCase());
+      origNormalFill(...args);
+    };
+    drawTileFace(normal.ctx as unknown as CanvasRenderingContext2D, '5p', {
+      width: 200,
+      height: 263,
+      isRed: false,
+    });
+
+    const red = factory(200, 263);
+    const redFills: string[] = [];
+    const origRedFill = red.ctx.fill as (...args: unknown[]) => void;
+    red.ctx.fill = (...args: unknown[]) => {
+      redFills.push(String(red.ctx.fillStyle).toLowerCase());
+      origRedFill(...args);
+    };
+    drawTileFace(red.ctx as unknown as CanvasRenderingContext2D, '5p', {
+      width: 200,
+      height: 263,
+      isRed: true,
+    });
+
+    // 通常の5p: 外周4つの的は青 (#1b4f9c)、中央1つのみ赤 (#c3222b)
+    expect(normalFills.filter((c) => c === '#1b4f9c').length).toBeGreaterThan(0);
+    expect(normalFills.filter((c) => c === '#c3222b')).toHaveLength(3);
+
+    // 赤5p: 5つの的すべてが赤（青い的は 0、赤は 5 * 3 = 15 回）
+    expect(redFills.filter((c) => c === '#1b4f9c')).toHaveLength(0);
+    expect(redFills.filter((c) => c === '#c3222b')).toHaveLength(15);
+  });
+
   it('全 34 種 + 赤ドラを例外なく描ける', () => {
     const { factory } = createRecordingGlobal();
     for (const key of createAtlasKeys(true)) {
@@ -266,6 +304,46 @@ describe('tileTexture', () => {
     expect(SPRITE_COLUMNS * SPRITE_ROWS).toBeGreaterThanOrEqual(
       createAtlasKeys(true).length,
     );
+  });
+
+  it('2索は縦2本、3索は上1本+下2本の対称配置で描画される', () => {
+    const { factory } = createRecordingGlobal();
+
+    const s2 = factory(200, 263);
+    const s2Centers: Array<{ x: number; y: number }> = [];
+    const origTranslate2 = s2.ctx.translate as (...args: unknown[]) => void;
+    s2.ctx.translate = (x: number, y: number) => {
+      s2Centers.push({ x, y });
+      origTranslate2(x, y);
+    };
+    drawTileFace(s2.ctx as unknown as CanvasRenderingContext2D, '2s', {
+      width: 200,
+      height: 263,
+    });
+    expect(s2Centers).toHaveLength(2);
+    expect(s2Centers[0]!.x).toBeCloseTo(s2Centers[1]!.x, 1);
+    expect(s2Centers[0]!.y).toBeLessThan(263 * 0.4);
+    expect(s2Centers[1]!.y).toBeGreaterThan(263 * 0.6);
+
+    const s3 = factory(200, 263);
+    const s3Centers: Array<{ x: number; y: number }> = [];
+    const origTranslate3 = s3.ctx.translate as (...args: unknown[]) => void;
+    s3.ctx.translate = (x: number, y: number) => {
+      s3Centers.push({ x, y });
+      origTranslate3(x, y);
+    };
+    drawTileFace(s3.ctx as unknown as CanvasRenderingContext2D, '3s', {
+      width: 200,
+      height: 263,
+    });
+    expect(s3Centers).toHaveLength(3);
+    // 上段1本（中央）、下段2本（左右対称で下半分に配置）
+    expect(s3Centers[0]!.x).toBeCloseTo(100, 1);
+    expect(s3Centers[0]!.y).toBeLessThan(263 * 0.4);
+    expect(s3Centers[1]!.y).toBeGreaterThan(263 * 0.6);
+    expect(s3Centers[2]!.y).toBeGreaterThan(263 * 0.6);
+    expect(s3Centers[1]!.y).toBeCloseTo(s3Centers[2]!.y, 1);
+    expect(s3Centers[1]!.x + s3Centers[2]!.x).toBeCloseTo(200, 1);
   });
 
 });
