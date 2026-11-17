@@ -487,4 +487,39 @@ describe('renderGameTable（横画面レイアウト）', () => {
     expect(root.querySelector('.self-hand-dock .self-melds-dock')).not.toBeNull();
     expect(root.querySelector('.self-hand-dock .hand-area')).not.toBeNull();
   });
+
+  it('プレイヤー表示はアバターアイコンの下に名前を縦配置し、自分の表示は卓の左下空き領域へ独立配置し、中央方位表示が各家方向を向く', () => {
+    const baseView = toStateView(state4, 'p0', 0);
+    const root = document.createElement('div');
+    renderGameTable(root, baseView, noopHandlers);
+
+    // 自分の .seat-header は .self-top-bar の外、.seat-orient-self 直下にある（5×5 卓グリッド左下セル配置）
+    expect(root.querySelector('.self-top-bar > .seat-header')).toBeNull();
+    const selfHeader = root.querySelector('.seat-orient-self > .seat-header');
+    expect(selfHeader).not.toBeNull();
+    expect(selfHeader!.querySelector('.seat-name')!.textContent).toContain('あなた');
+
+    // 全4人ともアバター上にバッジを重ねず、アイコン(seat-card-top) → 名前(seat-name) → 自風バッジ群(seat-identity) → 点数(seat-score) の縦順になっている
+    const headers = Array.from(root.querySelectorAll('.seat-header'));
+    expect(headers).toHaveLength(4);
+    for (const header of headers) {
+      const children = Array.from(header.children);
+      expect(children[0]!.classList.contains('seat-card-top')).toBe(true);
+      expect(children[0]!.querySelector('.seat-avatar')).not.toBeNull();
+      expect(children[0]!.querySelector('.wind-badge')).toBeNull();
+
+      expect(children[1]!.classList.contains('seat-card-info')).toBe(true);
+      const infoChildren = Array.from(children[1]!.children);
+      expect(infoChildren[0]!.classList.contains('seat-name')).toBe(true);
+      expect(infoChildren[1]!.classList.contains('seat-identity')).toBe(true);
+      expect(infoChildren[1]!.querySelector('.wind-badge')).not.toBeNull();
+      expect(infoChildren[2]!.classList.contains('seat-score')).toBe(true);
+    }
+
+    // 中央コンソールの東西南北が4隅すべて揃う
+    expect(root.querySelector('.table-compass .compass-self .compass-wind')).not.toBeNull();
+    expect(root.querySelector('.table-compass .compass-right .compass-wind')).not.toBeNull();
+    expect(root.querySelector('.table-compass .compass-top .compass-wind')).not.toBeNull();
+    expect(root.querySelector('.table-compass .compass-left .compass-wind')).not.toBeNull();
+  });
 });

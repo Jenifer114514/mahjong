@@ -1095,23 +1095,22 @@ function renderSeatHeader(
   cardTop.className = 'seat-card-top';
   cardTop.appendChild(createSeatAvatar(player, isSelf));
 
-  if (player.seatWind) {
-    const windBadge = document.createElement('span');
-    windBadge.className = `wind-badge${player.isDealer ? ' is-dealer' : ''}`;
-    windBadge.textContent = windToJa(player.seatWind);
-    cardTop.appendChild(windBadge);
-  }
-
   const info = document.createElement('div');
   info.className = 'seat-card-info';
+
+  const nameSpan = document.createElement('div');
+  nameSpan.className = 'seat-name';
+  nameSpan.textContent = isSelf ? `${player.name}（あなた）` : player.name;
 
   const identity = document.createElement('div');
   identity.className = 'seat-identity';
 
-  const nameSpan = document.createElement('span');
-  nameSpan.className = 'seat-name';
-  nameSpan.textContent = isSelf ? `${player.name}（あなた）` : player.name;
-  identity.appendChild(nameSpan);
+  if (player.seatWind) {
+    const windBadge = document.createElement('span');
+    windBadge.className = `wind-badge${player.isDealer ? ' is-dealer' : ''}`;
+    windBadge.textContent = windToJa(player.seatWind);
+    identity.appendChild(windBadge);
+  }
 
   if (isCpuPlayerId(player.playerId)) {
     const cpuBadge = document.createElement('span');
@@ -1159,7 +1158,7 @@ function renderSeatHeader(
   score.className = 'seat-score';
   score.textContent = `${player.score.toLocaleString()}点`;
 
-  info.append(identity, score);
+  info.append(nameSpan, identity, score);
   header.append(cardTop, info);
   return header;
 }
@@ -1566,6 +1565,8 @@ function renderSelfSeat(
   }`;
   box.dataset.seat = 'self';
 
+  box.appendChild(renderSeatHeader(player, true, view.isFuriten));
+
   const isMyTurn = view.phase === 'playing' && player.isCurrentTurn;
   const canDiscardNow =
     isMyTurn && (view.myDrawnTile !== null || view.myHand.length % 3 === 2);
@@ -1579,7 +1580,6 @@ function renderSelfSeat(
 
   const topBar = document.createElement('div');
   topBar.className = 'self-top-bar';
-  topBar.appendChild(renderSeatHeader(player, true, view.isFuriten));
 
   const actionDock = document.createElement('div');
   actionDock.className = 'self-action-dock';

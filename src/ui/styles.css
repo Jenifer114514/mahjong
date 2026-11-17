@@ -1210,9 +1210,11 @@ input {
   --river-tile-h: 43px;
   --hand-tile-w: 54px;
   --hand-tile-h: 74px;
-  --console-size: 154px;
-  --dora-panel-w: 190px;
-  --dora-panel-h: 98px;
+  --console-size: 184px;
+  --dora-tile-w: 39px;
+  --dora-tile-h: 53px;
+  --dora-panel-w: 234px;
+  --dora-panel-h: 126px;
   --side-hand-inset: 104px;
 
   position: relative;
@@ -1386,13 +1388,18 @@ input {
   position: relative;
   z-index: 4;
   display: flex;
+  flex-direction: column;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: 7px;
-  padding: 4px 8px 4px 4px;
-  border-radius: 8px;
-  background: rgba(9, 15, 26, 0.84);
-  border: 1px solid rgba(180, 195, 220, 0.24);
-  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.42);
+  justify-content: flex-start;
+  text-align: center;
+  gap: 4px;
+  padding: 6px 8px;
+  border-radius: 9px;
+  background: rgba(9, 15, 26, 0.86);
+  border: 1px solid rgba(180, 195, 220, 0.26);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.45);
+  width: 92px;
   max-width: 100%;
 }
 
@@ -1408,12 +1415,13 @@ input {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
 }
 
 .seat-avatar {
-  width: 38px;
-  height: 38px;
-  border-radius: 6px;
+  width: 44px;
+  height: 44px;
+  border-radius: 7px;
   border: 1.5px solid rgba(215, 185, 110, 0.6);
   overflow: hidden;
   background: #172030;
@@ -1431,49 +1439,52 @@ input {
   display: block;
 }
 
-.seat-card-top > .wind-badge {
-  position: absolute;
-  bottom: -3px;
-  right: -4px;
-  width: 18px;
-  height: 18px;
-  font-size: 0.68rem;
-  font-weight: 800;
-  border-radius: 4px;
-  background: #1c273b;
-  border: 1px solid rgba(255, 255, 255, 0.25);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.65);
-}
-
-.seat-card-top > .wind-badge.is-dealer {
-  background: #b6252b;
-  border-color: #f3c667;
-  color: #fff;
-}
-
 .seat-card-info {
   display: flex;
   flex-direction: column;
+  align-items: center;
   gap: 2px;
   min-width: 0;
+  width: 100%;
+}
+
+.seat-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #f4f6fb;
+  font-size: 0.74rem;
+  font-weight: 700;
+  line-height: 1.2;
 }
 
 .seat-identity {
   display: flex;
   align-items: center;
-  gap: 4px;
+  justify-content: center;
+  gap: 3px;
   flex-wrap: wrap;
-  font-size: 0.74rem;
+  font-size: 0.68rem;
   font-weight: 700;
-  line-height: 1.15;
+  line-height: 1.1;
 }
 
-.seat-name {
-  max-width: 112px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: #f4f6fb;
+.seat-identity > .wind-badge {
+  width: 18px;
+  height: 18px;
+  font-size: 0.66rem;
+  font-weight: 800;
+  border-radius: 4px;
+  background: #1c273b;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+
+.seat-identity > .wind-badge.is-dealer {
+  background: #b6252b;
+  border-color: #f3c667;
+  color: #fff;
 }
 
 .oya-tag {
@@ -1486,20 +1497,23 @@ input {
 }
 
 .seat-score {
-  font-size: 0.72rem;
+  font-size: 0.74rem;
   font-variant-numeric: tabular-nums;
   font-weight: 700;
   color: var(--accent-gold);
   line-height: 1.1;
 }
 
-/* 4人卓のバッジ位置（IMG_3090.webp準拠） */
+/* 4人卓のバッジ位置 */
 .seat-orient-top > .seat-header {
   grid-column: 5;
-  grid-row: 1;
+  grid-row: 1 / 3;
   justify-self: start;
   align-self: start;
-  margin-left: 8px;
+  margin-left: 10px;
+  width: auto;
+  min-width: 94px;
+  max-width: 126px;
 }
 
 .seat-orient-left > .seat-header {
@@ -1507,16 +1521,8 @@ input {
   grid-row: 2 / 4;
   justify-self: start;
   align-self: start;
-  margin-top: calc(var(--dora-panel-h) - 10px);
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  padding: 5px 6px;
+  margin-top: calc(var(--dora-panel-h) - 2px);
   width: 88px;
-}
-
-.seat-orient-left > .seat-header .seat-identity {
-  justify-content: center;
 }
 
 .seat-orient-right > .seat-header {
@@ -1524,16 +1530,20 @@ input {
   grid-row: 2 / 4;
   justify-self: end;
   align-self: start;
-  margin-top: 32px;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  padding: 5px 6px;
+  margin-top: 38px;
   width: 88px;
 }
 
-.seat-orient-right > .seat-header .seat-identity {
-  justify-content: center;
+.seat-orient-self > .seat-header {
+  grid-column: 1;
+  grid-row: 4;
+  justify-self: end;
+  align-self: end;
+  margin-right: 12px;
+  margin-bottom: 4px;
+  width: auto;
+  min-width: 102px;
+  max-width: 136px;
 }
 
 /* ---------- 副露・抜北の卓上配置 ---------- */
@@ -1907,7 +1917,7 @@ input {
   transform: translate(-50%, -50%) rotate(-90deg);
 }
 
-/* 4隅の方位（自風）スロット */
+/* 4隅の方位（自風）スロット — 各席のプレイヤー方向を向く */
 .table-compass {
   position: absolute;
   inset: 0;
@@ -1929,31 +1939,35 @@ input {
 .compass-self {
   bottom: 5px;
   left: 5px;
+  transform: rotate(0deg);
 }
 
 .compass-right {
   bottom: 5px;
   right: 5px;
+  transform: rotate(-90deg);
 }
 
 .compass-top {
   top: 5px;
   right: 5px;
+  transform: rotate(180deg);
 }
 
 .compass-left {
   top: 5px;
   left: 5px;
+  transform: rotate(90deg);
 }
 
 .compass-wind {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   border-radius: 5px;
-  font-size: 0.76rem;
+  font-size: 0.82rem;
   font-weight: 900;
   color: #dce4f4;
   background: #1a2334;
@@ -1991,24 +2005,18 @@ input {
 .self-top-bar {
   position: relative;
   width: min(1060px, 100%);
-  min-height: 48px;
+  min-height: 26px;
   display: flex;
   align-items: flex-end;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 10px;
   padding: 0 8px;
 }
 
-.self-top-bar > .seat-header {
-  flex: 0 0 auto;
-}
-
 .self-action-dock {
-  position: absolute;
-  right: 8px;
-  bottom: 0;
+  position: relative;
   z-index: 9;
-  max-width: calc(100% - 245px);
+  max-width: 100%;
   display: flex;
   flex-direction: column;
   align-items: flex-end;
@@ -2088,29 +2096,37 @@ input {
   z-index: 12;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
   pointer-events: none;
 }
 
 .dora-panel-box {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 5px 7px;
-  border-radius: 7px;
+  gap: 6px;
+  padding: 8px 11px;
+  border-radius: 9px;
   background: rgba(11, 16, 26, 0.9);
-  border: 1px solid rgba(208, 194, 150, 0.5);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(208, 194, 150, 0.52);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.58);
 }
 
 .dora-panel-tiles {
   display: flex;
-  gap: 2px;
+  gap: 3px;
+}
+
+.table-felt.is-landscape .dora-panel-tiles > .mj-tile,
+.table-felt.is-landscape .dora-panel-tiles > .mj-tile.mj-tile-sm,
+.table-felt.is-landscape .dora-panel-tiles > .dora-slot-back {
+  width: var(--dora-tile-w);
+  height: var(--dora-tile-h);
+  border-radius: 2px;
 }
 
 .dora-panel-tiles .dora-slot-back {
-  width: var(--river-tile-w);
-  height: var(--river-tile-h);
+  width: var(--dora-tile-w);
+  height: var(--dora-tile-h);
   background: linear-gradient(180deg, #efb14c 0%, #d48622 100%);
   border: 1px solid #915813;
   border-bottom: 3px solid #ece7da;
@@ -2120,8 +2136,8 @@ input {
 .dora-panel-sticks {
   display: flex;
   align-items: center;
-  gap: 10px;
-  font-size: 0.72rem;
+  gap: 12px;
+  font-size: 0.86rem;
   font-weight: 800;
   color: #f3f5fa;
   font-variant-numeric: tabular-nums;
@@ -2130,47 +2146,47 @@ input {
 .dora-stick-item {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
 }
 
 .stick-icon {
   display: inline-block;
-  width: 20px;
-  height: 5px;
+  width: 26px;
+  height: 6px;
   border-radius: 2px;
   border: 0.5px solid rgba(0, 0, 0, 0.45);
 }
 
 .stick-riichi {
-  background: radial-gradient(circle at center, #d92b2b 1.7px, #f6f4ec 2px);
+  background: radial-gradient(circle at center, #d92b2b 2px, #f6f4ec 2.3px);
 }
 
 .stick-honba {
   background:
-    radial-gradient(circle at 25% 32%, #1d2432 0.8px, transparent 1px),
-    radial-gradient(circle at 42% 32%, #1d2432 0.8px, transparent 1px),
-    radial-gradient(circle at 58% 32%, #1d2432 0.8px, transparent 1px),
-    radial-gradient(circle at 75% 32%, #1d2432 0.8px, transparent 1px),
-    radial-gradient(circle at 25% 68%, #1d2432 0.8px, transparent 1px),
-    radial-gradient(circle at 42% 68%, #1d2432 0.8px, transparent 1px),
-    radial-gradient(circle at 58% 68%, #1d2432 0.8px, transparent 1px),
-    radial-gradient(circle at 75% 68%, #1d2432 0.8px, transparent 1px),
+    radial-gradient(circle at 25% 32%, #1d2432 0.9px, transparent 1.1px),
+    radial-gradient(circle at 42% 32%, #1d2432 0.9px, transparent 1.1px),
+    radial-gradient(circle at 58% 32%, #1d2432 0.9px, transparent 1.1px),
+    radial-gradient(circle at 75% 32%, #1d2432 0.9px, transparent 1.1px),
+    radial-gradient(circle at 25% 68%, #1d2432 0.9px, transparent 1.1px),
+    radial-gradient(circle at 42% 68%, #1d2432 0.9px, transparent 1.1px),
+    radial-gradient(circle at 58% 68%, #1d2432 0.9px, transparent 1.1px),
+    radial-gradient(circle at 75% 68%, #1d2432 0.9px, transparent 1.1px),
     #f6f4ec;
 }
 
 .dora-kan-tag {
   margin-left: auto;
-  font-size: 0.64rem;
-  padding: 0 5px;
+  font-size: 0.72rem;
+  padding: 1px 6px;
   border-radius: 4px;
   background: rgba(240, 201, 92, 0.16);
   color: var(--accent-gold);
 }
 
 .dora-panel-mode {
-  font-size: 0.68rem;
+  font-size: 0.8rem;
   font-weight: 700;
-  color: rgba(240, 244, 255, 0.88);
+  color: rgba(240, 244, 255, 0.9);
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
   letter-spacing: 0.02em;
 }
@@ -2208,27 +2224,27 @@ input {
 /* ---------- 左端の縦型クイック補助バー（理 / 和 / 鳴 / 切） ---------- */
 .table-left-actions {
   position: absolute;
-  left: 18px;
-  bottom: 124px;
+  left: 20px;
+  bottom: 112px;
   z-index: 12;
   display: flex;
   flex-direction: column;
-  border-radius: 6px;
+  border-radius: 9px;
   overflow: hidden;
-  background: rgba(11, 16, 26, 0.9);
-  border: 1px solid rgba(208, 194, 150, 0.45);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.55);
+  background: rgba(11, 16, 26, 0.92);
+  border: 1.5px solid rgba(208, 194, 150, 0.5);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.58);
 }
 
 .left-action-tab {
-  width: 28px;
-  height: 28px;
+  width: 44px;
+  height: 42px;
   padding: 0;
   border: none;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
   background: transparent;
-  color: rgba(226, 232, 245, 0.7);
-  font-size: 0.84rem;
+  color: rgba(226, 232, 245, 0.76);
+  font-size: 1.08rem;
   font-weight: 800;
   cursor: pointer;
   display: flex;
@@ -2410,10 +2426,12 @@ input {
     --river-tile-h: 36px;
     --hand-tile-w: 46px;
     --hand-tile-h: 63px;
-    --console-size: 136px;
-    --dora-panel-w: 162px;
-    --dora-panel-h: 84px;
-    --side-hand-inset: 84px;
+    --console-size: 162px;
+    --dora-tile-w: 35px;
+    --dora-tile-h: 48px;
+    --dora-panel-w: 206px;
+    --dora-panel-h: 114px;
+    --side-hand-inset: 88px;
     padding: 6px 14px 8px;
     border-left-width: 10px;
     border-right-width: 10px;
@@ -2424,25 +2442,69 @@ input {
     height: 28px;
   }
 
+  .compass-wind {
+    width: 21px;
+    height: 21px;
+    font-size: 0.74rem;
+  }
+
+  .seat-header {
+    padding: 5px 6px;
+    gap: 3px;
+  }
+
   .seat-avatar {
-    width: 32px;
-    height: 32px;
+    width: 36px;
+    height: 36px;
+  }
+
+  .seat-name {
+    font-size: 0.7rem;
   }
 
   .seat-orient-left > .seat-header,
   .seat-orient-right > .seat-header {
-    width: 74px;
+    width: 76px;
+  }
+
+  .seat-orient-top > .seat-header {
+    min-width: 84px;
+    max-width: 116px;
+  }
+
+  .seat-orient-self > .seat-header {
+    min-width: 92px;
+    max-width: 124px;
+    margin-right: 10px;
+  }
+
+  .dora-panel-box {
+    padding: 7px 9px;
+    gap: 5px;
+  }
+
+  .dora-panel-sticks {
+    font-size: 0.8rem;
+  }
+
+  .stick-icon {
+    width: 22px;
+    height: 5.5px;
+  }
+
+  .dora-panel-mode {
+    font-size: 0.76rem;
   }
 
   .table-left-actions {
-    left: 10px;
-    bottom: 98px;
+    left: 14px;
+    bottom: 92px;
   }
 
   .left-action-tab {
-    width: 24px;
-    height: 24px;
-    font-size: 0.74rem;
+    width: 38px;
+    height: 36px;
+    font-size: 0.98rem;
   }
 }
 
@@ -2452,10 +2514,12 @@ input {
     --river-tile-h: 30px;
     --hand-tile-w: 38px;
     --hand-tile-h: 52px;
-    --console-size: 118px;
-    --dora-panel-w: 140px;
-    --dora-panel-h: 74px;
-    --side-hand-inset: 72px;
+    --console-size: 138px;
+    --dora-tile-w: 28px;
+    --dora-tile-h: 38px;
+    --dora-panel-w: 170px;
+    --dora-panel-h: 96px;
+    --side-hand-inset: 76px;
     padding: 4px 10px 6px;
     gap: 3px;
     border-left-width: 8px;
@@ -2492,19 +2556,46 @@ input {
   }
 
   .seat-avatar {
-    width: 26px;
-    height: 26px;
+    width: 28px;
+    height: 28px;
+  }
+
+  .seat-name {
+    font-size: 0.66rem;
   }
 
   .seat-orient-left > .seat-header,
   .seat-orient-right > .seat-header {
-    width: 64px;
+    width: 66px;
     padding: 3px 4px;
+  }
+
+  .seat-orient-right > .seat-header {
+    margin-top: 46px;
+  }
+
+  .seat-orient-top > .seat-header,
+  .seat-orient-self > .seat-header {
+    min-width: 76px;
+    max-width: 104px;
   }
 
   .dora-panel {
     left: 10px;
     top: 4px;
+  }
+
+  .dora-panel-box {
+    padding: 5px 7px;
+    gap: 4px;
+  }
+
+  .dora-panel-sticks {
+    font-size: 0.72rem;
+  }
+
+  .dora-panel-mode {
+    font-size: 0.68rem;
   }
 
   .table-chrome {
@@ -2513,7 +2604,14 @@ input {
   }
 
   .table-left-actions {
-    bottom: 78px;
+    left: 10px;
+    bottom: 72px;
+  }
+
+  .left-action-tab {
+    width: 32px;
+    height: 30px;
+    font-size: 0.86rem;
   }
 
   .round-yaku-chip {
@@ -2528,10 +2626,12 @@ input {
     --river-tile-h: 25px;
     --hand-tile-w: 32px;
     --hand-tile-h: 44px;
-    --console-size: 96px;
-    --dora-panel-w: 120px;
-    --dora-panel-h: 62px;
-    --side-hand-inset: 60px;
+    --console-size: 112px;
+    --dora-tile-w: 23px;
+    --dora-tile-h: 31px;
+    --dora-panel-w: 142px;
+    --dora-panel-h: 82px;
+    --side-hand-inset: 62px;
     padding: 3px 6px;
     gap: 2px;
     border-left-width: 5px;
@@ -2581,18 +2681,19 @@ input {
   }
 
   .seat-header {
-    padding: 2px 5px 2px 2px;
-    gap: 4px;
+    padding: 3px 4px;
+    gap: 2px;
   }
 
   .seat-avatar {
-    width: 22px;
-    height: 22px;
+    width: 24px;
+    height: 24px;
   }
 
+  .seat-name,
   .seat-identity,
   .seat-score {
-    font-size: 0.62rem;
+    font-size: 0.6rem;
   }
 
   .seat-orient-left > .seat-header,
@@ -2600,17 +2701,29 @@ input {
     width: 56px;
   }
 
+  .seat-orient-right > .seat-header {
+    margin-top: 52px;
+  }
+
+  .seat-orient-top > .seat-header,
+  .seat-orient-self > .seat-header {
+    min-width: 66px;
+    max-width: 90px;
+    margin-right: 6px;
+  }
+
   .self-top-bar {
-    min-height: 30px;
+    min-height: 22px;
   }
 
   .dora-panel-box {
-    padding: 3px 5px;
+    padding: 4px 6px;
+    gap: 3px;
   }
 
   .dora-panel-sticks,
   .dora-panel-mode {
-    font-size: 0.56rem;
+    font-size: 0.6rem;
   }
 
   .table-chrome-btn {
@@ -2619,14 +2732,14 @@ input {
   }
 
   .table-left-actions {
-    left: 6px;
-    bottom: 62px;
+    left: 8px;
+    bottom: 54px;
   }
 
   .left-action-tab {
-    width: 20px;
-    height: 20px;
-    font-size: 0.64rem;
+    width: 26px;
+    height: 25px;
+    font-size: 0.74rem;
   }
 
   .self-action-dock .turn-prompt {
