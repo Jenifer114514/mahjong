@@ -204,16 +204,18 @@
 
         const host = document.getElementById('dom-tiles');
         const kinds = [
-          '1m', '5m', '9m', '1p', '5p', '1s', '7s', '1z', '5z', '6z', '7z',
+          '1m', '5m', '9m', '1p', '2p', '5p', '6p', '7p', '8p', '1s', '7s', '8s', '9s', '1z', '5z', '6z', '7z',
         ];
         for (const kind of kinds) {
           host.appendChild(
             createTileElement({ id: `${kind}-0`, kind, isRed: false }),
           );
         }
-        host.appendChild(
-          createTileElement({ id: '5m-red', kind: '5m', isRed: true }),
-        );
+        for (const kind of ['5m', '5p', '5s']) {
+          host.appendChild(
+            createTileElement({ id: `${kind}-red`, kind, isRed: true }),
+          );
+        }
         document.getElementById('dom-meta').textContent =
           'アプリ本体と同じ createTileElement() の出力。スプライトシート 1 枚を全牌で共有している。';
       }

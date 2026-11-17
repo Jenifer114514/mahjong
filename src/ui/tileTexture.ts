@@ -1,31 +1,22 @@
 /**
  * 牌テクスチャ生成（Canvas 2D）
  *
- * Notion「麻雀アプリ 3D牌生成・操作エンジン」の `mahjong-engine.js` にあった
- * `createTileTexture()` / `drawCircles()` / `drawBamboos()` / `createBackTexture()` を
- * 次の方針で作り直したもの。
+ * 実物の日本麻雀牌（藍黒・臙脂・赤ドラ・石入り赤五筒・孔雀一索・花模様一/二筒・
+ * M/W型八索・中抜き節入り索子・筆文字萬子/字牌）の意匠に忠実に描画する。
  *
- *  1. 実物の牌面に近づける
- *     萬子 = 数字（黒）+「萬」（赤） / 筒子 = 的（リング） / 索子 = 竹（1索は鳥） /
- *     白は無地 / 5萬・5筒・5索の赤ドラは図柄そのものを赤にする。
- *  2. 1枚のアトラスにまとめる（牌種ごとにテクスチャを作らない）
- *     37 種 × 512×768 の個別テクスチャ（約 58MB）→ 2048×2048 のアトラス 1 枚（約 16MB）。
- *     さらにミップマップ境界のにじみを防ぐため、セルごとに余白（ガター）を確保する。
- *  3. 3D 側の形状とアスペクト比を一致させる
- *     面の PlaneGeometry は必ず `TILE_FACE_ASPECT` から作る（図柄の横潰れ防止）。
- *  4. 起動時に document を触らない
- *     モジュールスコープで canvas を作らないので、SSR / テスト / Node からも呼べる。
- *     canvas の生成は `Canvas2DFactory` で注入できる。
- *  5. フォントは明示的に指定し、`document.fonts.ready` を待ってから描く
- *     （CJK を含まない serif へのフォールバックによる字形崩れを防ぐ）。
- *  6. 座標はすべて牌面サイズに対する比率で計算する（解像度を変えても崩れない）
- *  7. 彫刻（エングレーブ）風の陰影を付けて、印刷シールではなく牌らしい質感にする
- *
- * このモジュールは Three.js に依存しない。UV 矩形を返すので、呼び出し側で
- * 「1 アトラス + 1 マテリアル + 牌種ごとのジオメトリ」を組めば InstancedMesh で描ける。
+ *  1. 象牙〜磁器調の滑らかな素地（木目や過度な黄ばみなし）と丸みのある陰影
+ *  2. OS / 端末フォントに左右されない内蔵筆文字パス（`tileGlyphs.ts`）で
+ *     「一二三四伍六七八九萬」「東南西北發中」を統一描画（5萬は「伍萬」、白は無地）
+ *  3. 配色: 藍黒 (#1e2736) × 臙脂 (#632530)、赤ドラは鮮紅 (#cf232e)（赤5筒中央は銀輝石）
+ *  4. 1 枚のアトラス / DOM スプライトシート（7×6 = 37 枠）にまとめ、
+ *     アスペクト比は `TILE_FACE_ASPECT` で統一する。
  */
 
 import type { TileKind } from '../types/tile';
+import {
+  getCalligraphyGlyphTokens,
+  traceCalligraphyGlyph,
+} from './tileGlyphs';
 
 /** 牌面の幅 / 高さ。3D 側の PlaneGeometry は必ずこの比で作る。 */
 export const TILE_FACE_ASPECT = 0.76;
@@ -34,25 +25,24 @@ export const TILE_FACE_ASPECT = 0.76;
 export const RED_FIVE_KINDS = ['5m', '5p', '5s'] as const;
 export type RedFiveKind = (typeof RED_FIVE_KINDS)[number];
 
-/** 牌面の色。1 か所にまとめて調整できるようにしている。 */
-const INK = {
-  ivoryTop: '#fffdf6',
-  ivoryBottom: '#ecdfc5',
-  ivoryEdge: '#d8c9a9',
-  ink: '#1f1d1a',
-  inkSoft: '#2b2823',
-  red: '#c3222b',
-  green: '#0e6b3d',
-  blue: '#1b4f9c',
-  bambooDark: '#0d5c34',
-  bambooLight: '#2f8f58',
+/** 牌面の色。実物写真（藍黒＋臙脂＋鮮紅赤ドラ＋清涼象牙素地）に準拠。 */
+export const TILE_INK = {
+  ivoryTop: '#faf9f5',
+  ivoryMid: '#f3f1ea',
+  ivoryBottom: '#e9e6dc',
+  ivoryHole: '#f5f4ee',
+  ink: '#1e2736',
+  maroon: '#632530',
+  maroonDark: '#4a1b24',
+  red: '#cf232e',
+  redDark: '#9e1720',
   backBase: '#14603c',
   backBaseDeep: '#0c3f27',
   backPattern: 'rgba(255, 255, 255, 0.10)',
   backFrame: '#d8c7a0',
 } as const;
 
-/** 明朝系のフォントスタック。CJK を必ず含むものを先に並べる。 */
+/** 明朝・楷書系のフォントスタック。明示指定時のフォールバックに使用する。 */
 export const DEFAULT_FONT_FAMILY =
   '"Hiragino Mincho ProN", "Yu Mincho", "YuMincho", "Noto Serif JP", "Noto Serif CJK JP", "Songti SC", "MS PMincho", serif';
 
@@ -83,11 +73,12 @@ export const domCanvasFactory: Canvas2DFactory = (width, height) => {
 
 /**
  * 牌面用フォントの読み込みを待つ。
- * `document.fonts` が無い環境（Node / jsdom）では何もしない。
+ * 通常描画は内蔵ベクターグリフを使うためフォント待機なしでも崩れないが、
+ * フォールバック文字描画や外部指定フォント向けに互換維持している。
  */
 export async function waitForTileFonts(fontFamily = DEFAULT_FONT_FAMILY): Promise<void> {
   if (typeof document === 'undefined' || !document.fonts) return;
-  const sample = '萬東南發中一';
+  const sample = '萬東南發中一伍';
   try {
     await Promise.all([
       document.fonts.load(`700 64px ${fontFamily}`, sample),
@@ -108,6 +99,7 @@ interface FaceDrawContext {
   width: number;
   height: number;
   fontFamily: string;
+  useCustomFont: boolean;
 }
 
 function roundRectPath(
@@ -132,45 +124,70 @@ function roundRectPath(
   ctx.closePath();
 }
 
-/** 象牙色の素地。ごく薄い繊維と周辺の減光を入れて「1 枚の板」に見せる。 */
+/** 滑らかな象牙白磁素地と緩やかな丸み陰影。 */
 function drawIvoryBase({ ctx, width: w, height: h }: FaceDrawContext): void {
   const bg = ctx.createLinearGradient(0, 0, w * 0.35, h);
-  bg.addColorStop(0, INK.ivoryTop);
-  bg.addColorStop(0.55, '#f7f0df');
-  bg.addColorStop(1, INK.ivoryBottom);
+  bg.addColorStop(0, TILE_INK.ivoryTop);
+  bg.addColorStop(0.55, TILE_INK.ivoryMid);
+  bg.addColorStop(1, TILE_INK.ivoryBottom);
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, w, h);
 
-  // 細かな繊維（縦方向）
-  ctx.save();
-  ctx.globalAlpha = 0.05;
-  ctx.strokeStyle = INK.ink;
-  ctx.lineWidth = Math.max(0.6, w * 0.0018);
-  for (let i = 1; i < 14; i += 1) {
-    const x = (w / 14) * i + (i % 3) * w * 0.004;
-    ctx.beginPath();
-    ctx.moveTo(x, h * 0.02);
-    ctx.bezierCurveTo(x + w * 0.01, h * 0.35, x - w * 0.01, h * 0.65, x, h * 0.98);
-    ctx.stroke();
-  }
-  ctx.restore();
-
-  // 角の丸みを模した内側の陰影
+  // 牌面周縁のわずかな丸み（ドーム状の立体感）
   const inset = ctx.createRadialGradient(
-    w * 0.5,
-    h * 0.45,
-    Math.min(w, h) * 0.2,
+    w * 0.48,
+    h * 0.42,
+    Math.min(w, h) * 0.25,
     w * 0.5,
     h * 0.5,
     Math.max(w, h) * 0.78,
   );
-  inset.addColorStop(0, 'rgba(255, 255, 255, 0)');
-  inset.addColorStop(1, 'rgba(150, 125, 80, 0.16)');
+  inset.addColorStop(0, 'rgba(255, 255, 255, 0.14)');
+  inset.addColorStop(0.7, 'rgba(255, 255, 255, 0)');
+  inset.addColorStop(1, 'rgba(95, 92, 82, 0.13)');
   ctx.fillStyle = inset;
   ctx.fillRect(0, 0, w, h);
+
+  // 上端・左端の柔らかいハイライト縁
+  const rimInset = Math.max(1, w * 0.025);
+  roundRectPath(
+    ctx,
+    rimInset,
+    rimInset,
+    w - rimInset * 2,
+    h - rimInset * 2,
+    Math.min(w, h) * 0.08,
+  );
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.48)';
+  ctx.lineWidth = Math.max(0.8, w * 0.014);
+  ctx.stroke();
 }
 
-/** 彫刻風に文字を描く（明部→影→インクの順で少しずつずらす）。 */
+interface GlyphScale {
+  sx?: number;
+  sy?: number;
+}
+
+const GLYPH_PROPORTIONS: Record<string, GlyphScale> = {
+  一: { sx: 1.18, sy: 0.96 },
+  二: { sx: 1.15, sy: 0.9 },
+  三: { sx: 1.14, sy: 0.94 },
+  四: { sx: 1.12, sy: 0.94 },
+  伍: { sx: 1.08, sy: 1.02 },
+  六: { sx: 1.08, sy: 0.98 },
+  七: { sx: 1.05, sy: 0.96 },
+  八: { sx: 1.12, sy: 0.94 },
+  九: { sx: 1.08, sy: 1.02 },
+  萬: { sx: 1.12, sy: 0.96 },
+  東: { sx: 1.02, sy: 1.06 },
+  南: { sx: 1.04, sy: 1.04 },
+  西: { sx: 1.08, sy: 0.98 },
+  北: { sx: 1.06, sy: 1.0 },
+  發: { sx: 1.04, sy: 1.04 },
+  中: { sx: 0.96, sy: 1.18 },
+};
+
+/** 彫刻風に筆文字を描く（内蔵筆文字パス優先、カスタムフォント指定時のみ fillText）。 */
 function drawEngravedGlyph(
   face: FaceDrawContext,
   glyph: string,
@@ -180,30 +197,55 @@ function drawEngravedGlyph(
   color: string,
 ): void {
   const { ctx } = face;
-  const depth = Math.max(0.8, sizePx * 0.014);
+  const depth = Math.max(0.7, sizePx * 0.015);
+  const prop = GLYPH_PROPORTIONS[glyph];
+  const sx = sizePx * (prop?.sx ?? 1);
+  const sy = sizePx * (prop?.sy ?? 1);
+
+  const tokens = !face.useCustomFont ? getCalligraphyGlyphTokens(glyph) : undefined;
+  if (tokens) {
+    ctx.save();
+    // 彫り底面の微かなハイライト（右下縁に光が当たる質感）
+    traceCalligraphyGlyph(ctx, tokens, cx + depth * 0.75, cy + depth * 0.75, sx, sy);
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.58)';
+    ctx.fill();
+
+    // 左上側の彫り影
+    traceCalligraphyGlyph(ctx, tokens, cx - depth * 0.45, cy - depth * 0.45, sx, sy);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.22)';
+    ctx.fill();
+
+    // 本体インク
+    traceCalligraphyGlyph(ctx, tokens, cx, cy, sx, sy);
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.restore();
+    return;
+  }
 
   ctx.save();
   ctx.font = `700 ${sizePx}px ${face.fontFamily}`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.65)';
-  ctx.fillText(glyph, cx - depth * 0.8, cy - depth * 0.8);
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+  ctx.fillText(glyph, cx + depth * 0.75, cy + depth * 0.75);
 
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.18)';
-  ctx.fillText(glyph, cx + depth, cy + depth);
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
+  ctx.fillText(glyph, cx - depth * 0.45, cy - depth * 0.45);
 
   ctx.fillStyle = color;
   ctx.fillText(glyph, cx, cy);
   ctx.restore();
 }
 
-/** 縦に 2 文字（萬子・数牌の数字 + 萬 など）を配置するときの基準位置 */
+/** 萬子の基準位置（数字を大きく上段に、萬を下段に堂々と配置） */
 function stackedGlyphPositions(face: FaceDrawContext): { top: number; bottom: number } {
-  return { top: face.height * 0.335, bottom: face.height * 0.695 };
+  return { top: face.height * 0.255, bottom: face.height * 0.695 };
 }
 
-const KANJI_NUMBERS = ['', '一', '二', '三', '四', '五', '六', '七', '八', '九'] as const;
+/** 5萬は実物写真どおり「伍」を使用 */
+const KANJI_NUMBERS = ['', '一', '二', '三', '四', '伍', '六', '七', '八', '九'] as const;
 const HONOR_GLYPHS: Record<string, string> = {
   '1z': '東',
   '2z': '南',
@@ -215,380 +257,773 @@ const HONOR_GLYPHS: Record<string, string> = {
 };
 
 // --------------------------------------------------
-// 筒子（ピンズ）: 的（リング）を描く
+// 筒子（ピンズ）: 花柄 1/2筒・分割リング 3..9筒・石入り赤5筒
 // --------------------------------------------------
 
-type PipColor = 'blue' | 'red' | 'green';
+type PipTone = 'navy' | 'maroon' | 'red';
 
 interface PipSpec {
   x: number; // 0..1（牌面幅に対する比率）
   y: number; // 0..1（牌面高さに対する比率）
-  color: PipColor;
+  tone: PipTone;
 }
 
-/**
- * 筒子の配列と配色。
- * 実物の牌は製造元で配色が異なるため、ここ 1 か所で調整できるようにしている。
- */
 const PINZU_LAYOUTS: Record<number, PipSpec[]> = {
-  2: [
-    { x: 0.5, y: 0.3, color: 'blue' },
-    { x: 0.5, y: 0.7, color: 'green' },
-  ],
   3: [
-    { x: 0.27, y: 0.23, color: 'blue' },
-    { x: 0.5, y: 0.5, color: 'red' },
-    { x: 0.73, y: 0.77, color: 'green' },
+    { x: 0.26, y: 0.215, tone: 'navy' },
+    { x: 0.5, y: 0.5, tone: 'maroon' },
+    { x: 0.74, y: 0.785, tone: 'navy' },
   ],
   4: [
-    { x: 0.3, y: 0.3, color: 'blue' },
-    { x: 0.7, y: 0.3, color: 'green' },
-    { x: 0.3, y: 0.7, color: 'green' },
-    { x: 0.7, y: 0.7, color: 'blue' },
+    { x: 0.29, y: 0.28, tone: 'navy' },
+    { x: 0.71, y: 0.28, tone: 'navy' },
+    { x: 0.29, y: 0.72, tone: 'navy' },
+    { x: 0.71, y: 0.72, tone: 'navy' },
   ],
   5: [
-    { x: 0.28, y: 0.28, color: 'blue' },
-    { x: 0.72, y: 0.28, color: 'green' },
-    { x: 0.5, y: 0.5, color: 'red' },
-    { x: 0.28, y: 0.72, color: 'green' },
-    { x: 0.72, y: 0.72, color: 'blue' },
+    { x: 0.27, y: 0.26, tone: 'navy' },
+    { x: 0.73, y: 0.26, tone: 'navy' },
+    { x: 0.5, y: 0.5, tone: 'maroon' },
+    { x: 0.27, y: 0.74, tone: 'navy' },
+    { x: 0.73, y: 0.74, tone: 'navy' },
   ],
   6: [
-    { x: 0.23, y: 0.3, color: 'green' },
-    { x: 0.5, y: 0.3, color: 'green' },
-    { x: 0.77, y: 0.3, color: 'green' },
-    { x: 0.23, y: 0.7, color: 'red' },
-    { x: 0.5, y: 0.7, color: 'red' },
-    { x: 0.77, y: 0.7, color: 'red' },
+    // 上2つ藍黒 + 下2×2臙脂ブロック
+    { x: 0.32, y: 0.22, tone: 'navy' },
+    { x: 0.68, y: 0.22, tone: 'navy' },
+    { x: 0.335, y: 0.57, tone: 'maroon' },
+    { x: 0.665, y: 0.57, tone: 'maroon' },
+    { x: 0.335, y: 0.805, tone: 'maroon' },
+    { x: 0.665, y: 0.805, tone: 'maroon' },
   ],
   7: [
-    { x: 0.22, y: 0.2, color: 'green' },
-    { x: 0.5, y: 0.2, color: 'green' },
-    { x: 0.78, y: 0.2, color: 'green' },
-    { x: 0.22, y: 0.5, color: 'green' },
-    { x: 0.5, y: 0.5, color: 'green' },
-    { x: 0.78, y: 0.5, color: 'green' },
-    { x: 0.5, y: 0.8, color: 'red' },
+    // 上斜め3つ藍黒 + 下2×2臙脂ブロック
+    { x: 0.22, y: 0.18, tone: 'navy' },
+    { x: 0.5, y: 0.27, tone: 'navy' },
+    { x: 0.78, y: 0.36, tone: 'navy' },
+    { x: 0.34, y: 0.59, tone: 'maroon' },
+    { x: 0.66, y: 0.59, tone: 'maroon' },
+    { x: 0.34, y: 0.81, tone: 'maroon' },
+    { x: 0.66, y: 0.81, tone: 'maroon' },
   ],
   8: [
-    { x: 0.17, y: 0.3, color: 'blue' },
-    { x: 0.39, y: 0.3, color: 'blue' },
-    { x: 0.61, y: 0.3, color: 'blue' },
-    { x: 0.83, y: 0.3, color: 'blue' },
-    { x: 0.17, y: 0.7, color: 'blue' },
-    { x: 0.39, y: 0.7, color: 'blue' },
-    { x: 0.61, y: 0.7, color: 'blue' },
-    { x: 0.83, y: 0.7, color: 'blue' },
+    // 2列×4段（すべて藍黒）
+    { x: 0.32, y: 0.175, tone: 'navy' },
+    { x: 0.68, y: 0.175, tone: 'navy' },
+    { x: 0.32, y: 0.391, tone: 'navy' },
+    { x: 0.68, y: 0.391, tone: 'navy' },
+    { x: 0.32, y: 0.608, tone: 'navy' },
+    { x: 0.68, y: 0.608, tone: 'navy' },
+    { x: 0.32, y: 0.825, tone: 'navy' },
+    { x: 0.68, y: 0.825, tone: 'navy' },
   ],
   9: [
-    { x: 0.22, y: 0.2, color: 'green' },
-    { x: 0.5, y: 0.2, color: 'green' },
-    { x: 0.78, y: 0.2, color: 'green' },
-    { x: 0.22, y: 0.5, color: 'red' },
-    { x: 0.5, y: 0.5, color: 'red' },
-    { x: 0.78, y: 0.5, color: 'red' },
-    { x: 0.22, y: 0.8, color: 'green' },
-    { x: 0.5, y: 0.8, color: 'green' },
-    { x: 0.78, y: 0.8, color: 'green' },
+    // 3×3（上段藍黒・中段臙脂・下段藍黒）
+    { x: 0.225, y: 0.2, tone: 'navy' },
+    { x: 0.5, y: 0.2, tone: 'navy' },
+    { x: 0.775, y: 0.2, tone: 'navy' },
+    { x: 0.225, y: 0.5, tone: 'maroon' },
+    { x: 0.5, y: 0.5, tone: 'maroon' },
+    { x: 0.775, y: 0.5, tone: 'maroon' },
+    { x: 0.225, y: 0.8, tone: 'navy' },
+    { x: 0.5, y: 0.8, tone: 'navy' },
+    { x: 0.775, y: 0.8, tone: 'navy' },
   ],
 };
 
-function pipColorValue(color: PipColor): string {
-  if (color === 'blue') return INK.blue;
-  if (color === 'red') return INK.red;
-  return INK.green;
+function pipColors(tone: PipTone): { outer: string; inner: string } {
+  if (tone === 'red') {
+    return { outer: TILE_INK.red, inner: TILE_INK.red };
+  }
+  if (tone === 'maroon') {
+    return { outer: TILE_INK.ink, inner: TILE_INK.maroon };
+  }
+  return { outer: TILE_INK.ink, inner: TILE_INK.ink };
 }
 
-/** 的 1 個。外周の色リング + 白リング + 中心の点。 */
-function drawPip(
+/** 3〜9筒の標準的（外輪 + 白隙 + 5分割輪 + 白隙 + 中心点）。 */
+function drawPinPip(
   { ctx }: FaceDrawContext,
   cx: number,
   cy: number,
   radius: number,
-  color: string,
+  tone: PipTone,
 ): void {
-  // 外周（わずかに暗い縁）
+  const { outer, inner } = pipColors(tone);
+
+  // 外周の輪
   ctx.beginPath();
   ctx.arc(cx, cy, radius, 0, TAU);
-  ctx.fillStyle = color;
+  ctx.fillStyle = outer;
+  ctx.fill();
+
+  // 外側の白い隙間
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius * 0.78, 0, TAU);
+  ctx.fillStyle = TILE_INK.ivoryHole;
+  ctx.fill();
+
+  // 中間の色リング（5分割されるリング本体）
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius * 0.67, 0, TAU);
+  ctx.fillStyle = inner;
+  ctx.fill();
+
+  // 5本の放射状の白ノッチ（写真特有の破線リング表現）
+  ctx.save();
+  ctx.strokeStyle = TILE_INK.ivoryHole;
+  ctx.lineWidth = Math.max(0.8, radius * 0.11);
+  for (let i = 0; i < 5; i += 1) {
+    const angle = -Math.PI / 2 + (i * TAU) / 5;
+    ctx.beginPath();
+    ctx.moveTo(cx + Math.cos(angle) * radius * 0.34, cy + Math.sin(angle) * radius * 0.34);
+    ctx.lineTo(cx + Math.cos(angle) * radius * 0.72, cy + Math.sin(angle) * radius * 0.72);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // 内側の白い隙間
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius * 0.39, 0, TAU);
+  ctx.fillStyle = TILE_INK.ivoryHole;
+  ctx.fill();
+
+  // 中心の丸 + 極小の白芯
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius * 0.23, 0, TAU);
+  ctx.fillStyle = inner;
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius * 0.085, 0, TAU);
+  ctx.fillStyle = TILE_INK.ivoryHole;
+  ctx.fill();
+}
+
+/** 1筒: 伝統的な花輪模様（藍黒外周＋花弁連珠＋臙脂内輪＋6弁花心）。 */
+function drawPinzuOne(face: FaceDrawContext): void {
+  const { ctx, width: w, height: h } = face;
+  const cx = w * 0.5;
+  const cy = h * 0.5;
+  const r = Math.min(w, h) * 0.38;
+
+  // 最外周の藍黒リング
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, TAU);
+  ctx.fillStyle = TILE_INK.ink;
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.arc(cx, cy, r * 0.87, 0, TAU);
+  ctx.fillStyle = TILE_INK.ivoryHole;
+  ctx.fill();
+
+  // 外側花弁帯（16連の鉤状花弁）
+  ctx.beginPath();
+  ctx.arc(cx, cy, r * 0.82, 0, TAU);
+  ctx.fillStyle = TILE_INK.ink;
+  ctx.fill();
+
+  const petals = 16;
+  for (let i = 0; i < petals; i += 1) {
+    const a = (i * TAU) / petals;
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(a);
+    // 鉤形の白抜き（写真の渦巻き花模様）
+    ctx.fillStyle = TILE_INK.ivoryHole;
+    ctx.beginPath();
+    ctx.ellipse(r * 0.69, 0, r * 0.068, r * 0.048, 0.3, 0, TAU);
+    ctx.fill();
+
+    ctx.strokeStyle = TILE_INK.ivoryHole;
+    ctx.lineWidth = Math.max(0.7, r * 0.036);
+    ctx.beginPath();
+    ctx.moveTo(r * 0.6, -r * 0.055);
+    ctx.lineTo(r * 0.77, -r * 0.055);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // 白輪の区切り
+  ctx.beginPath();
+  ctx.arc(cx, cy, r * 0.55, 0, TAU);
+  ctx.fillStyle = TILE_INK.ivoryHole;
+  ctx.fill();
+
+  // 臙脂の連珠内輪
+  ctx.beginPath();
+  ctx.arc(cx, cy, r * 0.51, 0, TAU);
+  ctx.fillStyle = TILE_INK.maroon;
+  ctx.fill();
+
+  const innerBeads = 16;
+  ctx.fillStyle = TILE_INK.ivoryHole;
+  for (let i = 0; i < innerBeads; i += 1) {
+    const a = (i * TAU) / innerBeads;
+    ctx.beginPath();
+    ctx.arc(
+      cx + Math.cos(a) * r * 0.425,
+      cy + Math.sin(a) * r * 0.425,
+      r * 0.028,
+      0,
+      TAU,
+    );
+    ctx.fill();
+  }
+
+  // 中心の白輪と6本輻の臙脂花車輪
+  ctx.beginPath();
+  ctx.arc(cx, cy, r * 0.3, 0, TAU);
+  ctx.fillStyle = TILE_INK.ivoryHole;
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.arc(cx, cy, r * 0.24, 0, TAU);
+  ctx.strokeStyle = TILE_INK.maroon;
+  ctx.lineWidth = Math.max(0.8, r * 0.045);
+  ctx.stroke();
+
+  ctx.save();
+  ctx.strokeStyle = TILE_INK.maroon;
+  ctx.lineWidth = Math.max(0.7, r * 0.036);
+  for (let i = 0; i < 6; i += 1) {
+    const a = (i * TAU) / 6;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(cx + Math.cos(a) * r * 0.24, cy + Math.sin(a) * r * 0.24);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  ctx.beginPath();
+  ctx.arc(cx, cy, r * 0.075, 0, TAU);
+  ctx.fillStyle = TILE_INK.maroon;
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.arc(cx, cy, r * 0.03, 0, TAU);
+  ctx.fillStyle = TILE_INK.ivoryHole;
+  ctx.fill();
+}
+
+/** 2筒の8弁花柄メダリオン 1 個。 */
+function drawPinzuTwoFlower(
+  { ctx }: FaceDrawContext,
+  cx: number,
+  cy: number,
+  radius: number,
+): void {
+  // 外輪
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius, 0, TAU);
+  ctx.fillStyle = TILE_INK.ink;
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius * 0.85, 0, TAU);
+  ctx.fillStyle = TILE_INK.ivoryHole;
+  ctx.fill();
+
+  // 花盤（藍黒地）
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius * 0.77, 0, TAU);
+  ctx.fillStyle = TILE_INK.ink;
+  ctx.fill();
+
+  // 8枚の涙滴形花弁を白抜き
+  const petals = 8;
+  for (let i = 0; i < petals; i += 1) {
+    const a = (i * TAU) / petals;
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(a);
+    ctx.fillStyle = TILE_INK.ivoryHole;
+    ctx.beginPath();
+    ctx.ellipse(radius * 0.49, 0, radius * 0.18, radius * 0.085, 0, 0, TAU);
+    ctx.fill();
+
+    // 花弁の内側に藍黒の細脈
+    ctx.fillStyle = TILE_INK.ink;
+    ctx.beginPath();
+    ctx.ellipse(radius * 0.51, 0, radius * 0.11, radius * 0.032, 0, 0, TAU);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // 中心の藍黒小輪 + 白穴
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius * 0.22, 0, TAU);
+  ctx.fillStyle = TILE_INK.ink;
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius * 0.1, 0, TAU);
+  ctx.fillStyle = TILE_INK.ivoryHole;
+  ctx.fill();
+}
+
+/** 赤5筒中央の輝き石（ファセットカット・ラインストーン）。 */
+function drawPinzuGem(
+  { ctx }: FaceDrawContext,
+  cx: number,
+  cy: number,
+  radius: number,
+): void {
+  // 台座の金属影輪
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius, 0, TAU);
+  ctx.fillStyle = '#6f6554';
   ctx.fill();
 
   ctx.beginPath();
   ctx.arc(cx, cy, radius * 0.9, 0, TAU);
-  ctx.fillStyle = color;
+  ctx.fillStyle = '#d4ccb8';
   ctx.fill();
 
-  // 白リング
-  ctx.beginPath();
-  ctx.arc(cx, cy, radius * 0.58, 0, TAU);
-  ctx.fillStyle = INK.ivoryTop;
-  ctx.fill();
-
-  // 中心の点
-  ctx.beginPath();
-  ctx.arc(cx, cy, radius * 0.26, 0, TAU);
-  ctx.fillStyle = color;
-  ctx.fill();
-
-  // 彫りの陰
-  ctx.beginPath();
-  ctx.arc(cx, cy, radius, 0, TAU);
-  ctx.strokeStyle = 'rgba(0, 0, 0, 0.14)';
-  ctx.lineWidth = Math.max(0.8, radius * 0.08);
-  ctx.stroke();
-}
-
-function drawPinzuOne(face: FaceDrawContext, redFive: boolean): void {
-  const { ctx, width: w, height: h } = face;
-  const cx = w * 0.5;
-  const cy = h * 0.5;
-  const r = Math.min(w, h) * 0.33;
-
-  const rings: Array<{ scale: number; color: string }> = redFive
-    ? [
-        { scale: 1, color: INK.red },
-        { scale: 0.72, color: '#e0b46a' },
-        { scale: 0.46, color: INK.red },
-        { scale: 0.2, color: INK.red },
-      ]
-    : [
-        { scale: 1, color: INK.blue },
-        { scale: 0.72, color: INK.red },
-        { scale: 0.46, color: INK.green },
-        { scale: 0.2, color: INK.blue },
-      ];
-
-  for (const ring of rings) {
+  // 8方向のファセット三角形
+  const facets = 8;
+  const facetColors = [
+    '#ffffff',
+    '#b8ae99',
+    '#7c725f',
+    '#f5f2ea',
+    '#8c826e',
+    '#e8e2d3',
+    '#a39985',
+    '#fffef9',
+  ];
+  for (let i = 0; i < facets; i += 1) {
+    const a0 = (i * TAU) / facets - Math.PI / 8;
+    const a1 = ((i + 1) * TAU) / facets - Math.PI / 8;
     ctx.beginPath();
-    ctx.arc(cx, cy, r * ring.scale, 0, TAU);
-    ctx.fillStyle = ring.color;
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(cx + Math.cos(a0) * radius * 0.88, cy + Math.sin(a0) * radius * 0.88);
+    ctx.lineTo(cx + Math.cos(a1) * radius * 0.88, cy + Math.sin(a1) * radius * 0.88);
+    ctx.closePath();
+    ctx.fillStyle = facetColors[i % facetColors.length]!;
     ctx.fill();
-    ctx.strokeStyle = 'rgba(0, 0, 0, 0.18)';
-    ctx.lineWidth = Math.max(0.8, r * 0.05);
-    ctx.stroke();
   }
+
+  // 中央のテーブル面（八角風の輝き）
+  const tableGrad = ctx.createRadialGradient(
+    cx - radius * 0.16,
+    cy - radius * 0.16,
+    radius * 0.05,
+    cx,
+    cy,
+    radius * 0.52,
+  );
+  tableGrad.addColorStop(0, '#ffffff');
+  tableGrad.addColorStop(0.5, '#ece5d4');
+  tableGrad.addColorStop(1, '#9c927d');
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius * 0.48, 0, TAU);
+  ctx.fillStyle = tableGrad;
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.78)';
+  ctx.lineWidth = Math.max(0.6, radius * 0.05);
+  ctx.stroke();
+
+  // 左上の強い反射光点
+  ctx.beginPath();
+  ctx.arc(cx - radius * 0.22, cy - radius * 0.22, radius * 0.15, 0, TAU);
+  ctx.fillStyle = '#ffffff';
+  ctx.fill();
 }
 
 function drawPinzu(face: FaceDrawContext, n: number, redFive: boolean): void {
   if (n === 1) {
-    drawPinzuOne(face, redFive);
+    drawPinzuOne(face);
+    return;
+  }
+
+  if (n === 2) {
+    const r = face.width * 0.232;
+    drawPinzuTwoFlower(face, face.width * 0.5, face.height * 0.275, r);
+    drawPinzuTwoFlower(face, face.width * 0.5, face.height * 0.725, r);
+    return;
+  }
+
+  if (n === 5 && redFive) {
+    const r = face.width * 0.148;
+    const corners = [
+      { x: 0.27, y: 0.26 },
+      { x: 0.73, y: 0.26 },
+      { x: 0.27, y: 0.74 },
+      { x: 0.73, y: 0.74 },
+    ];
+    for (const p of corners) {
+      drawPinPip(face, face.width * p.x, face.height * p.y, r, 'red');
+    }
+    drawPinzuGem(face, face.width * 0.5, face.height * 0.5, face.width * 0.142);
     return;
   }
 
   const layout = PINZU_LAYOUTS[n];
   if (!layout) return;
 
-  const columns = new Set(layout.map((p) => p.x.toFixed(3))).size;
-  const rows = new Set(layout.map((p) => p.y.toFixed(3))).size;
-  const radius = Math.min(
-    (face.width * 0.74) / (columns * 2.35),
-    (face.height * 0.76) / (rows * 2.35),
-  );
+  const radiusByCount: Record<number, number> = {
+    3: face.width * 0.145,
+    4: face.width * 0.16,
+    5: face.width * 0.148,
+    6: face.width * 0.146,
+    7: face.width * 0.136,
+    8: face.width * 0.122,
+    9: face.width * 0.124,
+  };
+  const radius = radiusByCount[n] ?? face.width * 0.13;
 
   for (const pip of layout) {
-    const color = redFive ? INK.red : pipColorValue(pip.color);
-    drawPip(face, face.width * pip.x, face.height * pip.y, radius, color);
+    drawPinPip(face, face.width * pip.x, face.height * pip.y, radius, pip.tone);
   }
 }
 
 // --------------------------------------------------
-// 索子（ソーズ）: 竹と、1 索の鳥
+// 索子（ソーズ）: 中抜き節入り竹・M/W型8索・孔雀1索
 // --------------------------------------------------
 
 interface StickSpec {
   x: number;
   y: number;
-  red?: boolean;
+  tone?: 'navy' | 'maroon';
+  angle?: number;
+  heightScale?: number;
 }
 
 const SOUZU_LAYOUTS: Record<number, StickSpec[]> = {
   2: [
-    { x: 0.5, y: 0.28 },
-    { x: 0.5, y: 0.72 },
+    { x: 0.5, y: 0.285 },
+    { x: 0.5, y: 0.715 },
   ],
   3: [
-    { x: 0.5, y: 0.28 },
-    { x: 0.3, y: 0.72 },
-    { x: 0.7, y: 0.72 },
+    { x: 0.5, y: 0.285 },
+    { x: 0.29, y: 0.715 },
+    { x: 0.71, y: 0.715 },
   ],
   4: [
-    { x: 0.3, y: 0.28 },
-    { x: 0.7, y: 0.28 },
-    { x: 0.3, y: 0.72 },
-    { x: 0.7, y: 0.72 },
+    { x: 0.3, y: 0.285 },
+    { x: 0.7, y: 0.285 },
+    { x: 0.3, y: 0.715 },
+    { x: 0.7, y: 0.715 },
   ],
   5: [
-    { x: 0.28, y: 0.26 },
-    { x: 0.72, y: 0.26 },
-    { x: 0.5, y: 0.5, red: true },
-    { x: 0.28, y: 0.74 },
-    { x: 0.72, y: 0.74 },
+    { x: 0.26, y: 0.275 },
+    { x: 0.74, y: 0.275 },
+    { x: 0.5, y: 0.5, tone: 'maroon' },
+    { x: 0.26, y: 0.725 },
+    { x: 0.74, y: 0.725 },
   ],
   6: [
-    { x: 0.22, y: 0.3 },
-    { x: 0.5, y: 0.3 },
-    { x: 0.78, y: 0.3 },
-    { x: 0.22, y: 0.7 },
-    { x: 0.5, y: 0.7 },
-    { x: 0.78, y: 0.7 },
+    { x: 0.23, y: 0.285 },
+    { x: 0.5, y: 0.285 },
+    { x: 0.77, y: 0.285 },
+    { x: 0.23, y: 0.715 },
+    { x: 0.5, y: 0.715 },
+    { x: 0.77, y: 0.715 },
   ],
   7: [
-    { x: 0.5, y: 0.18, red: true },
-    { x: 0.22, y: 0.5 },
-    { x: 0.5, y: 0.5 },
-    { x: 0.78, y: 0.5 },
-    { x: 0.22, y: 0.82 },
-    { x: 0.5, y: 0.82 },
-    { x: 0.78, y: 0.82 },
+    { x: 0.5, y: 0.205, tone: 'maroon' },
+    { x: 0.23, y: 0.505 },
+    { x: 0.5, y: 0.505 },
+    { x: 0.77, y: 0.505 },
+    { x: 0.23, y: 0.8 },
+    { x: 0.5, y: 0.8 },
+    { x: 0.77, y: 0.8 },
   ],
   8: [
-    { x: 0.16, y: 0.3 },
-    { x: 0.39, y: 0.3 },
-    { x: 0.61, y: 0.3 },
-    { x: 0.84, y: 0.3 },
-    { x: 0.16, y: 0.7 },
-    { x: 0.39, y: 0.7 },
-    { x: 0.61, y: 0.7 },
-    { x: 0.84, y: 0.7 },
+    // 写真通りの W/M 型8索（斜め2本を描いてから左右の縦棒を重ねる）
+    // 上段: ∧ 型（中央上で出会う斜め2本）+ 左右縦棒
+    { x: 0.365, y: 0.305, angle: 0.92, heightScale: 0.9 },
+    { x: 0.635, y: 0.305, angle: -0.92, heightScale: 0.9 },
+    { x: 0.215, y: 0.285 },
+    { x: 0.785, y: 0.285 },
+    // 下段: ∨ 型（中央下で出会う斜め2本）+ 左右縦棒
+    { x: 0.365, y: 0.695, angle: -0.92, heightScale: 0.9 },
+    { x: 0.635, y: 0.695, angle: 0.92, heightScale: 0.9 },
+    { x: 0.215, y: 0.715 },
+    { x: 0.785, y: 0.715 },
   ],
   9: [
-    { x: 0.22, y: 0.2 },
-    { x: 0.5, y: 0.2 },
-    { x: 0.78, y: 0.2 },
-    { x: 0.22, y: 0.5 },
-    { x: 0.5, y: 0.5 },
-    { x: 0.78, y: 0.5 },
-    { x: 0.22, y: 0.8 },
-    { x: 0.5, y: 0.8 },
-    { x: 0.78, y: 0.8 },
+    // 左・右列が藍黒、中央列が臙脂
+    { x: 0.23, y: 0.205 },
+    { x: 0.5, y: 0.205, tone: 'maroon' },
+    { x: 0.77, y: 0.205 },
+    { x: 0.23, y: 0.5 },
+    { x: 0.5, y: 0.5, tone: 'maroon' },
+    { x: 0.77, y: 0.5 },
+    { x: 0.23, y: 0.795 },
+    { x: 0.5, y: 0.795, tone: 'maroon' },
+    { x: 0.77, y: 0.795 },
   ],
 };
 
-/** 竹 1 本。節のある竿として描く。 */
+/** 日本牌特有の中抜き彫刻竹（上下横帽＋中央節膨らみ＋縦中抜き溝）。 */
 function drawBambooStick(
   { ctx }: FaceDrawContext,
   cx: number,
   cy: number,
   widthPx: number,
   heightPx: number,
-  red: boolean,
+  color: string,
+  angle = 0,
 ): void {
   const halfW = widthPx / 2;
   const halfH = heightPx / 2;
-  const radius = halfW * 0.85;
+  const holeColor = TILE_INK.ivoryHole;
 
   ctx.save();
   ctx.translate(cx, cy);
-
-  const body = ctx.createLinearGradient(-halfW, 0, halfW, 0);
-  if (red) {
-    body.addColorStop(0, '#9d1b23');
-    body.addColorStop(0.35, INK.red);
-    body.addColorStop(0.7, '#d9434b');
-    body.addColorStop(1, '#8f1620');
-  } else {
-    body.addColorStop(0, INK.bambooDark);
-    body.addColorStop(0.35, INK.bambooLight);
-    body.addColorStop(0.7, '#3fa367');
-    body.addColorStop(1, INK.bambooDark);
+  if (angle !== 0) {
+    ctx.rotate(angle);
   }
 
-  roundRectPath(ctx, -halfW, -halfH, widthPx, heightPx, radius);
-  ctx.fillStyle = body;
+  // 外形輪郭（濃い枠）
+  ctx.fillStyle = color;
+
+  // 縦軸本体
+  roundRectPath(ctx, -halfW * 0.74, -halfH * 0.92, widthPx * 0.74, heightPx * 0.92, halfW * 0.35);
   ctx.fill();
-  ctx.strokeStyle = red ? '#6f1017' : '#084024';
-  ctx.lineWidth = Math.max(0.7, widthPx * 0.075);
-  ctx.stroke();
 
-  // 節（2 本の横線）
-  ctx.strokeStyle = red ? 'rgba(255, 225, 225, 0.55)' : 'rgba(228, 244, 226, 0.55)';
-  ctx.lineWidth = Math.max(0.6, widthPx * 0.06);
-  for (const t of [-0.2, 0.2]) {
-    const y = halfH * t;
-    ctx.beginPath();
-    ctx.moveTo(-halfW * 0.82, y);
-    ctx.quadraticCurveTo(0, y + widthPx * 0.06, halfW * 0.82, y);
-    ctx.stroke();
-  }
+  // 上下の張出し横帽
+  const capW = widthPx * 1.14;
+  const capH = heightPx * 0.18;
+  roundRectPath(ctx, -capW / 2, -halfH, capW, capH, capH * 0.48);
+  ctx.fill();
+  roundRectPath(ctx, -capW / 2, halfH - capH, capW, capH, capH * 0.48);
+  ctx.fill();
 
-  // 上下の端の艶
-  ctx.fillStyle = red ? 'rgba(255, 255, 255, 0.28)' : 'rgba(255, 255, 255, 0.32)';
+  // 中央の節（ふっくらした楕円リング）
+  const nodeW = widthPx * 1.1;
+  const nodeH = heightPx * 0.25;
   ctx.beginPath();
-  ctx.ellipse(0, -halfH + heightPx * 0.06, halfW * 0.55, heightPx * 0.045, 0, 0, TAU);
+  ctx.ellipse(0, 0, nodeW / 2, nodeH / 2, 0, 0, TAU);
+  ctx.fill();
+
+  // 節の左右の横張り線
+  const barW = widthPx * 1.2;
+  const barH = Math.max(1.2, heightPx * 0.045);
+  roundRectPath(ctx, -barW / 2, -barH / 2, barW, barH, barH / 2);
+  ctx.fill();
+
+  // 内側の白い中抜き溝（実物竹牌のくっきりした二本柱）
+  ctx.fillStyle = holeColor;
+  const channelW = widthPx * 0.32;
+  const channelH = heightPx * 0.26;
+  roundRectPath(ctx, -channelW / 2, -halfH + capH * 0.72, channelW, channelH, channelW * 0.48);
+  ctx.fill();
+  roundRectPath(
+    ctx,
+    -channelW / 2,
+    halfH - capH * 0.72 - channelH,
+    channelW,
+    channelH,
+    channelW * 0.48,
+  );
+  ctx.fill();
+
+  // 中央節の白い中抜き穴
+  ctx.beginPath();
+  ctx.ellipse(0, 0, widthPx * 0.22, heightPx * 0.072, 0, 0, TAU);
+  ctx.fill();
+
+  // 上下の帽の細い白スリット（立体的な彫り感）
+  const slitW = widthPx * 0.48;
+  const slitH = Math.max(0.8, heightPx * 0.032);
+  roundRectPath(ctx, -slitW / 2, -halfH + capH * 0.36, slitW, slitH, slitH / 2);
+  ctx.fill();
+  roundRectPath(ctx, -slitW / 2, halfH - capH * 0.36 - slitH, slitW, slitH, slitH / 2);
   ctx.fill();
 
   ctx.restore();
 }
 
-/** 1 索の鳥。孔雀をかたどった簡略表現。 */
+/** 1索: 写真の伝統孔雀（上段の放射線＋丸紋尾羽＋下段の羽ばたく鳥＋二本足）。 */
 function drawSouzuBird(face: FaceDrawContext): void {
   const { ctx, width: w, height: h } = face;
-  const cx = w * 0.5;
-  const cy = h * 0.52;
 
-  // 尾羽（扇状）
-  const feathers = [-0.55, -0.28, 0, 0.28, 0.55];
-  feathers.forEach((angle, index) => {
-    ctx.save();
-    ctx.translate(cx - w * 0.03, cy + h * 0.06);
-    ctx.rotate(angle);
-    const grad = ctx.createLinearGradient(0, 0, 0, -h * 0.34);
-    grad.addColorStop(0, index % 2 === 0 ? INK.bambooLight : '#2b7f4f');
-    grad.addColorStop(1, index % 2 === 0 ? '#1f6b42' : INK.green);
-    ctx.fillStyle = grad;
+  // --- 1. 上段の放射線（孔雀の飾り羽根の光線） ---
+  const plumeCx = w * 0.51;
+  const plumeCy = h * 0.31;
+  ctx.save();
+  ctx.strokeStyle = TILE_INK.ink;
+  ctx.lineWidth = Math.max(0.8, w * 0.016);
+  ctx.lineCap = 'round';
+
+  const rayCount = 24;
+  for (let i = 0; i < rayCount; i += 1) {
+    const t = i / (rayCount - 1);
+    const angle = -Math.PI * 1.06 + t * Math.PI * 1.12;
+    const innerR = w * 0.23;
+    const outerR = w * (0.37 + (i % 2 === 0 ? 0.04 : 0.01));
     ctx.beginPath();
-    ctx.moveTo(-w * 0.035, 0);
-    ctx.quadraticCurveTo(0, -h * 0.36, w * 0.035, 0);
-    ctx.quadraticCurveTo(0, h * 0.02, -w * 0.035, 0);
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(0, 0, 0, 0.2)';
-    ctx.lineWidth = Math.max(0.6, w * 0.006);
+    ctx.moveTo(plumeCx + Math.cos(angle) * innerR, plumeCy + Math.sin(angle) * innerR * 1.08);
+    ctx.lineTo(plumeCx + Math.cos(angle) * outerR, plumeCy + Math.sin(angle) * outerR * 1.12);
     ctx.stroke();
+  }
+  ctx.restore();
+
+  // --- 2. 上段の孔雀の丸紋（11個の目玉模様の束） ---
+  const plumes: Array<{ x: number; y: number; r: number }> = [
+    { x: 0.5, y: 0.21, r: 0.056 },
+    { x: 0.37, y: 0.25, r: 0.054 },
+    { x: 0.63, y: 0.25, r: 0.054 },
+    { x: 0.49, y: 0.305, r: 0.058 },
+    { x: 0.34, y: 0.34, r: 0.055 },
+    { x: 0.66, y: 0.34, r: 0.055 },
+    { x: 0.43, y: 0.39, r: 0.055 },
+    { x: 0.57, y: 0.39, r: 0.055 },
+    { x: 0.37, y: 0.455, r: 0.052 },
+    { x: 0.5, y: 0.465, r: 0.054 },
+    { x: 0.63, y: 0.455, r: 0.052 },
+  ];
+
+  // 丸紋背景を白く整えてから目玉紋を描く
+  for (const p of plumes) {
+    const px = w * p.x;
+    const py = h * p.y;
+    const pr = w * p.r;
+    ctx.beginPath();
+    ctx.arc(px, py, pr * 1.05, 0, TAU);
+    ctx.fillStyle = TILE_INK.ivoryHole;
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.arc(px, py, pr, 0, TAU);
+    ctx.fillStyle = TILE_INK.ink;
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.arc(px, py, pr * 0.55, 0, TAU);
+    ctx.fillStyle = TILE_INK.ivoryHole;
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.arc(px, py, pr * 0.24, 0, TAU);
+    ctx.fillStyle = TILE_INK.ink;
+    ctx.fill();
+  }
+
+  // --- 3. 鳥の両脇に跳ねる装飾小線 ---
+  ctx.save();
+  ctx.strokeStyle = TILE_INK.ink;
+  ctx.lineWidth = Math.max(0.8, w * 0.018);
+  ctx.lineCap = 'round';
+  // 左の飛沫線
+  ctx.beginPath();
+  ctx.moveTo(w * 0.2, h * 0.53);
+  ctx.lineTo(w * 0.33, h * 0.6);
+  ctx.moveTo(w * 0.19, h * 0.59);
+  ctx.lineTo(w * 0.29, h * 0.62);
+  // 右の飛沫線
+  ctx.moveTo(w * 0.8, h * 0.53);
+  ctx.lineTo(w * 0.67, h * 0.6);
+  ctx.moveTo(w * 0.81, h * 0.59);
+  ctx.lineTo(w * 0.71, h * 0.62);
+  ctx.stroke();
+  ctx.restore();
+
+  // --- 4. 左右に広げた翼（横縞入り扇翼） ---
+  const drawWing = (dir: -1 | 1) => {
+    ctx.save();
+    const ox = w * (0.5 + dir * 0.08);
+    const oy = h * 0.67;
+    ctx.beginPath();
+    ctx.moveTo(ox, oy - h * 0.02);
+    ctx.quadraticCurveTo(w * (0.5 + dir * 0.32), h * 0.6, w * (0.5 + dir * 0.37), h * 0.755);
+    ctx.lineTo(w * (0.5 + dir * 0.1), h * 0.745);
+    ctx.closePath();
+    ctx.fillStyle = TILE_INK.ivoryHole;
+    ctx.fill();
+    ctx.strokeStyle = TILE_INK.ink;
+    ctx.lineWidth = Math.max(1, w * 0.022);
+    ctx.stroke();
+
+    // 翼内の羽根区切り線
+    ctx.lineWidth = Math.max(0.8, w * 0.016);
+    for (const frac of [0.35, 0.62, 0.84]) {
+      ctx.beginPath();
+      ctx.moveTo(w * (0.5 + dir * (0.09 + frac * 0.24)), h * (0.66 + frac * 0.03));
+      ctx.lineTo(w * (0.5 + dir * (0.1 + frac * 0.24)), h * 0.765);
+      ctx.stroke();
+    }
+    // 横段線
+    for (const ry of [0.695, 0.73]) {
+      ctx.beginPath();
+      ctx.moveTo(w * (0.5 + dir * 0.11), h * ry);
+      ctx.lineTo(w * (0.5 + dir * 0.33), h * (ry + 0.015));
+      ctx.stroke();
+    }
     ctx.restore();
-  });
+  };
+  drawWing(-1);
+  drawWing(1);
 
-  // 胴
-  const body = ctx.createLinearGradient(cx - w * 0.16, cy, cx + w * 0.16, cy + h * 0.16);
-  body.addColorStop(0, '#2f9159');
-  body.addColorStop(1, '#0c5a34');
+  // --- 5. 首・胴体・頭（左向きに首をもたげる孔雀の体） ---
+  ctx.save();
+  // 胴体の白抜き下地
   ctx.beginPath();
-  ctx.ellipse(cx + w * 0.02, cy + h * 0.13, w * 0.115, h * 0.135, 0.18, 0, TAU);
-  ctx.fillStyle = body;
+  ctx.ellipse(w * 0.5, h * 0.71, w * 0.11, h * 0.115, 0, 0, TAU);
+  ctx.fillStyle = TILE_INK.ivoryHole;
   ctx.fill();
-  ctx.strokeStyle = 'rgba(0, 0, 0, 0.22)';
-  ctx.lineWidth = Math.max(0.7, w * 0.007);
+
+  // S字の首と胴の太輪郭
+  ctx.strokeStyle = TILE_INK.ink;
+  ctx.lineWidth = Math.max(1.2, w * 0.026);
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  ctx.moveTo(w * 0.44, h * 0.62);
+  ctx.bezierCurveTo(w * 0.39, h * 0.72, w * 0.44, h * 0.79, w * 0.52, h * 0.79);
+  ctx.bezierCurveTo(w * 0.59, h * 0.79, w * 0.6, h * 0.69, w * 0.55, h * 0.63);
   ctx.stroke();
 
-  // 頭
+  // 胸の臙脂アクセント（写真でも首元〜胸に赤み）
+  ctx.strokeStyle = TILE_INK.maroon;
+  ctx.lineWidth = Math.max(1, w * 0.02);
   ctx.beginPath();
-  ctx.arc(cx + w * 0.1, cy - h * 0.03, w * 0.062, 0, TAU);
-  ctx.fillStyle = '#2b8c55';
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(0, 0, 0, 0.22)';
+  ctx.moveTo(w * 0.47, h * 0.67);
+  ctx.quadraticCurveTo(w * 0.5, h * 0.74, w * 0.55, h * 0.71);
   ctx.stroke();
 
-  // 嘴
+  // 頭（右寄りに頭・左向き嘴）
   ctx.beginPath();
-  ctx.moveTo(cx + w * 0.155, cy - h * 0.04);
-  ctx.lineTo(cx + w * 0.22, cy - h * 0.015);
-  ctx.lineTo(cx + w * 0.155, cy + h * 0.005);
+  ctx.arc(w * 0.51, h * 0.6, w * 0.068, 0, TAU);
+  ctx.fillStyle = TILE_INK.ink;
+  ctx.fill();
+
+  // 目
+  ctx.beginPath();
+  ctx.arc(w * 0.49, h * 0.595, w * 0.022, 0, TAU);
+  ctx.fillStyle = TILE_INK.ivoryHole;
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(w * 0.488, h * 0.595, w * 0.01, 0, TAU);
+  ctx.fillStyle = TILE_INK.ink;
+  ctx.fill();
+
+  // 嘴（左斜め上）
+  ctx.beginPath();
+  ctx.moveTo(w * 0.445, h * 0.585);
+  ctx.lineTo(w * 0.37, h * 0.57);
+  ctx.lineTo(w * 0.445, h * 0.615);
   ctx.closePath();
-  ctx.fillStyle = '#e2a63c';
+  ctx.fillStyle = TILE_INK.ink;
   ctx.fill();
 
-  // 目の点
-  ctx.beginPath();
-  ctx.arc(cx + w * 0.118, cy - h * 0.045, w * 0.011, 0, TAU);
-  ctx.fillStyle = INK.ink;
-  ctx.fill();
-
-  // 止まり木
-  ctx.strokeStyle = '#8b6a3c';
-  ctx.lineWidth = Math.max(0.8, w * 0.012);
-  ctx.beginPath();
-  ctx.moveTo(cx - w * 0.2, cy + h * 0.28);
-  ctx.lineTo(cx + w * 0.2, cy + h * 0.28);
-  ctx.stroke();
+  // --- 6. 二本足と爪 ---
+  ctx.strokeStyle = TILE_INK.ink;
+  ctx.lineWidth = Math.max(1, w * 0.022);
+  for (const lx of [w * 0.455, w * 0.545]) {
+    ctx.beginPath();
+    ctx.moveTo(lx, h * 0.79);
+    ctx.lineTo(lx, h * 0.875);
+    ctx.moveTo(lx - w * 0.055, h * 0.89);
+    ctx.lineTo(lx, h * 0.875);
+    ctx.lineTo(lx + w * 0.045, h * 0.89);
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 function drawSouzu(face: FaceDrawContext, n: number, redFive: boolean): void {
@@ -600,18 +1035,32 @@ function drawSouzu(face: FaceDrawContext, n: number, redFive: boolean): void {
   const layout = SOUZU_LAYOUTS[n];
   if (!layout) return;
 
-  const columns = new Set(layout.map((s) => s.x.toFixed(3))).size;
-  const stickW = Math.min((face.width * 0.72) / (columns * 2.05), face.width * 0.13);
-  const stickH = face.height * 0.25;
+  const stickSizeByCount: Record<number, { w: number; h: number }> = {
+    2: { w: face.width * 0.21, h: face.height * 0.34 },
+    3: { w: face.width * 0.2, h: face.height * 0.33 },
+    4: { w: face.width * 0.2, h: face.height * 0.33 },
+    5: { w: face.width * 0.19, h: face.height * 0.315 },
+    6: { w: face.width * 0.185, h: face.height * 0.33 },
+    7: { w: face.width * 0.175, h: face.height * 0.235 },
+    8: { w: face.width * 0.165, h: face.height * 0.3 },
+    9: { w: face.width * 0.175, h: face.height * 0.235 },
+  };
+  const baseSize = stickSizeByCount[n] ?? { w: face.width * 0.18, h: face.height * 0.25 };
 
   for (const stick of layout) {
+    const color = redFive
+      ? TILE_INK.red
+      : stick.tone === 'maroon'
+        ? TILE_INK.maroon
+        : TILE_INK.ink;
     drawBambooStick(
       face,
       face.width * stick.x,
       face.height * stick.y,
-      stickW,
-      stickH,
-      Boolean(stick.red) || redFive,
+      baseSize.w,
+      baseSize.h * (stick.heightScale ?? 1),
+      color,
+      stick.angle ?? 0,
     );
   }
 }
@@ -640,6 +1089,7 @@ export function drawTileFace(
     width: options.width,
     height: options.height,
     fontFamily: options.fontFamily ?? DEFAULT_FONT_FAMILY,
+    useCustomFont: options.fontFamily !== undefined,
   };
 
   drawIvoryBase(face);
@@ -655,10 +1105,17 @@ export function drawTileFace(
       KANJI_NUMBERS[n] ?? String(n),
       face.width * 0.5,
       top,
-      face.height * 0.31,
-      redFive ? INK.red : INK.ink,
+      face.height * 0.41,
+      redFive ? TILE_INK.red : TILE_INK.ink,
     );
-    drawEngravedGlyph(face, '萬', face.width * 0.5, bottom, face.height * 0.3, INK.red);
+    drawEngravedGlyph(
+      face,
+      '萬',
+      face.width * 0.5,
+      bottom,
+      face.height * 0.44,
+      redFive ? TILE_INK.red : TILE_INK.maroon,
+    );
     return;
   }
 
@@ -678,13 +1135,13 @@ export function drawTileFace(
     // 白: 無地のまま（実物どおり）
     return;
   }
-  const color = n === 6 ? INK.green : n === 7 ? INK.red : INK.ink;
+  const color = n === 7 ? TILE_INK.maroon : TILE_INK.ink;
   drawEngravedGlyph(
     face,
     glyph,
     face.width * 0.5,
     face.height * 0.5,
-    face.height * 0.46,
+    face.height * 0.68,
     color,
   );
 }
@@ -721,15 +1178,15 @@ export function drawTileBack(ctx: CanvasRenderingContext2D, options: TileBackOpt
   const { width: w, height: h } = options;
 
   const base = ctx.createLinearGradient(0, 0, w, h);
-  base.addColorStop(0, INK.backBase);
+  base.addColorStop(0, TILE_INK.backBase);
   base.addColorStop(0.5, '#0f5132');
-  base.addColorStop(1, INK.backBaseDeep);
+  base.addColorStop(1, TILE_INK.backBaseDeep);
   ctx.fillStyle = base;
   ctx.fillRect(0, 0, w, h);
 
   // 斜めの織り目
   ctx.save();
-  ctx.strokeStyle = INK.backPattern;
+  ctx.strokeStyle = TILE_INK.backPattern;
   ctx.lineWidth = Math.max(0.8, w * 0.008);
   const step = Math.max(4, w * 0.055);
   for (let i = -h; i < w + h; i += step) {
@@ -747,7 +1204,7 @@ export function drawTileBack(ctx: CanvasRenderingContext2D, options: TileBackOpt
   // 枠
   const inset = Math.max(2, w * 0.055);
   roundRectPath(ctx, inset, inset, w - inset * 2, h - inset * 2, Math.min(w, h) * 0.09);
-  ctx.strokeStyle = INK.backFrame;
+  ctx.strokeStyle = TILE_INK.backFrame;
   ctx.lineWidth = Math.max(1, w * 0.028);
   ctx.stroke();
 
@@ -923,12 +1380,6 @@ export function createTileBackCanvas(
 // --------------------------------------------------
 // DOM 用スプライトシート
 // --------------------------------------------------
-//
-// 2D の牌コンポーネント（`.mj-tile`）で使うための経路。
-// canvas 1 枚を data URL にして CSS の background-image として共有し、
-// 牌ごとに background-position だけを変える。
-// 牌 1 枚ごとに <img> や <canvas> を作らないので、
-// 136 枚 + 捨て牌 + 副露を描いても DOM ノードとメモリが増えない。
 
 /** スプライトシートの格子（7×6 = 42 枠。34 種 + 赤ドラ 3 種 = 37 枠を収める） */
 export const SPRITE_COLUMNS = 7;
@@ -972,7 +1423,6 @@ export function createTileSpriteSheet(
   const { canvas, ctx } = created;
 
   const keys: TileAtlasKey[] = [...createAtlasKeys(false)];
-  // 赤ドラは 5 萬 / 5 筒 / 5 索 のみ（残りは白枠で埋める）
   for (const kind of RED_FIVE_KINDS) {
     keys.push({ kind: kind as TileKind, isRed: true });
   }
@@ -1016,17 +1466,11 @@ export function createTileSpriteSheet(
 // スプライトシートの事前生成
 // --------------------------------------------------
 
-/**
- * DOM 牌のスプライトシートを今すぐ作る。
- * `waitForTileFonts()` の後に呼ぶと、正しい字形で焼き込める。
- * 一度しか作らないので、繰り返し呼んでもコストは増えない。
- */
 export function prewarmTileSpriteSheet(): void {
   if (spriteSheetCache) return;
   spriteSheetCache = createTileSpriteSheet({ cellHeight: DEFAULT_SPRITE_CELL_HEIGHT });
 }
 
-/** 事前生成済みのスプライトシート（未生成なら null） */
 export function getPrewarmedTileSpriteSheet(): TileSpriteSheet | null {
   return spriteSheetCache;
 }

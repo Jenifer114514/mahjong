@@ -8,7 +8,7 @@ import {
   type TileSpriteSheet,
 } from './tileTexture';
 
-const KANJI_NUMBERS = ['', '一', '二', '三', '四', '五', '六', '七', '八', '九'] as const;
+const KANJI_NUMBERS = ['', '一', '二', '三', '四', '伍', '六', '七', '八', '九'] as const;
 
 const HONOR_LABELS: Record<string, { char: string; colorClass: string }> = {
   '1z': { char: '東', colorClass: 'tile-honor-dark' },
