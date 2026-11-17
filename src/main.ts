@@ -1,15 +1,22 @@
 import './ui/styles.css';
+import { CPU_PLAYER_ID_PREFIX } from './cpu/player';
 import { ClientSession } from './net/client';
 import { HostSession } from './net/host';
 import { normalizeRoomCode } from './net/protocol';
 import type { GameError, StateView } from './types/message';
-import type { RuleConfig } from './types/rule';
+import { DEFAULT_CPU_LEVEL, type RuleConfig } from './types/rule';
 import {
   renderLobbyEntry,
   renderWaitingRoom,
   type LobbyFormState,
 } from './ui/lobbyView';
 import { renderGameTable } from './ui/tableView';
+import { prewarmTileSpriteSheet, waitForTileFonts } from './ui/tileTexture';
+import {
+  createRotateOverlay,
+  shouldBlockForOrientation,
+  watchOrientation,
+} from './ui/orientation';
 
 type Session =
   | { role: 'host'; session: HostSession }
@@ -31,6 +38,18 @@ class MahjongApp {
   private countdownTimerId: ReturnType<typeof setInterval> | null = null;
 
   private readonly formState: LobbyFormState;
+  /** 牌面スプライトシートの準備完了後に一度だけ再描画するためのフラグ */
+  private tileFacesRefreshed = false;
+
+  /**
+   * 牌面スプライトシートの準備ができたタイミングで画面を作り直す。
+   * 初回描画がテキスト牌で行われていても、ここで画像牌に差し替わる。
+   */
+  refreshTileFaces(): void {
+    if (this.tileFacesRefreshed) return;
+    this.tileFacesRefreshed = true;
+    this.render();
+  }
 
   constructor(root: HTMLElement) {
     this.root = root;
@@ -41,66 +60,32 @@ class MahjongApp {
       playerName: '',
       playerCount: 4,
       gameLength: 'tonpuu',
-      cpuLevel: 'normal',
       tobi: true,
       tsumoLoss: false,
       allowKuitan: true,
       allowAtozuke: true,
       honbaBonus: true,
       joinCode: normalizeRoomCode(roomFromUrl),
+      cpuCount: 3,
+      cpuLevel: DEFAULT_CPU_LEVEL,
     };
 
     window.addEventListener('beforeunload', () => {
       this.cleanupSession();
     });
 
-    document.addEventListener('fullscreenchange', () => {
-      if (this.currentView && this.currentView.phase !== 'lobby') {
-        this.render();
-      }
-    });
+    // 対局画面では横画面を必須にする（縦持ち時はローテーション案内で覆う）
+    watchOrientation(() => this.syncOrientationOverlay());
 
     this.render();
   }
 
-  private async tryLockLandscape(forceFullscreen = false): Promise<void> {
-    try {
-      const rootEl = document.documentElement;
-      if (
-        (forceFullscreen || !document.fullscreenElement) &&
-        typeof rootEl.requestFullscreen === 'function'
-      ) {
-        await rootEl.requestFullscreen();
-      }
-    } catch {
-      // 全画面API非対応・ユーザー操作外では静かに無視
-    }
-
-    try {
-      const orientation = screen.orientation as
-        | (ScreenOrientation & { lock?: (orientation: string) => Promise<void> })
-        | undefined;
-      if (orientation && typeof orientation.lock === 'function') {
-        await orientation.lock('landscape');
-      }
-    } catch {
-      // iOS Safari やデスクトップ等では orientation.lock 非対応のためフォールバックUIで案内
-    }
-  }
-
-  private async toggleFullscreen(): Promise<void> {
-    try {
-      if (document.fullscreenElement) {
-        await document.exitFullscreen();
-        return;
-      }
-    } catch {
-      // ignore
-    }
-    await this.tryLockLandscape(true);
-  }
-
-  private createRoom(playerName: string, ruleConfig: RuleConfig): void {
+  private createRoom(
+    playerName: string,
+    ruleConfig: RuleConfig,
+    cpuCount = 0,
+    offline = false,
+  ): void {
     this.cleanupSession();
     this.busy = true;
     this.errorBanner = null;
@@ -118,14 +103,14 @@ class MahjongApp {
         if (status === 'ready') {
           this.busy = false;
           this.statusKind = 'ok';
-          this.statusText = `ホスト稼働中 (${host.getRoomCode()})`;
+          this.statusText = host.isOffline()
+            ? 'ローカル対局（CPU戦）'
+            : `ホスト稼働中 (${host.getRoomCode()})`;
         } else if (status === 'error') {
           this.busy = false;
           this.statusKind = 'err';
-          this.statusText = 'P2P待機オフライン（CPU対戦可）';
-          if (this.currentView?.phase === 'lobby') {
-            this.errorBanner = detail ?? 'PeerJS接続エラーが発生しました。';
-          }
+          this.statusText = '接続エラー';
+          this.errorBanner = detail ?? 'PeerJS接続エラーが発生しました。';
         } else if (status === 'closed') {
           this.busy = false;
           this.statusKind = 'normal';
@@ -139,10 +124,43 @@ class MahjongApp {
       onError: (err) => {
         this.handleGameError(err);
       },
+    }, {
+      cpuCount,
+      cpuDelayMs: 650,
+      offline,
     });
 
     this.activeSession = { role: 'host', session: host };
     host.start();
+  }
+
+  /** 通信なしの CPU 対局を開始する */
+  private startLocalGame(
+    playerName: string,
+    ruleConfig: RuleConfig,
+    cpuCount: number,
+  ): void {
+    this.createRoom(playerName, ruleConfig, cpuCount, true);
+  }
+
+  /** ロビーに CPU を後から追加する（ホストの HostSession のみ） */
+  private addCpuToLobby(): void {
+    if (this.activeSession?.role !== 'host') {
+      this.errorBanner = 'CPU を追加できるのは部屋のホストだけです。';
+      this.render();
+      return;
+    }
+    if (!this.activeSession.session.addCpu()) {
+      this.errorBanner = 'CPU を追加できませんでした（席が埋まっているか対局中です）。';
+    }
+    this.render();
+  }
+
+  /** ロビーから CPU を減らす */
+  private removeCpuFromLobby(): void {
+    if (this.activeSession?.role !== 'host') return;
+    this.activeSession.session.removeCpu();
+    this.render();
   }
 
   private joinRoom(roomCode: string, playerName: string): void {
@@ -195,9 +213,6 @@ class MahjongApp {
     this.stopAutoTsumogiriTimer();
     this.riichiSelectingMode = false;
     this.currentView = view;
-    if (view.phase !== 'lobby') {
-      this.errorBanner = null;
-    }
     if (
       view.phase === 'awaiting_responses' &&
       view.myCallOptions !== null &&
@@ -310,71 +325,56 @@ class MahjongApp {
     fn(this.activeSession.session);
   }
 
-  private buildPortraitLockOverlay(): HTMLElement {
-    const overlay = document.createElement('div');
-    overlay.className = 'landscape-lock-overlay';
-    overlay.setAttribute('role', 'dialog');
-    overlay.setAttribute('aria-modal', 'true');
+  /** 対局中に卓上から部屋を抜ける（誤タップ防止のため確認する） */
+  private confirmLeaveGame(): void {
+    const ok =
+      typeof window === 'undefined' ||
+      typeof window.confirm !== 'function' ||
+      window.confirm('対局を離れてロビーに戻りますか？（進行状況は失われます）');
+    if (ok) this.returnToLobby();
+  }
 
-    const card = document.createElement('div');
-    card.className = 'landscape-lock-card';
+  /** 縦持ち時に対局画面をローテーション案内で覆う（ロビーでは表示しない） */
+  private syncOrientationOverlay(): void {
+    const existing = document.querySelector('.rotate-overlay');
+    const needsOverlay =
+      Boolean(this.currentView) &&
+      this.currentView!.phase !== 'lobby' &&
+      shouldBlockForOrientation();
 
-    const icon = document.createElement('div');
-    icon.className = 'landscape-lock-icon';
-    icon.textContent = '📱 ↻';
-
-    const heading = document.createElement('h2');
-    heading.textContent = '横画面でプレイしてください';
-
-    const msg = document.createElement('p');
-    msg.textContent =
-      '対局画面は横画面専用です。端末を横向きに回転させると自動で対局画面に戻ります。';
-
-    const btns = document.createElement('div');
-    btns.className = 'landscape-lock-actions';
-
-    const fsBtn = document.createElement('button');
-    fsBtn.type = 'button';
-    fsBtn.className = 'btn btn-primary';
-    fsBtn.textContent = '横画面・全画面に切り替える';
-    fsBtn.addEventListener('click', () => {
-      void this.tryLockLandscape(true);
-    });
-
-    const leaveBtn = document.createElement('button');
-    leaveBtn.type = 'button';
-    leaveBtn.className = 'btn btn-secondary';
-    leaveBtn.textContent = 'ロビーに戻る';
-    leaveBtn.addEventListener('click', () => this.returnToLobby());
-
-    btns.append(fsBtn, leaveBtn);
-    card.append(icon, heading, msg, btns);
-    overlay.appendChild(card);
-    return overlay;
+    if (needsOverlay && !existing) {
+      document.body.appendChild(createRotateOverlay());
+      document.body.classList.add('is-orientation-blocked');
+      return;
+    }
+    if (!needsOverlay && existing) {
+      existing.remove();
+      document.body.classList.remove('is-orientation-blocked');
+    }
   }
 
   private render(): void {
-    const isGameActive =
-      this.currentView !== null && this.currentView.phase !== 'lobby';
-    document.body.dataset.gameActive = isGameActive ? 'true' : 'false';
-
     this.root.innerHTML = '';
 
-    const shell = document.createElement('div');
-    shell.className = isGameActive ? 'app-shell is-game-active' : 'app-shell';
+    // 対局中は「雀卓だけ」を表示する（トップバーやサイドパネルを出さない）
+    const inGame =
+      this.currentView !== null && this.currentView.phase !== 'lobby';
 
-    // Top bar
+    const shell = document.createElement('div');
+    shell.className = inGame ? 'app-shell app-shell-table-only' : 'app-shell';
+
+    // Top bar（対局中は出さない）
     const topBar = document.createElement('header');
-    topBar.className = 'top-bar';
+    topBar.className = inGame ? 'top-bar is-hidden-in-game' : 'top-bar';
 
     const title = document.createElement('div');
     title.className = 'app-title';
-    title.textContent = isGameActive
-      ? '対戦リーチ麻雀'
-      : 'PeerJS 対戦リーチ麻雀（CPU・P2P対応 / 横画面）';
+    title.textContent = 'PeerJS 対戦リーチ麻雀（第6段階）';
 
     const rightControls = document.createElement('div');
-    rightControls.className = 'top-bar-controls';
+    rightControls.style.display = 'flex';
+    rightControls.style.alignItems = 'center';
+    rightControls.style.gap = '8px';
 
     const statusPill = document.createElement('div');
     statusPill.className = `status-pill${
@@ -387,25 +387,38 @@ class MahjongApp {
     statusPill.textContent = this.statusText;
     rightControls.appendChild(statusPill);
 
-    if (isGameActive) {
-      const fsBtn = document.createElement('button');
-      fsBtn.type = 'button';
-      fsBtn.className = 'btn btn-secondary btn-compact';
-      fsBtn.textContent = document.fullscreenElement ? '全画面解除' : '⛶ 全画面';
-      fsBtn.addEventListener('click', () => {
-        void this.toggleFullscreen();
-      });
-      rightControls.appendChild(fsBtn);
+    if (
+      this.currentView &&
+      this.currentView.players.some((p) =>
+        p.playerId.startsWith(CPU_PLAYER_ID_PREFIX),
+      )
+    ) {
+      const cpuPill = document.createElement('div');
+      cpuPill.className = 'status-pill is-cpu';
+      cpuPill.textContent = `CPU ${
+        this.currentView.players.filter((p) =>
+          p.playerId.startsWith(CPU_PLAYER_ID_PREFIX),
+        ).length
+      }体`;
+      rightControls.appendChild(cpuPill);
+    }
 
+    if (this.activeSession && this.currentView && this.currentView.phase !== 'lobby') {
       const resetBtn = document.createElement('button');
       resetBtn.type = 'button';
-      resetBtn.className = 'btn btn-secondary btn-compact';
+      resetBtn.className = 'btn btn-secondary';
+      resetBtn.style.padding = '4px 10px';
+      resetBtn.style.fontSize = '0.8rem';
       resetBtn.textContent = 'ロビーに戻る';
       resetBtn.addEventListener('click', () => this.returnToLobby());
       rightControls.appendChild(resetBtn);
     }
 
-    topBar.append(title, rightControls);
+    const rotateHint = document.createElement('div');
+    rotateHint.className = 'rotate-hint';
+    rotateHint.textContent = '横画面推奨';
+
+    topBar.append(title, rotateHint, rightControls);
     shell.appendChild(topBar);
 
     // Error banner
@@ -418,7 +431,8 @@ class MahjongApp {
 
       const close = document.createElement('button');
       close.type = 'button';
-      close.className = 'btn btn-secondary btn-compact';
+      close.className = 'btn btn-secondary';
+      close.style.padding = '4px 10px';
       close.textContent = '閉じる';
       close.addEventListener('click', () => {
         this.errorBanner = null;
@@ -430,34 +444,19 @@ class MahjongApp {
     }
 
     const content = document.createElement('main');
-    content.className = isGameActive ? 'game-main' : 'lobby-main';
+    if (inGame) content.className = 'table-only-main';
     shell.appendChild(content);
 
     const view = this.currentView;
     const lobbyHandlers = {
-      onCreateRoom: (name: string, ruleConfig: RuleConfig) =>
-        this.createRoom(name, ruleConfig),
+      onCreateRoom: (name: string, ruleConfig: RuleConfig, cpuCount: number) =>
+        this.createRoom(name, ruleConfig, cpuCount),
       onJoinRoom: (code: string, name: string) => this.joinRoom(code, name),
+      onStartLocalGame: (name: string, ruleConfig: RuleConfig, cpuCount: number) =>
+        this.startLocalGame(name, ruleConfig, cpuCount),
       onLeaveLobby: () => this.returnToLobby(),
-      onAddCpu: () => {
-        if (this.activeSession?.role === 'host') {
-          this.activeSession.session.addCpuPlayer();
-        }
-      },
-      onRemoveCpu: (playerId: string) => {
-        if (this.activeSession?.role === 'host') {
-          this.activeSession.session.removeCpuPlayer(playerId);
-        }
-      },
-      onFillCpuAndStart: () => {
-        void this.tryLockLandscape(false);
-        if (this.activeSession?.role === 'host') {
-          this.activeSession.session.fillWithCpusAndStart();
-        }
-      },
-      onRequestLandscape: () => {
-        void this.tryLockLandscape(true);
-      },
+      onAddCpu: () => this.addCpuToLobby(),
+      onRemoveCpu: () => this.removeCpuFromLobby(),
     };
 
     if (!view) {
@@ -469,6 +468,9 @@ class MahjongApp {
         content,
         view,
         {
+          // 対局中はトップバーを出さないので、離脱手段は卓上に置く
+          canLeaveGame: Boolean(this.activeSession),
+          onLeaveGame: () => this.confirmLeaveGame(),
           onDiscardTile: (tileId) => {
             this.stopAutoTsumogiriTimer();
             this.dispatchAction((s) => s.discardTile(tileId));
@@ -528,11 +530,8 @@ class MahjongApp {
       );
     }
 
-    if (isGameActive) {
-      shell.appendChild(this.buildPortraitLockOverlay());
-    }
-
     this.root.appendChild(shell);
+    this.syncOrientationOverlay();
   }
 }
 
@@ -540,4 +539,13 @@ const rootEl = document.getElementById('app');
 if (!rootEl) {
   throw new Error('#app element not found');
 }
-new MahjongApp(rootEl);
+
+const app = new MahjongApp(rootEl);
+
+// 牌面のスプライトシートはフォント読み込み後に作る。
+// 先に描くと CJK 非対応の serif にフォールバックした字形が焼き込まれてしまう。
+// 失敗しても牌はテキスト描画にフォールバックするので、対局は止まらない。
+void waitForTileFonts().then(() => {
+  prewarmTileSpriteSheet();
+  app.refreshTileFaces();
+});

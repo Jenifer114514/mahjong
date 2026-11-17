@@ -1,4 +1,4 @@
-import type { CpuLevel, RuleConfig, Wind } from './rule';
+import type { RuleConfig, Wind } from './rule';
 import type { Tile, TileKind } from './tile';
 
 export type GamePhase =
@@ -181,8 +181,6 @@ export interface PlayerState {
   melds: Meld[];
   kitaTiles: Tile[];      // 3人麻雀の抜き北
   connected: boolean;
-  isCpu: boolean;
-  cpuLevel?: CpuLevel;
 }
 
 export interface RoundState {

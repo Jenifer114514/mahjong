@@ -35,31 +35,13 @@ input {
 }
 
 .app-shell {
-  min-height: 100dvh;
+  min-height: 100vh;
   display: flex;
   flex-direction: column;
   padding: 12px;
   gap: 10px;
-  max-width: 1140px;
+  max-width: 1120px;
   margin: 0 auto;
-}
-
-.app-shell.is-game-active {
-  max-width: none;
-  width: 100%;
-  height: 100dvh;
-  overflow: hidden;
-  padding: 6px max(6px, env(safe-area-inset-right))
-    max(6px, env(safe-area-inset-bottom)) max(6px, env(safe-area-inset-left));
-  gap: 6px;
-}
-
-.game-main {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
 }
 
 /* Top bar */
@@ -67,37 +49,24 @@ input {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  padding: 8px 12px;
+  gap: 12px;
+  padding: 10px 14px;
   background: var(--bg-panel);
   border: 1px solid var(--border-gold);
   border-radius: 10px;
   flex-wrap: wrap;
-  flex-shrink: 0;
-}
-
-.app-shell.is-game-active .top-bar {
-  padding: 4px 10px;
-  border-radius: 8px;
 }
 
 .app-title {
-  font-size: 0.96rem;
+  font-size: 1rem;
   font-weight: 700;
   letter-spacing: 0.04em;
   color: var(--accent-gold);
 }
 
-.top-bar-controls {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
 .status-pill {
-  font-size: 0.78rem;
-  padding: 3px 9px;
+  font-size: 0.82rem;
+  padding: 4px 10px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.08);
   color: var(--text-muted);
@@ -115,7 +84,7 @@ input {
 
 /* Toast / Banner */
 .error-banner {
-  padding: 8px 12px;
+  padding: 10px 14px;
   border-radius: 8px;
   background: rgba(229, 83, 83, 0.2);
   border: 1px solid rgba(229, 83, 83, 0.6);
@@ -123,38 +92,23 @@ input {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  font-size: 0.86rem;
-  flex-shrink: 0;
-}
-
-.landscape-hint-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  flex-wrap: wrap;
-  padding: 10px 14px;
-  border-radius: 10px;
-  background: rgba(240, 201, 92, 0.12);
-  border: 1px solid var(--border-gold);
-  color: var(--text-main);
-  font-size: 0.86rem;
+  gap: 12px;
+  font-size: 0.9rem;
 }
 
 /* Lobby */
 .lobby-wrap {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  margin-top: 6px;
+  gap: 16px;
+  margin-top: 12px;
 }
 
 .card {
   background: var(--bg-panel);
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 12px;
-  padding: 16px;
+  padding: 18px;
 }
 
 .card h2 {
@@ -237,11 +191,6 @@ input {
   transition: opacity 0.15s ease, transform 0.1s ease;
 }
 
-.btn-compact {
-  padding: 4px 10px;
-  font-size: 0.78rem;
-}
-
 .btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
@@ -293,9 +242,9 @@ input {
 
 .player-slots {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 10px;
-  margin: 12px 0 14px;
+  margin: 12px 0 16px;
 }
 
 .player-slot {
@@ -303,14 +252,6 @@ input {
   border-radius: 8px;
   border: 1px solid rgba(255, 255, 255, 0.14);
   background: rgba(255, 255, 255, 0.04);
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.player-slot.is-cpu {
-  border-color: rgba(107, 196, 235, 0.45);
-  background: rgba(38, 96, 125, 0.16);
 }
 
 .player-slot.is-empty {
@@ -318,80 +259,31 @@ input {
   color: var(--text-muted);
 }
 
-.player-slot-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-}
-
-.slot-badge {
-  display: inline-block;
-  margin-left: 6px;
-  padding: 1px 6px;
-  border-radius: 999px;
-  font-size: 0.7rem;
-  font-weight: 700;
-  background: rgba(240, 201, 92, 0.2);
-  color: var(--accent-gold);
-}
-
-.slot-badge.is-self {
-  background: rgba(56, 193, 114, 0.2);
-  color: #8ee7b2;
-}
-
-.slot-badge.is-cpu {
-  background: rgba(107, 196, 235, 0.22);
-  color: #9be0ff;
-}
-
-.waiting-cpu-controls {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin: 6px 0 12px;
-}
-
-/* Landscape Single-Screen Mahjong Table */
+/* Mahjong Table */
 .table-felt {
-  flex: 1;
-  min-height: 0;
   background: radial-gradient(circle at center, var(--bg-felt) 0%, var(--bg-felt-dark) 100%);
   border: 2px solid var(--border-gold);
-  border-radius: 14px;
-  padding: 8px;
+  border-radius: 16px;
+  padding: 14px;
   display: grid;
   grid-template-areas:
-    'left top right'
+    'top top top'
     'left center right'
     'self self self';
-  grid-template-columns: minmax(175px, 1fr) minmax(240px, 1.25fr) minmax(175px, 1fr);
-  grid-template-rows: auto 1fr auto;
-  gap: 8px;
-  overflow: hidden;
-}
-
-.table-felt.is-3p {
-  grid-template-areas:
-    'left center right'
-    'self self self';
-  grid-template-rows: 1fr auto;
+  grid-template-columns: 1fr minmax(210px, 270px) 1fr;
+  gap: 12px;
 }
 
 .seat-top {
   grid-area: top;
-  min-height: 0;
 }
 
 .seat-left {
   grid-area: left;
-  min-height: 0;
 }
 
 .seat-center {
   grid-area: center;
-  min-height: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -400,28 +292,20 @@ input {
 
 .seat-right {
   grid-area: right;
-  min-height: 0;
 }
 
 .seat-self {
   grid-area: self;
-  min-height: 0;
 }
 
 .seat-box {
-  background: rgba(6, 22, 18, 0.56);
+  background: rgba(6, 22, 18, 0.52);
   border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 9px;
-  padding: 7px 8px;
+  border-radius: 10px;
+  padding: 10px;
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  overflow: hidden;
-}
-
-.seat-left,
-.seat-right {
-  overflow-y: auto;
+  gap: 8px;
 }
 
 .seat-box.is-turn {
@@ -433,46 +317,27 @@ input {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 6px;
+  gap: 8px;
   flex-wrap: wrap;
 }
 
 .seat-identity {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   font-weight: 700;
-  font-size: 0.84rem;
-  min-width: 0;
-}
-
-.seat-player-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 130px;
-}
-
-.cpu-badge {
-  font-size: 0.66rem;
-  padding: 1px 6px;
-  border-radius: 999px;
-  background: rgba(107, 196, 235, 0.22);
-  border: 1px solid rgba(107, 196, 235, 0.55);
-  color: #9be0ff;
-  font-weight: 700;
+  font-size: 0.92rem;
 }
 
 .wind-badge {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 21px;
-  height: 21px;
-  border-radius: 5px;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
   background: rgba(255, 255, 255, 0.12);
-  font-size: 0.78rem;
-  flex-shrink: 0;
+  font-size: 0.85rem;
 }
 
 .wind-badge.is-dealer {
@@ -481,8 +346,8 @@ input {
 }
 
 .turn-tag {
-  font-size: 0.68rem;
-  padding: 1px 6px;
+  font-size: 0.72rem;
+  padding: 2px 7px;
   border-radius: 999px;
   background: var(--accent-gold);
   color: #1c1607;
@@ -490,8 +355,8 @@ input {
 }
 
 .disconnect-tag {
-  font-size: 0.68rem;
-  padding: 1px 6px;
+  font-size: 0.72rem;
+  padding: 2px 7px;
   border-radius: 999px;
   background: rgba(229, 83, 83, 0.25);
   color: #ffb8b8;
@@ -500,33 +365,7 @@ input {
 .seat-score {
   font-variant-numeric: tabular-nums;
   font-weight: 700;
-  font-size: 0.86rem;
   color: var(--accent-gold);
-}
-
-.opponent-body {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  min-height: 0;
-}
-
-.opponent-hand-col {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-}
-
-.seat-top .opponent-body {
-  flex-direction: row;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.seat-top .opponent-hand-col {
-  flex: 0 1 auto;
 }
 
 .opponent-back-row {
@@ -538,91 +377,48 @@ input {
 .discard-river {
   display: grid;
   grid-template-columns: repeat(6, max-content);
-  gap: 2px;
-  min-height: 28px;
+  gap: 3px;
+  min-height: 44px;
   align-content: start;
-}
-
-.seat-top .discard-river {
-  grid-template-columns: repeat(6, max-content);
 }
 
 .center-hub {
   width: 100%;
   background: rgba(5, 16, 13, 0.85);
   border: 1px solid var(--border-gold);
-  border-radius: 10px;
-  padding: 8px 10px;
+  border-radius: 12px;
+  padding: 14px;
   text-align: center;
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 8px;
 }
 
 .round-label {
-  font-size: 1.2rem;
+  font-size: 1.4rem;
   font-weight: 800;
   color: var(--accent-gold);
 }
 
 .wall-counter {
-  font-size: 0.86rem;
+  font-size: 0.96rem;
   font-weight: 600;
 }
 
 .hub-sub {
-  font-size: 0.74rem;
+  font-size: 0.8rem;
   color: var(--text-muted);
 }
 
-/* Self Hand & Compact Upper Grid */
+/* Self Hand */
 .self-controls {
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  min-height: 0;
-}
-
-.self-meta-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
   gap: 8px;
-  align-items: start;
-}
-
-.self-meta-left {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-}
-
-.self-meta-right {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 4px;
-  min-width: 0;
-}
-
-.self-river-wrap {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-}
-
-.self-river-label {
-  padding-top: 2px;
-  font-weight: 700;
-  white-space: nowrap;
-}
-
-.self-river-wrap .discard-river {
-  grid-template-columns: repeat(9, max-content);
 }
 
 .turn-prompt {
-  font-size: 0.8rem;
+  font-size: 0.88rem;
   font-weight: 700;
   color: var(--text-muted);
 }
@@ -633,25 +429,22 @@ input {
 
 .hand-area {
   display: flex;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   align-items: flex-end;
-  justify-content: center;
-  gap: 3px;
-  padding: 4px 2px 1px;
-  overflow-x: auto;
+  gap: 4px;
+  padding: 8px 4px 2px;
 }
 
 .drawn-gap {
-  width: 10px;
+  width: 12px;
   flex-shrink: 0;
 }
 
 /* Tile component */
 .mj-tile {
-  width: clamp(28px, 3.6vw, 40px);
-  height: clamp(40px, 5vw, 56px);
-  flex-shrink: 0;
-  border-radius: 5px;
+  width: 38px;
+  height: 54px;
+  border-radius: 6px;
   background: linear-gradient(180deg, #ffffff 0%, var(--tile-bg) 100%);
   border: 1px solid #b8ae92;
   border-bottom: 4px solid var(--tile-edge);
@@ -666,23 +459,53 @@ input {
 }
 
 .mj-tile-sm {
-  width: clamp(19px, 2.2vw, 28px);
-  height: clamp(26px, 3.1vw, 38px);
+  width: 28px;
+  height: 40px;
   border-radius: 4px;
   border-bottom-width: 3px;
 }
 
+/* canvas 生成の牌面（src/ui/tileTexture.ts）。
+   牌 1 枚ごとに要素を持たず、共有スプライトシートの background-position で切り替える。 */
+.mj-tile.mj-tile-face {
+  position: relative;
+  padding: 0;
+  border-color: rgba(140, 128, 96, 0.7);
+  background-color: #f7f0df;
+  background-repeat: no-repeat;
+  image-rendering: auto;
+}
+
+/* 画像の牌面でも読み上げ・検索用のテキストは残す（視覚的には隠す） */
+.mj-tile.mj-tile-face > .mj-tile-face-alt {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* 赤ドラは縁取りで一目で分かるようにする */
+.mj-tile.mj-tile-red {
+  border-color: rgba(196, 45, 52, 0.75);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(196, 45, 52, 0.45);
+}
+
 .mj-tile-back {
-  width: clamp(12px, 1.3vw, 17px);
-  height: clamp(17px, 1.9vw, 25px);
+  width: 18px;
+  height: 26px;
   background: linear-gradient(180deg, #2d8770 0%, var(--tile-back) 100%);
   border-color: #184e40;
   border-bottom-color: #123c31;
 }
 
 .mj-tile-back.mj-tile-back-meld {
-  width: clamp(19px, 2.2vw, 28px);
-  height: clamp(26px, 3.1vw, 38px);
+  width: 28px;
+  height: 40px;
 }
 
 .mj-tile-disabled {
@@ -700,20 +523,20 @@ input {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 3px;
+  gap: 4px;
 }
 
 .dora-tiles-row {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 2px;
+  gap: 3px;
 }
 
 .response-wait-badge {
-  font-size: 0.74rem;
+  font-size: 0.78rem;
   font-weight: 700;
-  padding: 3px 9px;
+  padding: 4px 10px;
   border-radius: 999px;
   background: rgba(240, 201, 92, 0.2);
   border: 1px solid rgba(240, 201, 92, 0.55);
@@ -723,16 +546,16 @@ input {
 .meld-kita-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 5px;
+  gap: 8px;
   align-items: center;
 }
 
 .meld-group {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  padding: 3px 5px;
-  border-radius: 5px;
+  gap: 4px;
+  padding: 4px 6px;
+  border-radius: 6px;
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid rgba(255, 255, 255, 0.14);
 }
@@ -743,7 +566,7 @@ input {
 }
 
 .meld-label {
-  font-size: 0.68rem;
+  font-size: 0.72rem;
   font-weight: 700;
   color: var(--text-muted);
 }
@@ -759,9 +582,9 @@ input {
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 6px;
-  padding: 6px 8px;
-  border-radius: 7px;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 8px;
   background: rgba(240, 201, 92, 0.14);
   border: 1px solid var(--accent-gold);
 }
@@ -774,56 +597,56 @@ input {
 .call-bar-info {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
 }
 
 .call-bar-title {
   font-weight: 700;
   color: var(--accent-gold);
-  font-size: 0.82rem;
+  font-size: 0.92rem;
 }
 
 .call-timer {
-  font-size: 0.78rem;
+  font-size: 0.84rem;
   color: var(--text-main);
 }
 
 .action-buttons-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 5px;
+  gap: 6px;
 }
 
 .btn-call {
   background: #2f7d5b;
   border-color: #59d999;
   color: #ffffff;
-  padding: 5px 10px;
-  font-size: 0.8rem;
+  padding: 7px 12px;
+  font-size: 0.88rem;
 }
 
 .btn-kita {
   background: #26607d;
   border-color: #6bc4eb;
   color: #ffffff;
-  padding: 5px 10px;
-  font-size: 0.8rem;
+  padding: 7px 12px;
+  font-size: 0.88rem;
 }
 
 .btn-abortive {
   background: #6c4c24;
   border-color: #e8ba6f;
   color: #fff6e0;
-  padding: 5px 10px;
-  font-size: 0.8rem;
+  padding: 7px 12px;
+  font-size: 0.88rem;
 }
 
 .btn-ron {
   background: #b92b27;
   border-color: #ff8e88;
   color: #ffffff;
-  padding: 5px 12px;
-  font-size: 0.84rem;
+  padding: 7px 14px;
+  font-size: 0.92rem;
 }
 
 .ron-winners-list {
@@ -849,7 +672,7 @@ input {
 
 .mj-tile-clickable:hover,
 .mj-tile-clickable:focus-visible {
-  transform: translateY(-5px);
+  transform: translateY(-6px);
   box-shadow: 0 6px 12px rgba(240, 201, 92, 0.35);
   outline: 2px solid var(--accent-gold);
 }
@@ -863,32 +686,32 @@ input {
 }
 
 .mj-tile-rank {
-  font-size: 0.96rem;
+  font-size: 1.05rem;
   font-weight: 800;
 }
 
 .mj-tile-suit {
-  font-size: 0.66rem;
+  font-size: 0.72rem;
   font-weight: 700;
-  margin-top: 1px;
+  margin-top: 2px;
 }
 
 .mj-tile-sm .mj-tile-rank {
-  font-size: 0.7rem;
+  font-size: 0.78rem;
 }
 
 .mj-tile-sm .mj-tile-suit {
-  font-size: 0.5rem;
-  margin-top: 0;
+  font-size: 0.56rem;
+  margin-top: 1px;
 }
 
 .mj-tile-honor {
-  font-size: 1.12rem;
+  font-size: 1.25rem;
   font-weight: 900;
 }
 
 .mj-tile-sm .mj-tile-honor {
-  font-size: 0.8rem;
+  font-size: 0.92rem;
 }
 
 .tile-man {
@@ -922,34 +745,15 @@ input {
   border-radius: 3px;
 }
 
-/* Round End / Finished modal overlays */
-.modal-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 200;
-  background: rgba(4, 12, 10, 0.78);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 12px;
-}
-
+/* Round End / Finished panels */
 .overlay-panel {
-  width: min(920px, 100%);
-  max-height: calc(100dvh - 24px);
-  overflow-y: auto;
   background: var(--bg-panel);
   border: 1px solid var(--border-gold);
   border-radius: 12px;
-  padding: 14px 16px;
+  padding: 18px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-}
-
-.overlay-panel.is-finished {
-  margin: 0 auto;
-  max-height: 100%;
+  gap: 12px;
 }
 
 .score-table {
@@ -959,10 +763,9 @@ input {
 
 .score-table th,
 .score-table td {
-  padding: 6px 8px;
+  padding: 8px 10px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
   text-align: left;
-  font-size: 0.88rem;
 }
 
 .score-table td.num,
@@ -999,8 +802,8 @@ input {
 }
 
 .furiten-badge {
-  font-size: 0.68rem;
-  padding: 1px 7px;
+  font-size: 0.72rem;
+  padding: 2px 8px;
   border-radius: 999px;
   background: rgba(240, 147, 43, 0.25);
   border: 1px solid rgba(240, 147, 43, 0.7);
@@ -1029,8 +832,8 @@ input {
 .agari-result-card {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 10px 12px;
+  gap: 10px;
+  padding: 12px 14px;
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid var(--border-gold);
@@ -1046,17 +849,17 @@ input {
 
 .agari-who {
   font-weight: 700;
-  font-size: 0.94rem;
+  font-size: 0.98rem;
 }
 
 .agari-score-badge {
-  padding: 3px 9px;
+  padding: 4px 10px;
   border-radius: 999px;
   background: rgba(240, 201, 92, 0.2);
   border: 1px solid var(--accent-gold);
   color: var(--accent-gold);
   font-weight: 800;
-  font-size: 0.86rem;
+  font-size: 0.9rem;
 }
 
 .agari-tiles-row {
@@ -1069,13 +872,13 @@ input {
 .yaku-list {
   display: flex;
   flex-wrap: wrap;
-  gap: 5px;
+  gap: 6px;
 }
 
 .yaku-chip {
-  padding: 3px 8px;
+  padding: 3px 9px;
   border-radius: 6px;
-  font-size: 0.76rem;
+  font-size: 0.8rem;
   font-weight: 700;
   background: rgba(255, 255, 255, 0.09);
   border: 1px solid rgba(255, 255, 255, 0.16);
@@ -1098,13 +901,13 @@ input {
   background: linear-gradient(135deg, #d4af37 0%, #f0c95c 100%);
   border-color: #ffe28a;
   color: #1c1607;
-  padding: 5px 12px;
-  font-size: 0.84rem;
+  padding: 7px 14px;
+  font-size: 0.92rem;
 }
 
 .riichi-badge {
-  font-size: 0.68rem;
-  padding: 1px 7px;
+  font-size: 0.72rem;
+  padding: 2px 8px;
   border-radius: 999px;
   background: rgba(240, 201, 92, 0.25);
   border: 1px solid var(--accent-gold);
@@ -1113,10 +916,10 @@ input {
 }
 
 .kyotaku-badge {
-  font-size: 0.76rem;
+  font-size: 0.84rem;
   font-weight: 700;
   color: var(--accent-gold);
-  padding: 2px 9px;
+  padding: 3px 10px;
   border-radius: 999px;
   background: rgba(240, 201, 92, 0.14);
   border: 1px solid rgba(240, 201, 92, 0.35);
@@ -1127,14 +930,14 @@ input {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 10px;
+  padding: 8px 12px;
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.14);
 }
 
 .kyotaku-award-note {
-  font-size: 0.84rem;
+  font-size: 0.88rem;
   font-weight: 700;
   color: var(--accent-gold);
   padding: 6px 10px;
@@ -1145,7 +948,7 @@ input {
 
 /* Stage 4: Honba, Tenpai/Noten & Progression reason UI */
 .honba-note {
-  font-size: 0.72rem;
+  font-size: 0.78rem;
   color: var(--text-muted);
 }
 
@@ -1157,9 +960,9 @@ input {
 
 .tenpai-badge {
   display: inline-block;
-  padding: 2px 8px;
+  padding: 2px 9px;
   border-radius: 999px;
-  font-size: 0.74rem;
+  font-size: 0.78rem;
   font-weight: 800;
   background: rgba(56, 193, 114, 0.22);
   border: 1px solid rgba(56, 193, 114, 0.6);
@@ -1168,9 +971,9 @@ input {
 
 .noten-badge {
   display: inline-block;
-  padding: 2px 8px;
+  padding: 2px 9px;
   border-radius: 999px;
-  font-size: 0.74rem;
+  font-size: 0.78rem;
   font-weight: 700;
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.2);
@@ -1178,10 +981,10 @@ input {
 }
 
 .progression-reason-note {
-  font-size: 0.86rem;
+  font-size: 0.92rem;
   font-weight: 700;
   color: var(--text-main);
-  padding: 7px 10px;
+  padding: 8px 12px;
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid rgba(255, 255, 255, 0.16);
@@ -1189,7 +992,7 @@ input {
 
 .mj-tile-riichi {
   transform: rotate(-90deg);
-  margin: 0 5px;
+  margin: 0 7px;
 }
 
 .mj-tile-riichi-candidate {
@@ -1198,203 +1001,1208 @@ input {
   transform: translateY(-4px);
 }
 
-/* Compact landscape viewports (mobile phones in landscape, e.g., 667x375 / 844x390) */
-@media (max-height: 560px) and (orientation: landscape) {
-  .app-shell.is-game-active {
-    padding: 4px max(6px, env(safe-area-inset-right))
-      max(4px, env(safe-area-inset-bottom)) max(6px, env(safe-area-inset-left));
-    gap: 4px;
-  }
 
-  .app-shell.is-game-active .top-bar {
-    padding: 3px 8px;
+/* ===================================================================
+   第5段階: 横画面レイアウト / CPU 対戦
+   - 横向き(landscape)を基準に、雀卓 + 右サイドパネルの 2 カラム構成
+   - 縦向き(portrait)ではサイドパネルを卓の下へ回り込ませる
+   =================================================================== */
+
+.app-shell {
+  max-width: 1440px;
+}
+
+.segmented-4 {
+  grid-template-columns: repeat(auto-fit, minmax(86px, 1fr));
+}
+
+.status-pill.is-cpu {
+  background: rgba(107, 196, 235, 0.16);
+  color: #a9e3fb;
+}
+
+.cpu-badge {
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: rgba(107, 196, 235, 0.18);
+  border: 1px solid rgba(107, 196, 235, 0.55);
+  color: #a9e3fb;
+}
+
+/* ---------- 対局ステージ（横画面 2 カラム） ---------- */
+.table-stage {
+  display: grid;
+  gap: 12px;
+  align-items: start;
+}
+
+/* 対局中は雀卓だけ: サイドパネルを廃止して 1 カラムに */
+.table-stage.is-landscape {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* ---------- 雀卓（横画面: 4 方向を外周に配置） ---------- */
+.table-felt.is-landscape {
+  grid-template-areas:
+    'top top top'
+    'left center right'
+    'self self self';
+  grid-template-columns: minmax(0, 1fr) minmax(190px, 260px) minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  padding: 12px;
+  min-height: min(78vh, 720px);
+}
+
+.table-felt.is-landscape .seat-box {
+  min-width: 0;
+}
+
+.table-felt.is-landscape .seat-top,
+.table-felt.is-landscape .seat-empty {
+  align-items: center;
+  text-align: center;
+}
+
+.table-felt.is-landscape .seat-top .opponent-back-row {
+  justify-content: center;
+}
+
+.table-felt.is-landscape .seat-center {
+  min-width: 0;
+}
+
+/* 右パネル ---------- */
+.side-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-gold);
+  border-radius: 12px;
+  padding: 12px;
+  max-height: min(78vh, 720px);
+  overflow-y: auto;
+}
+
+.side-panel-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.side-panel-title {
+  font-size: 1.15rem;
+  font-weight: 800;
+  color: var(--accent-gold);
+}
+
+.side-status {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.side-turn {
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.side-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.side-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.side-block-title {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--accent-gold);
+  letter-spacing: 0.04em;
+}
+
+.side-panel .score-table th,
+.side-panel .score-table td {
+  padding: 5px 6px;
+  font-size: 0.82rem;
+}
+
+.side-river-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px 0;
+  border-bottom: 1px dashed rgba(255, 255, 255, 0.1);
+}
+
+.side-river-row:last-child {
+  border-bottom: none;
+}
+
+.side-river-name {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+
+.discard-river-compact {
+  grid-template-columns: repeat(9, max-content);
+  min-height: 0;
+}
+
+/* 自分の捨て牌と手牌の並び ---------- */
+.self-river-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.table-felt.is-landscape .hand-area {
+  gap: 3px;
+  justify-content: center;
+  padding: 4px 2px 0;
+}
+
+.table-felt.is-landscape .mj-tile {
+  width: 36px;
+  height: 51px;
+}
+
+.table-felt.is-landscape .mj-tile-sm {
+  width: 26px;
+  height: 37px;
+}
+
+.table-felt.is-landscape .mj-tile-back.mj-tile-back-meld {
+  width: 26px;
+  height: 37px;
+}
+
+.table-felt.is-landscape .opponent-back-row {
+  gap: 1px;
+}
+
+/* 横画面では手牌を 1 段に固定（折り返すと卓が縦に伸びるため） */
+.table-felt.is-landscape .hand-area {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  justify-content: center;
+  padding-bottom: 4px;
+  scrollbar-width: thin;
+}
+
+.table-felt.is-landscape .hand-area::-webkit-scrollbar {
+  height: 4px;
+}
+
+.table-felt.is-landscape .hand-area::-webkit-scrollbar-thumb {
+  background: rgba(240, 201, 92, 0.4);
+  border-radius: 2px;
+}
+
+/* 幅が狭いときは手牌を折り返してよい（横スクロールより見やすい） */
+@media (max-width: 700px) {
+  .table-felt.is-landscape .hand-area {
+    flex-wrap: wrap;
+    overflow: visible;
+    justify-content: center;
+  }
+}
+
+/* ---------- 縦向きオーバーレイ（強制横画面） ---------- */
+.rotate-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 28px;
+  text-align: center;
+  background: radial-gradient(circle at 50% 40%, #12362d 0%, #08120f 80%);
+}
+
+.rotate-overlay-icon {
+  font-size: 3.4rem;
+  animation: rotate-nudge 2.4s ease-in-out infinite;
+}
+
+@keyframes rotate-nudge {
+  0%,
+  55%,
+  100% {
+    transform: rotate(0deg);
+  }
+  70%,
+  85% {
+    transform: rotate(-90deg);
+  }
+}
+
+.rotate-overlay-title {
+  font-size: 1.15rem;
+  font-weight: 800;
+  color: var(--accent-gold);
+}
+
+.rotate-overlay-body {
+  max-width: 340px;
+  font-size: 0.86rem;
+  line-height: 1.6;
+  color: var(--text-main);
+}
+
+.rotate-overlay-hint {
+  max-width: 320px;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+/* 横画面推奨ヒント（縦向きのみ表示） */
+.rotate-hint {
+  display: none;
+  font-size: 0.78rem;
+  color: var(--accent-gold);
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(240, 201, 92, 0.12);
+  border: 1px solid rgba(240, 201, 92, 0.4);
+}
+
+@media (orientation: portrait) and (max-width: 900px) {
+  .rotate-hint {
+    display: inline-block;
+  }
+}
+
+/* ---------- 縦向き（PC の縦長ウィンドウ等）: サイドパネルを下へ ---------- */
+@media (max-width: 900px) {
+  .side-panel {
+    max-height: none;
+    overflow: visible;
+  }
+}
+
+@media (max-width: 560px) {
+  .app-shell {
+    padding: 8px;
+    gap: 8px;
   }
 
   .app-title {
-    font-size: 0.84rem;
+    font-size: 0.9rem;
   }
 
-  .table-felt {
-    padding: 5px;
-    gap: 5px;
-    grid-template-columns: minmax(150px, 1fr) minmax(210px, 1.2fr) minmax(150px, 1fr);
+  .table-felt.is-landscape .mj-tile {
+    width: 30px;
+    height: 43px;
   }
 
-  .seat-box {
-    padding: 4px 6px;
-    gap: 3px;
+  .table-felt.is-landscape .mj-tile-sm {
+    width: 22px;
+    height: 31px;
   }
 
-  .seat-identity,
-  .seat-score {
-    font-size: 0.76rem;
+  .table-felt.is-landscape .mj-tile-back.mj-tile-back-meld {
+    width: 22px;
+    height: 31px;
   }
 
-  .seat-player-name {
-    max-width: 96px;
+  .mj-tile-honor {
+    font-size: 1rem;
   }
 
-  .wind-badge {
+  .mj-tile-sm .mj-tile-honor {
+    font-size: 0.78rem;
+  }
+}
+
+/* 低い横画面（スマホ横持ち）ではさらに圧縮 */
+@media (orientation: landscape) and (max-height: 520px) {
+  .table-felt.is-landscape {
+    min-height: 0;
+    padding: 8px;
+    gap: 6px;
+  }
+
+  .table-felt.is-landscape .mj-tile {
+    width: 30px;
+    height: 42px;
+  }
+
+  .table-felt.is-landscape .mj-tile-sm {
+    width: 22px;
+    height: 31px;
+  }
+
+  .table-felt.is-landscape .mj-tile-back.mj-tile-back-meld {
+    width: 22px;
+    height: 31px;
+  }
+
+  .side-panel {
+    max-height: calc(100vh - 90px);
+  }
+
+  .center-hub {
+    padding: 8px;
+    gap: 4px;
+  }
+
+  .round-label {
+    font-size: 1.1rem;
+  }
+
+  .app-shell {
+    padding: 6px;
+    gap: 6px;
+  }
+}
+
+/* ===================================================================
+   実物の雀卓を再現するレイアウト（第6段階）
+   - 4人が卓を囲む: 手牌は外周、河は中央へ向かって積まれる
+   - 対面の河は 180 度、左右の河は 90 度回転（牌そのものを回す）
+   - 河は実物同様 6 枚 × 3 段まで（それ以上は 6 枚折り返しで伸びる）
+   =================================================================== */
+
+.table-felt.is-landscape {
+  grid-template-areas:
+    'top top top'
+    'left center right'
+    'self self self';
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 320px) minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 6px;
+  padding: 10px 14px 12px;
+  min-height: min(82vh, 780px);
+  background: radial-gradient(
+    circle at center,
+    #1a5b4a 0%,
+    var(--bg-felt) 42%,
+    var(--bg-felt-dark) 100%
+  );
+  box-shadow:
+    inset 0 0 70px rgba(0, 0, 0, 0.55),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+
+/* 席ごとの積み方（外周の席情報 → 手牌 → 副露 → 中央寄りの河） */
+.table-felt.is-landscape .seat-box {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 2px 4px;
+  background: transparent;
+  border: none;
+  min-width: 0;
+}
+
+.table-felt.is-landscape .seat-box.is-turn {
+  box-shadow: none;
+}
+
+/* 手番の席は外周側に金色のラインを引く */
+.seat-orient-top.is-turn {
+  border-top: 2px solid var(--accent-gold);
+}
+.seat-orient-left.is-turn {
+  border-left: 2px solid var(--accent-gold);
+}
+.seat-orient-right.is-turn {
+  border-right: 2px solid var(--accent-gold);
+}
+.seat-orient-self.is-turn {
+  border-bottom: 2px solid var(--accent-gold);
+}
+
+/* ---------- 席の中身: 外周側に手牌、中央側に河 ---------- */
+/* 席情報は外周（対面なら最上段、自分なら最下段）に固定する */
+.seat-orient-top > .seat-header {
+  order: 0;
+}
+.seat-orient-top > .seat-body {
+  order: 1;
+}
+.seat-orient-left > .seat-header,
+.seat-orient-right > .seat-header {
+  order: 0;
+}
+
+/*
+ * 実物の雀卓では、各プレイヤーの河は「自分の手牌のすぐ内側」にまとまって置かれ、
+ * 4 つの河が中央の壁・ドラ表示を囲む配置になる。同じ並びになるよう、
+ * 手牌 → （副露）→ 河 の順に手前側から並べ、河は中央方向へ伸ばす。
+ */
+.seat-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* 左家: 手前（左端）に手牌、右（中央）へ河 */
+.seat-body-left {
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  width: 100%;
+}
+
+/* 右家: 手前（右端）に手牌、左（中央）へ河 */
+.seat-body-right {
+  flex-direction: row-reverse;
+  align-items: center;
+  justify-content: flex-start;
+  width: 100%;
+}
+
+/* 対面: 上端に手牌、下（中央）へ河 */
+.seat-body-top {
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.seat-body-top .opponent-hand,
+.seat-body-left .opponent-hand,
+.seat-body-right .opponent-hand {
+  flex: 0 0 auto;
+}
+
+.seat-body > .river-zone {
+  flex: 0 0 auto;
+}
+
+/* ---------- 手牌（裏向き）: 外周を向く ---------- */
+.opponent-hand {
+  display: flex;
+  gap: 1px;
+  align-items: flex-end;
+  justify-content: center;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.hand-orient-top {
+  transform: rotate(180deg);
+}
+
+/*
+ * 左右の手牌は縦積み（側面から見た麻雀牌の並び）。
+ * 13 枚＋ツモ牌が画面の高さに必ず収まるよう、各牌を等高で伸縮させる。
+ */
+.hand-orient-left,
+.hand-orient-right {
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0;
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.hand-orient-left .mj-tile-back,
+.hand-orient-right .mj-tile-back {
+  width: 17px;
+  height: auto;
+  flex: 1 1 0;
+  min-height: 7px;
+  max-height: 30px;
+  border-bottom-width: 0;
+  border-right: 2px solid #123c31;
+  border-left: 2px solid #123c31;
+}
+
+/* 対面の手牌も横幅に収める（13 枚ぶんの最小幅を確保） */
+.hand-orient-top .mj-tile-back {
+  flex: 0 0 auto;
+}
+
+/* ---------- 河（捨て牌）: 中央へ向かって積まれる ---------- */
+.river-zone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+
+.river-label {
+  font-size: 0.62rem;
+  letter-spacing: 0.1em;
+  color: var(--text-muted);
+  opacity: 0.75;
+}
+
+.discard-river {
+  --river-rot: 0deg;
+  /* 河の牌サイズ（左右の河でトラック幅を合わせるため変数化） */
+  --river-tile-w: 26px;
+  --river-tile-h: 37px;
+  display: grid;
+  grid-template-columns: repeat(6, var(--river-tile-w));
+  grid-auto-rows: var(--river-tile-h);
+  gap: 2px;
+  align-content: start;
+  justify-content: start;
+  padding: 3px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+  min-height: 0;
+}
+
+/* 河の牌は升目ぴったりに収める */
+.discard-river > .mj-tile {
+  width: var(--river-tile-w);
+  height: var(--river-tile-h);
+}
+
+.discard-river .mj-tile {
+  transform: rotate(var(--river-rot));
+}
+
+/* リーチ宣言牌（横向き）は席の向きにさらに -90 度 */
+.discard-river .mj-tile.mj-tile-riichi {
+  transform: rotate(calc(var(--river-rot) - 90deg));
+}
+
+.river-empty {
+  font-size: 0.68rem;
+  color: rgba(255, 255, 255, 0.22);
+  padding: 4px 8px;
+}
+
+/* 対面: 180 度（6 列・下へ伸びる） */
+.river-top {
+  --river-rot: 180deg;
+}
+
+/* 左家: 牌を 90 度回転。奥行き（中央方向）に 6 枚並ぶ */
+.river-left {
+  --river-rot: 90deg;
+}
+
+/* 右家: 牌を -90 度回転 */
+.river-right {
+  --river-rot: -90deg;
+}
+
+/* 左右の河は手牌のすぐ内側に置き、外周側の列から中央へ向かって増える */
+.seat-orient-left .river-zone,
+.seat-orient-right .river-zone {
+  align-self: center;
+  max-width: 100%;
+}
+
+/*
+ * 左右の河: 実物同様「6 枚が垂直に並び、その列が中央へ向かって増えていく」。
+ * 牌は 90 度回転しているので、升目の大きさは回転後の見た目（縦=横の入れ替え）に合わせる。
+ */
+.seat-orient-left .discard-river,
+.seat-orient-right .discard-river {
+  /* 回転後の見た目に合わせた升目（縦=牌の幅 / 横=牌の高さ） */
+  grid-template-columns: none;
+  grid-template-rows: repeat(6, var(--river-tile-w));
+  grid-auto-flow: column;
+  grid-auto-columns: var(--river-tile-h);
+  align-content: start;
+  justify-content: start;
+  place-items: center;
+  overflow: visible;
+}
+
+/* 右家は中央方向が左なので、列の伸びる向きを反転する */
+.seat-orient-right .discard-river {
+  direction: rtl;
+}
+
+/* ---------- 副露・抜北の向き ---------- */
+.meld-orient-top {
+  transform: rotate(180deg);
+}
+.meld-orient-left .meld-group {
+  transform: rotate(90deg);
+  margin: 6px 0;
+}
+.meld-orient-right .meld-group {
+  transform: rotate(-90deg);
+  margin: 6px 0;
+}
+.meld-orient-left,
+.meld-orient-right {
+  flex-direction: column;
+  align-items: center;
+}
+
+/* ---------- 席情報（外周側） ---------- */
+.seat-orient-top .seat-header {
+  flex-direction: row-reverse;
+  justify-content: center;
+  width: 100%;
+}
+.seat-orient-top .seat-identity {
+  flex-direction: row-reverse;
+}
+.seat-orient-left .seat-header,
+.seat-orient-right .seat-header {
+  justify-content: center;
+  font-size: 0.8rem;
+}
+.seat-orient-left .seat-identity,
+.seat-orient-right .seat-identity {
+  justify-content: center;
+  flex-wrap: wrap;
+}
+.seat-orient-top .seat-score,
+.seat-orient-left .seat-score,
+.seat-orient-right .seat-score {
+  font-size: 0.82rem;
+}
+
+/* ---------- 中央の方位リング（実物の「場」表示） ---------- */
+.center-hub {
+  position: relative;
+  padding: 20px 26px;
+}
+
+.table-compass {
+  position: absolute;
+  inset: 4px;
+  pointer-events: none;
+}
+
+.compass-slot {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 0.66rem;
+}
+
+.compass-top {
+  top: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+.compass-self {
+  bottom: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+.compass-left {
+  left: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  flex-direction: column;
+}
+.compass-right {
+  right: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  flex-direction: column;
+}
+
+.compass-wind {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 21px;
+  height: 21px;
+  border-radius: 5px;
+  font-weight: 800;
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.13);
+}
+
+.compass-wind.is-dealer {
+  background: #b92b27;
+  color: #fff;
+}
+
+.compass-slot.is-turn .compass-wind {
+  color: var(--accent-gold);
+  box-shadow: 0 0 0 2px var(--accent-gold);
+}
+
+.compass-riichi {
+  font-size: 0.55rem;
+  font-weight: 800;
+  padding: 0 4px;
+  border-radius: 999px;
+  color: var(--accent-gold);
+  background: rgba(240, 201, 92, 0.18);
+  border: 1px solid rgba(240, 201, 92, 0.5);
+}
+
+/* ---------- 自分の席: 手牌が最前列、河は中央側 ---------- */
+.seat-orient-self .self-controls {
+  order: 2;
+}
+.seat-orient-self .river-zone {
+  order: 1;
+}
+.seat-orient-self .seat-header {
+  order: 3;
+}
+
+.seat-orient-self .hand-area {
+  justify-content: center;
+}
+
+/* 自分の河だけは横幅を活かして 6 枚 × 3 段に収める */
+/*
+ * 自分の河: 実物同様、最初の捨て牌がもっとも手前（下）に来て、
+ * 2 段目・3 段目はその上（中央側）に積み上がる。
+ * → 折り返しを逆方向にした flex で「1 行目 = 最下段」を実現する。
+ */
+.river-self .discard-river {
+  display: flex;
+  flex-wrap: wrap-reverse;
+  align-content: flex-start;
+  justify-content: flex-start;
+  width: calc(6 * var(--river-tile-w) + 5 * 2px + 6px);
+  max-width: 100%;
+  background: rgba(0, 0, 0, 0.22);
+}
+
+/* ---------- サイドパネルの河一覧（補助表示） ---------- */
+.side-panel .discard-river {
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+  gap: 1px;
+  grid-template-columns: repeat(9, max-content);
+  grid-template-rows: none;
+  grid-auto-rows: auto;
+  direction: ltr;
+}
+
+.side-panel .discard-river .mj-tile {
+  transform: none;
+}
+
+.side-panel .discard-river.is-compact .mj-tile {
+  width: 19px;
+  height: 27px;
+  border-bottom-width: 2px;
+}
+
+/* ---------- 狭い画面（スマホ横持ちの低い画面）向けの圧縮 ---------- */
+@media (orientation: landscape) and (max-height: 560px) {
+  .table-felt.is-landscape {
+    min-height: 0;
+    padding: 6px 8px 8px;
+    gap: 4px;
+    grid-template-columns: minmax(0, 1fr) minmax(210px, 280px) minmax(0, 1fr);
+  }
+
+  .table-felt.is-landscape .mj-tile {
+    width: 28px;
+    height: 40px;
+  }
+
+  .table-felt.is-landscape .mj-tile-sm {
+    width: 21px;
+    height: 30px;
+  }
+
+  .center-hub {
+    padding: 14px 18px;
+    gap: 4px;
+  }
+
+  .round-label {
+    font-size: 1.05rem;
+  }
+
+  .side-panel {
+    max-height: calc(100vh - 84px);
+  }
+}
+
+@media (orientation: landscape) and (max-height: 430px) {
+  .table-felt.is-landscape .mj-tile {
+    width: 24px;
+    height: 34px;
+  }
+
+  .table-felt.is-landscape .mj-tile-sm {
+    width: 18px;
+    height: 26px;
+  }
+
+  .table-compass {
+    display: none;
+  }
+
+  .seat-orient-top .seat-header .wind-badge,
+  .seat-orient-left .seat-header .wind-badge,
+  .seat-orient-right .seat-header .wind-badge {
     width: 18px;
     height: 18px;
     font-size: 0.7rem;
   }
+}
 
-  .center-hub {
-    padding: 5px 7px;
-    gap: 2px;
-  }
-
-  .round-label {
-    font-size: 0.98rem;
-  }
-
-  .wall-counter {
-    font-size: 0.78rem;
-  }
-
-  .hub-sub,
-  .turn-prompt {
-    font-size: 0.7rem;
-  }
-
-  .mj-tile {
-    width: clamp(30px, 4.4vw, 38px);
-    height: clamp(36px, 9.8dvh, 46px);
-    border-bottom-width: 3px;
-  }
-
-  .mj-tile-sm {
-    width: clamp(16px, 2.1vw, 22px);
-    height: clamp(22px, 5.8dvh, 29px);
-    border-bottom-width: 2px;
-  }
-
-  .mj-tile-back {
-    width: 10px;
-    height: 14px;
-  }
-
-  .seat-top .mj-tile-back {
-    width: 8px;
-    height: 12px;
-  }
-
-  .seat-top .opponent-back-row {
-    gap: 1px;
-  }
-
-  .mj-tile-back.mj-tile-back-meld {
-    width: clamp(16px, 2.1vw, 22px);
-    height: clamp(22px, 5.8dvh, 29px);
-  }
-
-  .mj-tile-rank {
-    font-size: 0.86rem;
-  }
-
-  .mj-tile-suit {
-    font-size: 0.56rem;
-  }
-
-  .mj-tile-honor {
-    font-size: 0.96rem;
-  }
-
-  .mj-tile-sm .mj-tile-rank {
-    font-size: 0.64rem;
-  }
-
-  .mj-tile-sm .mj-tile-suit {
-    font-size: 0.44rem;
-  }
-
-  .mj-tile-sm .mj-tile-honor {
-    font-size: 0.72rem;
-  }
-
-  .mj-tile-riichi {
-    margin: 0 3px;
-  }
-
-  .call-action-bar,
-  .self-action-bar {
-    padding: 4px 6px;
-  }
-
-  .btn-call,
-  .btn-kita,
-  .btn-abortive,
-  .btn-ron,
-  .btn-riichi {
-    padding: 3px 8px;
-    font-size: 0.74rem;
+/* ---------- 河の牌サイズの追随（末尾に置いて優先させる） ---------- */
+@media (orientation: landscape) and (max-height: 640px) {
+  .discard-river {
+    --river-tile-w: 24px;
+    --river-tile-h: 34px;
   }
 }
 
-/* Strict Landscape Enforcement Overlay for active game phases */
-.landscape-lock-overlay {
-  display: none;
-}
-
-@media (orientation: portrait) {
-  body[data-game-active='true'] .landscape-lock-overlay {
-    position: fixed;
-    inset: 0;
-    z-index: 9999;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 24px;
-    background: rgba(6, 17, 14, 0.97);
-    backdrop-filter: blur(8px);
-  }
-
-  body[data-game-active='true'] .top-bar,
-  body[data-game-active='true'] .game-main,
-  body[data-game-active='true'] .error-banner {
-    visibility: hidden;
-    pointer-events: none;
+@media (orientation: landscape) and (max-height: 560px) {
+  .discard-river {
+    --river-tile-w: 21px;
+    --river-tile-h: 30px;
   }
 }
 
-.landscape-lock-card {
-  width: min(380px, 100%);
-  background: var(--bg-panel);
-  border: 2px solid var(--accent-gold);
-  border-radius: 16px;
-  padding: 24px 20px;
-  text-align: center;
+@media (orientation: landscape) and (max-height: 430px) {
+  .discard-river {
+    --river-tile-w: 18px;
+    --river-tile-h: 26px;
+  }
+}
+
+/* 河の牌サイズは --river-tile-w/h に一本化（他サイズ指定より優先） */
+.table-felt.is-landscape .discard-river > .mj-tile,
+.table-felt.is-landscape .discard-river > .mj-tile.mj-tile-sm {
+  width: var(--river-tile-w);
+  height: var(--river-tile-h);
+}
+
+/* サイドパネルの一覧は小さめ・回転なし */
+.table-felt.is-landscape .side-panel .discard-river > .mj-tile.mj-tile-sm {
+  width: 19px;
+  height: 27px;
+}
+
+/* 左右の席は横並び（手牌 ↔ 河）なので中央寄せを維持 */
+.seat-orient-left,
+.seat-orient-right {
+  min-height: 0;
+}
+
+.seat-orient-left .seat-body,
+.seat-orient-right .seat-body {
+  width: 100%;
+}
+
+/* 対面の河は 6 列 × 3 段ぶんの高さを確保して、増えても下へ伸びる */
+.seat-orient-top .river-zone {
+  align-self: stretch;
+  justify-content: flex-start;
+}
+
+/* 河ラベルは邪魔なら消す（コンパクト表示のみ残す） */
+.seat-orient-left .river-label,
+.seat-orient-right .river-label {
+  writing-mode: vertical-rl;
+  font-size: 0.55rem;
+}
+
+/*
+ * 河は「捨てられた牌がすべて見える」ことを最優先にする（テストでも検証）。
+ * 高さ・幅で切り落とさず、3 段を超えた分は中央側へ自然に伸ばす。
+ */
+.seat-orient-left .river-zone,
+.seat-orient-right .river-zone {
+  max-height: none;
+}
+
+.river-top .discard-river,
+.seat-orient-left .discard-river,
+.seat-orient-right .discard-river {
+  overflow: visible;
+}
+
+/* ---------- 手牌の裏向きサイズ: 収まる範囲で最大にする ---------- */
+.seat-body-left .opponent-hand,
+.seat-body-right .opponent-hand {
+  align-self: stretch;
+}
+
+/* 対面・自分の手牌は 13〜14 枚が 1 行に収まる幅を確保 */
+.seat-body-top .opponent-hand {
+  min-width: 0;
+}
+
+@media (orientation: landscape) and (max-height: 560px) {
+  .hand-orient-left .mj-tile-back,
+  .hand-orient-right .mj-tile-back {
+    width: 14px;
+    max-height: 22px;
+  }
+
+  .hand-orient-top .mj-tile-back {
+    width: 13px;
+    height: 19px;
+  }
+}
+
+@media (orientation: landscape) and (max-height: 430px) {
+  .hand-orient-left .mj-tile-back,
+  .hand-orient-right .mj-tile-back {
+    width: 12px;
+    max-height: 18px;
+  }
+
+  .hand-orient-top .mj-tile-back {
+    width: 11px;
+    height: 16px;
+  }
+}
+
+/* ---------- ロビーの CPU 後入れ機能 ---------- */
+.lobby-cpu-controls {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 12px;
-  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.6);
+  gap: 8px;
+  margin: 4px 0 14px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(240, 201, 92, 0.06);
+  border: 1px dashed rgba(240, 201, 92, 0.35);
 }
 
-.landscape-lock-icon {
-  font-size: 2.6rem;
-  line-height: 1;
+.lobby-cpu-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.lobby-cpu-buttons .btn {
+  flex: 1 1 140px;
+  font-size: 0.86rem;
+  padding: 8px 10px;
+}
+
+.lobby-cpu-buttons .btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ===================================================================
+   対局中は「雀卓だけ」を表示する（第7段階）
+   - トップバー / サイドパネルを出さず、卓を画面いっぱいに使う
+   - ドラ表示は卓の左上、退出ボタンは右上に重ねる
+   =================================================================== */
+
+.app-shell-table-only {
+  padding: 0;
+  gap: 0;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+}
+
+.table-only-main {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+}
+
+.table-only-main > .table-stage {
+  width: 100%;
+  height: 100%;
+  gap: 0;
+}
+
+/* 卓はビューポートいっぱい（余白なし） */
+.app-shell-table-only .table-felt.is-landscape {
+  min-height: 0;
+  height: 100%;
+  border-radius: 0;
+  padding: 8px 10px;
+  position: relative;
+  --dora-panel-w: 150px;
+}
+
+/* ---------- ドラ表示（左上） ---------- */
+.dora-panel {
+  position: absolute;
+  top: 8px;
+  left: 10px;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px 8px;
+  border-radius: 9px;
+  background: rgba(4, 14, 11, 0.78);
+  border: 1px solid var(--border-gold);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+}
+
+/* 対面の手牌と重ならないよう、対面の席は左上を空ける */
+.app-shell-table-only .seat-orient-top {
+  padding-left: var(--dora-panel-w);
+}
+
+.dora-panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.dora-panel-label {
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
   color: var(--accent-gold);
 }
 
-.landscape-lock-card h2 {
-  margin: 0;
-  font-size: 1.2rem;
-  color: var(--accent-gold);
-}
-
-.landscape-lock-card p {
-  margin: 0;
-  font-size: 0.92rem;
-  line-height: 1.5;
+.dora-panel-count {
+  font-size: 0.6rem;
   color: var(--text-muted);
 }
 
-.landscape-lock-actions {
+.dora-panel-tiles {
+  display: flex;
+  gap: 3px;
+}
+
+/* ---------- 卓上の操作（退出） ---------- */
+.table-chrome {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  z-index: 6;
+  display: flex;
+  gap: 6px;
+}
+
+.table-chrome-leave {
+  font-family: inherit;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(4, 14, 11, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity 0.15s ease, color 0.15s ease;
+}
+
+.table-chrome-leave:hover,
+.table-chrome-leave:focus-visible {
+  opacity: 1;
+  color: var(--accent-gold);
+  border-color: var(--border-gold);
+}
+
+/* 右上は右家の手牌と重なりやすいので、右家の席は少し下げる */
+.app-shell-table-only .seat-orient-right {
+  padding-top: 26px;
+}
+
+/* ---------- 局間の「和了役」強調表示 ---------- */
+.round-yaku-summary {
   display: flex;
   flex-direction: column;
-  width: 100%;
   gap: 8px;
-  margin-top: 6px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: linear-gradient(
+    180deg,
+    rgba(240, 201, 92, 0.14) 0%,
+    rgba(240, 201, 92, 0.05) 100%
+  );
+  border: 1px solid var(--accent-gold);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35), 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.round-yaku-title {
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  color: var(--accent-gold);
+}
+
+.round-yaku-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 0;
+  border-top: 1px dashed rgba(240, 201, 92, 0.3);
+}
+
+.round-yaku-row:first-of-type {
+  border-top: none;
+  padding-top: 0;
+}
+
+.round-yaku-who {
+  font-size: 0.92rem;
+  font-weight: 800;
+  color: var(--text-main);
+}
+
+.round-yaku-chips {
+  gap: 6px;
+}
+
+.round-yaku-chip {
+  font-size: 0.84rem;
+  padding: 4px 10px;
+  font-weight: 800;
+}
+
+.round-yaku-total {
+  font-size: 0.84rem;
+  font-weight: 700;
+  color: var(--accent-gold);
+}
+
+/* 局間オーバーレイは「役」を最上段に置くため、余白を詰める */
+.overlay-panel {
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+@media (orientation: landscape) and (max-height: 560px) {
+  .app-shell-table-only .table-felt.is-landscape {
+    --dora-panel-w: 128px;
+    padding: 4px 6px;
+  }
+
+  .dora-panel {
+    padding: 4px 6px;
+    gap: 2px;
+  }
+
+  .round-yaku-chip {
+    font-size: 0.74rem;
+    padding: 3px 8px;
+  }
 }

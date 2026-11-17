@@ -196,7 +196,6 @@ export function createInitialGameState(params: CreateInitialGameParams): GameSta
     melds: [],
     kitaTiles: [],
     connected: true,
-    isCpu: false,
   };
 
   return {
@@ -1606,10 +1605,6 @@ export function reduce(
         melds: [],
         kitaTiles: [],
         connected: true,
-        isCpu: Boolean(action.isCpu),
-        ...(action.isCpu
-          ? { cpuLevel: action.cpuLevel ?? rules.cpuLevel }
-          : {}),
       };
       return {
         ...state,

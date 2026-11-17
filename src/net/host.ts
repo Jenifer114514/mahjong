@@ -1,8 +1,12 @@
 import Peer, { type DataConnection } from 'peerjs';
 import {
-  decideCpuCallResponse,
-  decideCpuTurnAction,
-} from '../engine/cpu';
+  CPU_PLAYER_ID_PREFIX,
+  cpuDisplayName,
+  decideCpuAction,
+  isCpuPlayerId,
+  toEngineAction,
+  type CpuAction,
+} from '../cpu/player';
 import { toStateView } from '../engine/projection';
 import { applyAction, createInitialGameState } from '../engine/reducer';
 import { deriveRules } from '../engine/rules';
@@ -27,9 +31,17 @@ export interface HostSessionCallbacks {
 }
 
 export interface HostSessionOptions {
-  disablePeer?: boolean;
-  cpuTurnDelayMs?: number;
-  cpuResponseDelayMs?: number;
+  /** 追加する CPU の数（ホスト + CPU で規定人数に達すると自動開局） */
+  cpuCount?: number;
+  /** CPU の思考時間(ms)。0 にすると即座に打牌する（テスト用） */
+  cpuDelayMs?: number;
+  /** CPU 操作の遅延スケジュール（テスト用に差し替え可能） */
+  cpuScheduler?: (fn: () => void, delayMs: number) => void;
+  /**
+   * オンライン化せず CPU だけで遊ぶローカル対局モード。
+   * PeerJS へ接続しないため、オフライン環境でも対局できる。
+   */
+  offline?: boolean;
 }
 
 export class HostSession {
@@ -37,12 +49,15 @@ export class HostSession {
   private state: GameState;
   private readonly connections = new Map<string, DataConnection>();
   private readonly callbacks: HostSessionCallbacks;
-  private readonly options: Required<HostSessionOptions>;
   private destroyed = false;
   private idRetryCount = 0;
-  private nextCpuSeq = 1;
   private responseTimerId: ReturnType<typeof setTimeout> | null = null;
-  private cpuTimerIds: ReturnType<typeof setTimeout>[] = [];
+  private readonly offline: boolean;
+  /** 設定された CPU 数（ロビーで後から増やせるため可変） */
+  private cpuCount: number;
+  private readonly cpuDelayMs: number;
+  private readonly cpuScheduler: (fn: () => void, delayMs: number) => void;
+  private cpuToken = 0;
 
   constructor(
     hostName: string,
@@ -51,11 +66,12 @@ export class HostSession {
     options: HostSessionOptions = {},
   ) {
     this.callbacks = callbacks;
-    this.options = {
-      disablePeer: options.disablePeer ?? false,
-      cpuTurnDelayMs: options.cpuTurnDelayMs ?? 420,
-      cpuResponseDelayMs: options.cpuResponseDelayMs ?? 220,
-    };
+    this.offline = options.offline ?? false;
+    this.cpuCount = options.cpuCount ?? 0;
+    this.cpuDelayMs = options.cpuDelayMs ?? 700;
+    this.cpuScheduler = options.cpuScheduler ?? ((fn, delay) => {
+      setTimeout(fn, delay);
+    });
     const roomCode = generateRoomCode();
     const hostPeerId = roomCodeToPeerId(roomCode);
     this.state = createInitialGameState({
@@ -67,19 +83,120 @@ export class HostSession {
   }
 
   getRoomCode(): string {
-    return this.state.roomCode;
+    return this.offline ? 'LOCAL' : this.state.roomCode;
+  }
+
+  /** ローカル対局（CPU戦）かどうか */
+  isOffline(): boolean {
+    return this.offline;
   }
 
   start(): void {
     if (this.destroyed) return;
-    // PeerJS シグナリング前でもロビー画面と CPU 対戦操作を即座に使えるようにする
-    this.emitHostView();
-    if (this.options.disablePeer) {
-      this.callbacks.onStatusChange('ready', 'ローカル対戦モード');
+    if (this.offline) {
+      // ローカル対局: 通信を張らずに CPU 席だけ用意する
+      this.callbacks.onStatusChange('ready', 'ローカル対局（CPU戦）');
+      this.bootstrapCpuSeats();
       return;
     }
     this.callbacks.onStatusChange('initializing', 'PeerJS サーバーに接続中...');
     this.openPeerWithCurrentRoomCode();
+    this.bootstrapCpuSeats();
+  }
+
+  /** 設定された人数分の CPU 席をロビーに追加し、揃っていれば開局する */
+  private bootstrapCpuSeats(): void {
+    if (this.cpuCount <= 0 || this.destroyed) return;
+    let next = this.state;
+    const rules = deriveRules(next.ruleConfig);
+    for (let i = 0; i < this.cpuCount; i++) {
+      const cpuId = cpuPlayerId(i);
+      if (next.players.some((p) => p.playerId === cpuId)) continue;
+      if (next.players.length >= rules.playerCount) break;
+      const result = applyAction(next, {
+        type: 'JOIN_PLAYER',
+        playerId: cpuId,
+        name: cpuName(i),
+      });
+      if (result.error) break;
+      next = result.state;
+    }
+    if (next !== this.state) {
+      this.commitState(this.maybeAutoStart(next));
+    }
+  }
+
+  /**
+   * ロビーに CPU を 1 体追加する（ホストのみ・開局後は不可）。
+   * 席が埋まった時点で通常どおり自動開局する。
+   */
+  addCpu(): boolean {
+    if (this.destroyed || this.state.phase !== 'lobby') return false;
+    const rules = deriveRules(this.state.ruleConfig);
+    if (this.state.players.length >= rules.playerCount) return false;
+
+    // まだ使われていない CPU 番号を探す
+    let index = 0;
+    while (
+      this.state.players.some((p) => p.playerId === cpuPlayerId(index))
+    ) {
+      index++;
+    }
+    const result = applyAction(this.state, {
+      type: 'JOIN_PLAYER',
+      playerId: cpuPlayerId(index),
+      name: cpuName(index),
+    });
+    if (result.error) return false;
+
+    this.cpuCount = Math.max(this.cpuCount, index + 1);
+    this.commitState(this.maybeAutoStart(result.state));
+    return true;
+  }
+
+  /** ロビーから CPU を 1 体減らす（最後に追加された CPU を抜く） */
+  removeCpu(): boolean {
+    if (this.destroyed || this.state.phase !== 'lobby') return false;
+    const cpuPlayers = this.state.players.filter((p) => isCpuPlayerId(p.playerId));
+    if (cpuPlayers.length === 0) return false;
+    // CPU 番号が大きいものから抜く
+    const target = [...cpuPlayers].sort((a, b) =>
+      b.playerId.localeCompare(a.playerId, 'en', { numeric: true }),
+    )[0]!;
+    const result = applyAction(this.state, {
+      type: 'LEAVE_LOBBY',
+      playerId: target.playerId,
+    });
+    if (result.error) return false;
+    this.cpuCount = Math.max(0, this.cpuCount - 1);
+    this.commitState(result.state);
+    return true;
+  }
+
+  /** ロビーで人数が揃っていれば自動開局する */
+  private maybeAutoStart(nextState: GameState): GameState {
+    const rules = deriveRules(nextState.ruleConfig);
+    if (
+      nextState.phase !== 'lobby' ||
+      nextState.players.length !== rules.playerCount
+    ) {
+      return nextState;
+    }
+    const shuffledPlayerIds = shuffleWithCrypto(
+      nextState.players.map((p) => p.playerId),
+    );
+    const shuffledDeck = shuffleWithCrypto(buildTileDeck(rules));
+    const startResult = applyAction(nextState, {
+      type: 'START_GAME',
+      shuffledDeck,
+      shuffledPlayerIds,
+    });
+    return startResult.error ? nextState : startResult.state;
+  }
+
+  private isCpuPlayer(playerId: string): boolean {
+    // ロビーで追加された CPU は番号が飛ぶことがあるため接頭辞で判定する
+    return isCpuPlayerId(playerId);
   }
 
   private openPeerWithCurrentRoomCode(): void {
@@ -95,15 +212,13 @@ export class HostSession {
         return;
       }
       opened = true;
-      if (this.state.phase === 'lobby' && this.state.hostPlayerId !== id) {
-        this.state = {
-          ...this.state,
-          hostPlayerId: id,
-          players: this.state.players.map((p, idx) =>
-            idx === 0 ? { ...p, playerId: id } : p,
-          ),
-        };
-      }
+      this.state = {
+        ...this.state,
+        hostPlayerId: id,
+        players: this.state.players.map((p, idx) =>
+          idx === 0 ? { ...p, playerId: id } : p,
+        ),
+      };
       this.callbacks.onStatusChange('ready', '参加者待機中');
       this.emitHostView();
     });
@@ -118,12 +233,7 @@ export class HostSession {
 
     peer.on('error', (err) => {
       if (this.destroyed) return;
-      if (
-        !opened &&
-        this.state.phase === 'lobby' &&
-        err.type === 'unavailable-id' &&
-        this.idRetryCount < 5
-      ) {
+      if (!opened && err.type === 'unavailable-id' && this.idRetryCount < 5) {
         this.idRetryCount++;
         peer.destroy();
         const nextCode = generateRoomCode();
@@ -136,14 +246,13 @@ export class HostSession {
             idx === 0 ? { ...p, playerId: nextHostId } : p,
           ),
         };
-        this.emitHostView();
         this.openPeerWithCurrentRoomCode();
         return;
       }
 
       this.callbacks.onStatusChange(
         'error',
-        `通信待機オフライン (${err.type}) — CPU対戦はそのまま利用できます`,
+        `接続エラー (${err.type}): ${err.message}`,
       );
     });
 
@@ -151,7 +260,7 @@ export class HostSession {
       if (!this.destroyed && !peer.destroyed) {
         this.callbacks.onStatusChange(
           'error',
-          'シグナリングサーバーから切断されました（CPU対戦は継続可能）',
+          'シグナリングサーバーから切断されました',
         );
       }
     });
@@ -227,29 +336,8 @@ export class HostSession {
         return;
       }
 
-      let nextState = joinResult.state;
-      const rules = deriveRules(nextState.ruleConfig);
-
       // 設定した人数が揃ったら自動開局（CSPRNG で席順と山牌をシャッフル）
-      if (
-        nextState.phase === 'lobby' &&
-        nextState.players.length === rules.playerCount
-      ) {
-        const shuffledPlayerIds = shuffleWithCrypto(
-          nextState.players.map((p) => p.playerId),
-        );
-        const shuffledDeck = shuffleWithCrypto(buildTileDeck(rules));
-        const startResult = applyAction(nextState, {
-          type: 'START_GAME',
-          shuffledDeck,
-          shuffledPlayerIds,
-        });
-        if (!startResult.error) {
-          nextState = startResult.state;
-        }
-      }
-
-      this.commitState(nextState);
+      this.commitState(this.maybeAutoStart(joinResult.state));
       return;
     }
 
@@ -434,251 +522,151 @@ export class HostSession {
     });
   }
 
-  private getNextCpuDisplayName(existingNames: readonly string[]): string {
-    const used = new Set(existingNames);
-    for (let i = 1; i <= 4; i++) {
-      const candidate = `CPU ${i}`;
-      if (!used.has(candidate)) {
-        return candidate;
-      }
-    }
-    return `CPU ${existingNames.length + 1}`;
-  }
-
-  private maybeStartIfLobbyFull(candidateState: GameState): GameState {
-    const rules = deriveRules(candidateState.ruleConfig);
-    if (
-      candidateState.phase !== 'lobby' ||
-      candidateState.players.length !== rules.playerCount
-    ) {
-      return candidateState;
-    }
-    const shuffledPlayerIds = shuffleWithCrypto(
-      candidateState.players.map((p) => p.playerId),
-    );
-    const shuffledDeck = shuffleWithCrypto(buildTileDeck(rules));
-    const startResult = applyAction(candidateState, {
-      type: 'START_GAME',
-      shuffledDeck,
-      shuffledPlayerIds,
-    });
-    return startResult.error ? candidateState : startResult.state;
-  }
-
-  addCpuPlayer(): void {
-    if (this.destroyed || this.state.phase !== 'lobby') return;
-    const rules = deriveRules(this.state.ruleConfig);
-    if (this.state.players.length >= rules.playerCount) return;
-
-    const cpuId = `cpu-${this.nextCpuSeq++}`;
-    const name = this.getNextCpuDisplayName(
-      this.state.players.map((p) => p.name),
-    );
-    const joinResult = applyAction(this.state, {
-      type: 'JOIN_PLAYER',
-      playerId: cpuId,
-      name,
-      isCpu: true,
-      cpuLevel: rules.cpuLevel,
-    });
-    if (joinResult.error) {
-      this.callbacks.onError(joinResult.error);
-      return;
-    }
-    const nextState = this.maybeStartIfLobbyFull(joinResult.state);
-    this.commitState(nextState);
-  }
-
-  removeCpuPlayer(playerId: string): void {
-    if (this.destroyed || this.state.phase !== 'lobby') return;
-    const target = this.state.players.find((p) => p.playerId === playerId);
-    if (!target || !target.isCpu) return;
-    this.dispatchHostAction({
-      type: 'LEAVE_LOBBY',
-      playerId,
-    });
-  }
-
-  fillWithCpusAndStart(): void {
-    if (this.destroyed || this.state.phase !== 'lobby') return;
-    const rules = deriveRules(this.state.ruleConfig);
-    let nextState = this.state;
-
-    while (nextState.players.length < rules.playerCount) {
-      const cpuId = `cpu-${this.nextCpuSeq++}`;
-      const name = this.getNextCpuDisplayName(
-        nextState.players.map((p) => p.name),
-      );
-      const joinResult = applyAction(nextState, {
-        type: 'JOIN_PLAYER',
-        playerId: cpuId,
-        name,
-        isCpu: true,
-        cpuLevel: rules.cpuLevel,
-      });
-      if (joinResult.error) {
-        this.callbacks.onError(joinResult.error);
-        return;
-      }
-      nextState = joinResult.state;
-    }
-
-    nextState = this.maybeStartIfLobbyFull(nextState);
-    this.commitState(nextState);
-  }
-
   private commitState(nextState: GameState): void {
-    this.clearCpuTimers();
     this.state = nextState;
     this.syncResponseTimer();
     this.broadcastViews();
-    this.scheduleCpuActionsIfNeeded();
+    this.scheduleCpuTick();
   }
 
-  private clearCpuTimers(): void {
-    for (const id of this.cpuTimerIds) {
-      clearTimeout(id);
+  /** CPU の手番・応答待ちが残っていれば次の一手を予約する */
+  private scheduleCpuTick(): void {
+    if (this.destroyed || this.cpuCount <= 0) return;
+    const phase = this.state.phase;
+    if (phase === 'finished') return;
+
+    const token = ++this.cpuToken;
+    // 鳴き・ロンの応答は打牌より短く待ってテンポよく進める
+    const delayMs =
+      phase === 'awaiting_responses'
+        ? Math.round(this.cpuDelayMs * 0.45)
+        : this.cpuDelayMs;
+    this.cpuScheduler(() => {
+      if (this.destroyed || token !== this.cpuToken) return;
+      const progressed = this.runCpuStepOnce();
+      if (progressed) {
+        this.scheduleCpuTick();
+      }
+    }, delayMs);
+  }
+
+  /**
+   * CPU の操作を 1 手だけ適用する（適用したら true）。
+   * タイマー経由の自動進行のほか、テストから決定的に駆動する場合にも使う。
+   */
+  runCpuStepOnce(): boolean {
+    if (this.destroyed || this.cpuCount <= 0) return false;
+    const phase = this.state.phase;
+
+    if (phase === 'lobby') {
+      const missing = this.missingCpuIds();
+      if (missing.length === 0) {
+        // CPU 席は揃っているが未開局（人間の参加待ちなど）
+        const started = this.maybeAutoStart(this.state);
+        if (started !== this.state) {
+          this.commitState(started);
+          return true;
+        }
+        return false;
+      }
+      const result = applyAction(this.state, {
+        type: 'JOIN_PLAYER',
+        playerId: missing[0]!,
+        name: cpuName(cpuIndexOf(missing[0]!, this.cpuCount)),
+      });
+      if (result.error) return false;
+      this.commitState(this.maybeAutoStart(result.state));
+      return true;
     }
-    this.cpuTimerIds = [];
-  }
 
-  private attachNowTimestamp(action: Action): Action {
-    const now = Date.now();
-    switch (action.type) {
-      case 'DISCARD_TILE':
-      case 'DECLARE_RIICHI':
-      case 'DECLARE_ANKAN':
-      case 'DECLARE_KAKAN':
-        return { ...action, now };
-      default:
-        return action;
+    if (phase === 'awaiting_responses') {
+      const pending = this.state.round?.pendingResponse;
+      if (!pending) return false;
+      for (const pid of Object.keys(pending.optionsByPlayerId)) {
+        if (pid in pending.responses) continue;
+        if (!this.isCpuPlayer(pid)) continue;
+        const view = toStateView(this.state, pid, Date.now());
+        if (!view.myCallOptions) continue;
+        const decision =
+          decideCpuAction(view) ?? {
+            type: 'CALL_RESPONSE' as const,
+            choice: { type: 'pass' as const },
+          };
+        return this.applyCpuDecision(pid, decision);
+      }
+      return false;
     }
+
+    if (phase !== 'playing') return false;
+
+    const current = this.state.players.find(
+      (p) => p.seatIndex === this.state.round?.currentTurnIndex,
+    );
+    if (!current || !this.isCpuPlayer(current.playerId)) return false;
+    if (this.state.round?.pendingResponse) return false;
+
+    const view = toStateView(this.state, current.playerId, Date.now());
+    const decision =
+      decideCpuAction(view) ??
+      (view.myDrawnTile
+        ? { type: 'DISCARD_TILE' as const, tileId: view.myDrawnTile.id }
+        : null);
+    if (!decision) return false;
+    return this.applyCpuDecision(current.playerId, decision);
   }
 
-  private scheduleCpuActionsIfNeeded(): void {
-    if (this.destroyed || !this.state.round) return;
+  private applyCpuDecision(playerId: string, decision: CpuAction): boolean {
     const rules = deriveRules(this.state.ruleConfig);
-
-    if (this.state.phase === 'playing') {
-      const round = this.state.round;
-      const activePlayer = this.state.players.find(
-        (p) => p.seatIndex === round.currentTurnIndex,
-      );
-      if (!activePlayer || !activePlayer.isCpu) return;
-
-      const expectedTurnCount = round.turnCount;
-      const expectedPlayerId = activePlayer.playerId;
-
-      const timerId = setTimeout(() => {
-        if (this.destroyed || this.state.phase !== 'playing' || !this.state.round) {
-          return;
-        }
-        const curPlayer = this.state.players.find(
-          (p) => p.seatIndex === this.state.round!.currentTurnIndex,
-        );
-        if (
-          this.state.round.turnCount !== expectedTurnCount ||
-          !curPlayer ||
-          curPlayer.playerId !== expectedPlayerId ||
-          !curPlayer.isCpu
-        ) {
-          return;
-        }
-
-        const rawAction = decideCpuTurnAction(this.state, curPlayer, rules);
-        let result = applyAction(this.state, this.attachNowTimestamp(rawAction));
-
-        // 万一のフォールバック: 必ず合法な打牌で進行を止めない
-        if (result.error) {
-          const fallbackTile = curPlayer.drawnTile ?? curPlayer.hand[0];
-          if (fallbackTile) {
-            result = applyAction(this.state, {
-              type: 'DISCARD_TILE',
-              playerId: curPlayer.playerId,
-              tileId: fallbackTile.id,
-              now: Date.now(),
-            });
-          }
-        }
-
-        if (!result.error) {
-          this.commitState(result.state);
-        }
-      }, this.options.cpuTurnDelayMs);
-
-      this.cpuTimerIds.push(timerId);
-      return;
-    }
-
-    if (
-      this.state.phase === 'awaiting_responses' &&
-      this.state.round.pendingResponse
-    ) {
-      const pending = this.state.round.pendingResponse;
-      const unrespondedCpuIds = Object.keys(pending.optionsByPlayerId).filter(
-        (pid) => {
-          if (pid in pending.responses) return false;
-          const player = this.state.players.find((p) => p.playerId === pid);
-          return Boolean(player?.isCpu);
-        },
-      );
-      if (unrespondedCpuIds.length === 0) return;
-
-      const expectedTurnCount = pending.turnCount;
-
-      const timerId = setTimeout(() => {
-        if (
-          this.destroyed ||
-          this.state.phase !== 'awaiting_responses' ||
-          !this.state.round?.pendingResponse ||
-          this.state.round.pendingResponse.turnCount !== expectedTurnCount
-        ) {
-          return;
-        }
-
-        let nextState = this.state;
-        let changed = false;
-
-        for (const cpuId of unrespondedCpuIds) {
-          if (
-            nextState.phase !== 'awaiting_responses' ||
-            !nextState.round?.pendingResponse
-          ) {
-            break;
-          }
-          const curPending = nextState.round.pendingResponse;
-          if (cpuId in curPending.responses) continue;
-          const opts = curPending.optionsByPlayerId[cpuId];
-          const cpuPlayer = nextState.players.find((p) => p.playerId === cpuId);
-          if (!opts || !cpuPlayer || !cpuPlayer.isCpu) continue;
-
-          let choice = decideCpuCallResponse(nextState, cpuPlayer, opts, rules);
-          let res = applyAction(nextState, {
-            type: 'CALL_RESPONSE',
-            playerId: cpuId,
-            choice,
+    const engineAction = toEngineAction(playerId, decision, {
+      now: Date.now(),
+      shuffledDeck: shuffleWithCrypto(buildTileDeck(rules)),
+    });
+    if (!engineAction) return false;
+    const result = applyAction(this.state, engineAction);
+    if (result.error) {
+      if (decision.type !== 'DISCARD_TILE') {
+        // 選択が却下された場合はツモ切りでフォールバックする
+        const view = toStateView(this.state, playerId, Date.now());
+        if (view.myDrawnTile) {
+          const fallback = applyAction(this.state, {
+            type: 'DISCARD_TILE',
+            playerId,
+            tileId: view.myDrawnTile.id,
+            now: Date.now(),
           });
-          if (res.error) {
-            choice = { type: 'pass' };
-            res = applyAction(nextState, {
-              type: 'CALL_RESPONSE',
-              playerId: cpuId,
-              choice,
-            });
-          }
-          if (!res.error) {
-            nextState = res.state;
-            changed = true;
+          if (!fallback.error) {
+            this.commitState(fallback.state);
+            return true;
           }
         }
-
-        if (changed) {
-          this.commitState(nextState);
-        }
-      }, this.options.cpuResponseDelayMs);
-
-      this.cpuTimerIds.push(timerId);
+      }
+      return false;
     }
+    this.commitState(result.state);
+    return true;
+  }
+
+  private missingCpuIds(): string[] {
+    const rules = deriveRules(this.state.ruleConfig);
+    const existing = this.state.players.filter((p) =>
+      isCpuPlayerId(p.playerId),
+    ).length;
+    const missing: string[] = [];
+    for (let i = 0; i < this.cpuCount - existing; i++) {
+      // 追加予定の CPU 番号は、空いている番号を順に使う
+      let index = 0;
+      while (
+        this.state.players.some((p) => p.playerId === cpuPlayerId(index)) ||
+        missing.includes(cpuPlayerId(index))
+      ) {
+        index++;
+      }
+      missing.push(cpuPlayerId(index));
+    }
+    if (this.state.players.length + missing.length > rules.playerCount) {
+      return missing.slice(0, Math.max(0, rules.playerCount - this.state.players.length));
+    }
+    return missing;
   }
 
   private clearResponseTimer(): void {
@@ -735,9 +723,7 @@ export class HostSession {
       toStateView(this.state, this.state.hostPlayerId, now),
     );
     for (const player of this.state.players) {
-      if (player.playerId === this.state.hostPlayerId || player.isCpu) {
-        continue;
-      }
+      if (player.playerId === this.state.hostPlayerId) continue;
       const conn = this.connections.get(player.playerId);
       if (conn && conn.open) {
         this.sendToConn(conn, {
@@ -760,8 +746,8 @@ export class HostSession {
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
+    this.cpuToken++;
     this.clearResponseTimer();
-    this.clearCpuTimers();
     for (const conn of this.connections.values()) {
       conn.close();
     }
@@ -772,4 +758,19 @@ export class HostSession {
     this.peer = null;
     this.callbacks.onStatusChange('closed');
   }
+}
+
+function cpuPlayerId(index: number): string {
+  return `${CPU_PLAYER_ID_PREFIX}${index + 1}`;
+}
+
+function cpuName(index: number): string {
+  return cpuDisplayName(index);
+}
+
+function cpuIndexOf(playerId: string, cpuCount: number): number {
+  for (let i = 0; i < cpuCount; i++) {
+    if (cpuPlayerId(i) === playerId) return i;
+  }
+  return 0;
 }

@@ -52,7 +52,6 @@ function makeDummyPlayer(
     melds: [],
     kitaTiles: [],
     connected: true,
-    isCpu: false,
   };
 }
 
