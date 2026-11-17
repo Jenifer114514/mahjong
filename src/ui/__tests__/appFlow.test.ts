@@ -82,7 +82,7 @@ describe('アプリ起動とローカルCPU対局', () => {
     expect(handTiles.length).toBeGreaterThanOrEqual(13);
   });
 
-  it('手番になったら手牌をタップして打牌でき、捨て牌が増える', async () => {
+  it('手番になったら1回目タップで牌が選択状態になり、2回目タップで打牌できて捨て牌が増える', async () => {
     bootApp();
     await loadMain();
 
@@ -90,6 +90,7 @@ describe('アプリ起動とローカルCPU対局', () => {
     clickByText(root, 'button', 'CPU対局をはじめる');
 
     // 自分の手番になるまで待つ（CPU 3体が打牌を終えるまで。途中で鳴き確認が出たらスルー）
+    let selectedObserved = false;
     let acted = false;
     let before = 0;
     for (let i = 0; i < 200 && !acted; i++) {
@@ -99,10 +100,20 @@ describe('アプリ起動とローカルCPU対局', () => {
         '.seat-self .hand-area .mj-tile-clickable',
       );
       if (clickable.length > 0) {
+        const firstTile = clickable[0]!;
         before = root.querySelectorAll('.seat-self .discard-river .mj-tile')
           .length;
-        clickable[0]!.click();
-        // 再描画はマイクロタスク後。取りこぼしても次の周回で再試行する
+        // 1回目タップ: 選択のみ行いまだ打牌しない
+        firstTile.click();
+        if (firstTile.classList.contains('mj-tile-selected')) {
+          selectedObserved = true;
+        }
+        expect(
+          root.querySelectorAll('.seat-self .discard-river .mj-tile').length,
+        ).toBe(before);
+
+        // 2回目タップ: 選択中の牌を打牌確定
+        firstTile.click();
         for (let j = 0; j < 20 && !acted; j++) {
           await new Promise((resolve) => setTimeout(resolve, 30));
           const after = root.querySelectorAll(
@@ -112,7 +123,8 @@ describe('アプリ起動とローカルCPU対局', () => {
         }
       }
     }
-    expect(acted, '自分の捨て牌が 1 枚増える').toBe(true);
+    expect(selectedObserved, '1回目タップで選択状態になる').toBe(true);
+    expect(acted, '2回目タップで自分の捨て牌が 1 枚増える').toBe(true);
   }, 30000);
 
   it('対局中に退出を押すとアプリ内確認モーダルが出て、キャンセルで続行・確定でロビーへ戻る', async () => {

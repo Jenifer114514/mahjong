@@ -232,7 +232,7 @@ describe('renderGameTable（横画面レイアウト）', () => {
     expect(root2.querySelector('.table-chrome-leave')).toBeNull();
   });
 
-  it('局と局の間は和了役をまとめて表示する', () => {
+  it('局終了の結果画面はまず役と裏ドラを表示し、「次へ」で点数の移行表示へ切り替わる', () => {
     const view = toStateView(state4, 'p0', 0);
     const round = view.round!;
     const roundEndView: StateView = {
@@ -240,6 +240,13 @@ describe('renderGameTable（横画面レイアウト）', () => {
       phase: 'round_end',
       round: {
         ...round,
+        uraDoraIndicators: [{ id: 'ura-1', kind: '6s', isRed: false }],
+        roundScoreDeltas: {
+          [view.players[0]!.playerId]: -2000,
+          [view.players[1]!.playerId]: 4000,
+          [view.players[2]!.playerId]: -1000,
+          [view.players[3]!.playerId]: -1000,
+        },
         agariResults: [
           {
             winType: 'ron',
@@ -255,13 +262,13 @@ describe('renderGameTable（横画面レイアウト）', () => {
               { id: 'pinfu', name: '平和', han: 1 },
             ],
             doraCount: 1,
-            uraDoraCount: 0,
+            uraDoraCount: 1,
             kitaCount: 0,
-            han: 3,
+            han: 4,
             fu: 30,
             isYakuman: false,
-            scoreLabel: '3900',
-            pointsAwarded: 3900,
+            scoreLabel: '満貫',
+            pointsAwarded: 8000,
             honbaPointsAwarded: 0,
             scoreDeltas: {},
           },
@@ -269,25 +276,49 @@ describe('renderGameTable（横画面レイアウト）', () => {
       },
     };
 
+    const onAdvanceRound = vi.fn();
     const root = document.createElement('div');
-    renderGameTable(root, roundEndView, noopHandlers);
+    renderGameTable(root, roundEndView, { ...noopHandlers, onAdvanceRound });
 
-    const summary = root.querySelector('.round-yaku-summary')!;
-    expect(summary).not.toBeNull();
-    expect(summary.querySelector('.round-yaku-title')?.textContent).toBe('和了役');
-
-    const chips = [...summary.querySelectorAll('.round-yaku-chip')].map(
+    const overlay = root.querySelector<HTMLElement>('.round-end-panel')!;
+    expect(overlay).not.toBeNull();
+    // 1段階目: 役・和了牌・裏ドラ表示牌を表示し、スコア表はまだ出さない
+    expect(overlay.dataset.resultStep).toBe('details');
+    const chips = [...overlay.querySelectorAll('.yaku-chip')].map(
       (c) => c.textContent,
     );
     expect(chips).toContain('リーチ 1翻');
     expect(chips).toContain('平和 1翻');
     expect(chips).toContain('ドラ 1翻');
-    expect(summary.querySelector('.round-yaku-total')?.textContent).toContain(
-      '3翻 30符',
-    );
+    expect(chips).toContain('裏ドラ 1翻');
+    expect(overlay.querySelector('.ura-dora-box')).not.toBeNull();
+    expect(overlay.querySelector('.score-table')).toBeNull();
+
+    const nextStepBtn = overlay.querySelector<HTMLButtonElement>('.round-result-next-btn')!;
+    expect(nextStepBtn).not.toBeNull();
+    expect(nextStepBtn.textContent).toBe('次へ');
+    nextStepBtn.click();
+
+    // 2段階目: 点数移行テーブルと次局へボタンが表示される
+    expect(overlay.dataset.resultStep).toBe('scores');
+    expect(overlay.querySelector('.ura-dora-box')).toBeNull();
+    expect(overlay.querySelectorAll('.score-table tbody tr')).toHaveLength(4);
+    const advanceBtn = Array.from(overlay.querySelectorAll('button')).find((b) =>
+      ['次の局へ', '結果を見る'].includes(b.textContent ?? ''),
+    )!;
+    expect(advanceBtn).not.toBeNull();
+    advanceBtn.click();
+    expect(onAdvanceRound).toHaveBeenCalledTimes(1);
+
+    // 戻るボタンで役・裏ドラ画面にも戻れる
+    const backBtn = overlay.querySelector<HTMLButtonElement>('.round-step-back-btn')!;
+    expect(backBtn).not.toBeNull();
+    backBtn.click();
+    expect(overlay.dataset.resultStep).toBe('details');
+    expect(overlay.querySelector('.ura-dora-box')).not.toBeNull();
   });
 
-  it('局終了時はオーバーレイにスコア表と次局ボタンを描画する（ホストのみ）', () => {
+  it('流局終了時は1段階目で聴牌開示、次へを押すと2段階目のスコア表と次局ボタンを描画する（ホストのみ）', () => {
     const view = toStateView(state4, 'p0', 0);
     const roundEndView: StateView = {
       ...view,
@@ -305,12 +336,16 @@ describe('renderGameTable（横画面レイアウト）', () => {
     const root = document.createElement('div');
     renderGameTable(root, roundEndView, noopHandlers);
 
-    const overlay = root.querySelector('.overlay-panel')!;
+    const overlay = root.querySelector<HTMLElement>('.overlay-panel')!;
     expect(overlay).not.toBeNull();
     expect(root.querySelector('.overlay-backdrop.overlay-backdrop-modal .overlay-panel')).toBe(
       overlay,
     );
     expect(root.querySelector('.table-stage')).not.toBeNull();
+    expect(overlay.querySelector('.tenpai-cards-list')).not.toBeNull();
+    expect(overlay.querySelector('.score-table')).toBeNull();
+
+    overlay.querySelector<HTMLButtonElement>('.round-result-next-btn')!.click();
     expect(overlay.querySelectorAll('.score-table tbody tr')).toHaveLength(4);
     expect(
       Array.from(overlay.querySelectorAll('button')).some((b) =>
@@ -334,7 +369,7 @@ describe('renderGameTable（横画面レイアウト）', () => {
     ).not.toBeNull();
   });
 
-  it('リーチ中でもツモ牌はクリックして手動ツモ切りできる（手牌側は固定）', () => {
+  it('リーチ中でもツモ牌は2回タップ（選択→再タップ）で手動ツモ切りできる（手牌側は固定）', () => {
     const baseView = toStateView(state4, 'p0', 0);
     const drawn = baseView.myDrawnTile ?? baseView.myHand[0]!;
     const hand = baseView.myDrawnTile
@@ -378,6 +413,13 @@ describe('renderGameTable（横画面レイアウト）', () => {
     expect(drawnTileEl.disabled).toBe(false);
     expect(drawnTileEl.classList.contains('mj-tile-clickable')).toBe(true);
 
+    // 1回目タップ: 選択状態（せり上がり）になり、まだ捨てない
+    drawnTileEl.click();
+    expect(drawnTileEl.classList.contains('mj-tile-selected')).toBe(true);
+    expect(drawnTileEl.getAttribute('aria-pressed')).toBe('true');
+    expect(onDiscardTile).not.toHaveBeenCalled();
+
+    // 2回目タップ: 打牌確定
     drawnTileEl.click();
     expect(onDiscardTile).toHaveBeenCalledTimes(1);
     expect(onDiscardTile).toHaveBeenCalledWith(drawn.id);
@@ -521,5 +563,48 @@ describe('renderGameTable（横画面レイアウト）', () => {
     expect(root.querySelector('.table-compass .compass-right .compass-wind')).not.toBeNull();
     expect(root.querySelector('.table-compass .compass-top .compass-wind')).not.toBeNull();
     expect(root.querySelector('.table-compass .compass-left .compass-wind')).not.toBeNull();
+  });
+
+  it('手番中は1回目タップで牌が選択状態になり、別牌へ切替でき、選択中の牌をもう一度押すと打牌される', () => {
+    const view = toStateView(state4, 'p0', 0);
+    const onDiscardTile = vi.fn();
+    const onSelectTile = vi.fn();
+    const root = document.createElement('div');
+    renderGameTable(root, view, { ...noopHandlers, onDiscardTile, onSelectTile });
+
+    const tiles = Array.from(
+      root.querySelectorAll<HTMLButtonElement>('.seat-self .hand-area .mj-tile-clickable'),
+    );
+    expect(tiles.length).toBeGreaterThanOrEqual(2);
+
+    const tileA = tiles[0]!;
+    const tileB = tiles[1]!;
+
+    // 1回目タップ: A が選択され打牌されない
+    tileA.click();
+    expect(tileA.classList.contains('mj-tile-selected')).toBe(true);
+    expect(tileA.getAttribute('aria-pressed')).toBe('true');
+    expect(onSelectTile).toHaveBeenLastCalledWith(tileA.dataset.tileId);
+    expect(onDiscardTile).not.toHaveBeenCalled();
+
+    // 別の牌 B をタップ: A が下がり B が選択される（打牌されない）
+    tileB.click();
+    expect(tileA.classList.contains('mj-tile-selected')).toBe(false);
+    expect(tileB.classList.contains('mj-tile-selected')).toBe(true);
+    expect(onSelectTile).toHaveBeenLastCalledWith(tileB.dataset.tileId);
+    expect(onDiscardTile).not.toHaveBeenCalled();
+
+    // 選択中の牌 B をもう一度タップ: 打牌確定
+    tileB.click();
+    expect(tileB.classList.contains('mj-tile-selected')).toBe(false);
+    expect(onDiscardTile).toHaveBeenCalledTimes(1);
+    expect(onDiscardTile).toHaveBeenCalledWith(tileB.dataset.tileId);
+
+    // 卓の空きスペースをクリックすると選択解除される
+    tileA.click();
+    expect(tileA.classList.contains('mj-tile-selected')).toBe(true);
+    root.querySelector<HTMLElement>('.table-felt')!.click();
+    expect(tileA.classList.contains('mj-tile-selected')).toBe(false);
+    expect(onSelectTile).toHaveBeenLastCalledWith(null);
   });
 });
