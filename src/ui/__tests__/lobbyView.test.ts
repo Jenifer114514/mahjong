@@ -226,4 +226,55 @@ describe('renderWaitingRoom（CPU の後入れ）', () => {
 
     session.destroy();
   });
+
+  it('ホストの開始ボタンは人数不足で無効・人数充足で有効になり、ゲストには表示しない', () => {
+    const onStartGame = vi.fn();
+    const { session: sPartial, latest: latestPartial } = lobbySession(1);
+    sPartial.start();
+
+    const partialRoot = document.createElement('div');
+    renderWaitingRoom(partialRoot, latestPartial(), {
+      onCreateRoom: () => {},
+      onJoinRoom: () => {},
+      onStartLocalGame: () => {},
+      onLeaveLobby: () => {},
+      onStartGame,
+    });
+    const partialStart = partialRoot.querySelector<HTMLButtonElement>('.lobby-start-btn')!;
+    expect(partialStart).not.toBeNull();
+    expect(partialStart.disabled).toBe(true);
+
+    const { session: sFull, latest: latestFull } = lobbySession(3);
+    sFull.start();
+    const fullRoot = document.createElement('div');
+    renderWaitingRoom(fullRoot, latestFull(), {
+      onCreateRoom: () => {},
+      onJoinRoom: () => {},
+      onStartLocalGame: () => {},
+      onLeaveLobby: () => {},
+      onStartGame,
+    });
+    const fullStart = fullRoot.querySelector<HTMLButtonElement>('.lobby-start-btn')!;
+    expect(fullStart.disabled).toBe(false);
+    fullStart.click();
+    expect(onStartGame).toHaveBeenCalledTimes(1);
+
+    const guestRoot = document.createElement('div');
+    const view = latestFull();
+    renderWaitingRoom(
+      guestRoot,
+      { ...view, viewerPlayerId: view.players[1]!.playerId },
+      {
+        onCreateRoom: () => {},
+        onJoinRoom: () => {},
+        onStartLocalGame: () => {},
+        onLeaveLobby: () => {},
+        onStartGame,
+      },
+    );
+    expect(guestRoot.querySelector('.lobby-start-btn')).toBeNull();
+
+    sPartial.destroy();
+    sFull.destroy();
+  });
 });

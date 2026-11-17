@@ -82,9 +82,16 @@ describe('アプリ起動とローカルCPU対局', () => {
     // 3人麻雀にするとツモ損トグルも出る
     expect(root.textContent).toContain('ツモ損');
 
-    // CPU を 2 体追加すると 3人麻雀が開局する
+    // CPU を 2 体追加しても自動開局せず、開始ボタンが有効になって押すと開局する
     expect(clickByText(root, 'button', 'CPU を追加')).toBe(true);
     expect(clickByText(root, 'button', 'CPU を追加')).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    expect(root.querySelector('.table-stage')).toBeNull();
+    const startBtn = root.querySelector<HTMLButtonElement>('.lobby-start-btn')!;
+    expect(startBtn).not.toBeNull();
+    expect(startBtn.disabled).toBe(false);
+    startBtn.click();
     await new Promise((resolve) => setTimeout(resolve, 40));
 
     expect(root.querySelector('.table-stage.is-landscape')).not.toBeNull();

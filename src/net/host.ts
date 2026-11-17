@@ -39,7 +39,7 @@ export interface HostSessionCallbacks {
 }
 
 export interface HostSessionOptions {
-  /** 追加する CPU の数（ホスト + CPU で規定人数に達すると自動開局） */
+  /** 追加する CPU の数 */
   cpuCount?: number;
   /** CPU の思考時間(ms)。0 にすると即座に打牌する（テスト用） */
   cpuDelayMs?: number;
@@ -50,6 +50,11 @@ export interface HostSessionOptions {
    * PeerJS へ接続しないため、オフライン環境でも対局できる。
    */
   offline?: boolean;
+  /**
+   * 人数が揃った時点で自動開局するか（既定: false）。
+   * 「いますぐCPUと対局」などの即開始モードでのみ true にする。
+   */
+  autoStart?: boolean;
 }
 
 export class HostSession {
@@ -61,6 +66,7 @@ export class HostSession {
   private idRetryCount = 0;
   private responseTimerId: ReturnType<typeof setTimeout> | null = null;
   private readonly offline: boolean;
+  private readonly autoStart: boolean;
   /** 設定された CPU 数（ロビーで後から増やせるため可変） */
   private cpuCount: number;
   private readonly cpuDelayMs: number;
@@ -77,6 +83,7 @@ export class HostSession {
   ) {
     this.callbacks = callbacks;
     this.offline = options.offline ?? false;
+    this.autoStart = options.autoStart ?? false;
     this.cpuCount = options.cpuCount ?? 0;
     this.cpuDelayMs = options.cpuDelayMs ?? 700;
     this.cpuScheduler = options.cpuScheduler ?? ((fn, delay) => {
@@ -138,13 +145,13 @@ export class HostSession {
       next = result.state;
     }
     if (next !== this.state) {
-      this.commitState(this.maybeAutoStart(next));
+      this.commitState(this.autoStart ? this.tryStartGame(next) : next);
     }
   }
 
   /**
    * ロビーに CPU を 1 体追加する（ホストのみ・開局後は不可）。
-   * 席が埋まった時点で通常どおり自動開局する。
+   * 既定では自動開局せず、ホストが開始ボタンを押したタイミングで開局する。
    */
   addCpu(): boolean {
     if (this.destroyed || this.state.phase !== 'lobby') return false;
@@ -166,7 +173,7 @@ export class HostSession {
     if (result.error) return false;
 
     this.cpuCount = Math.max(this.cpuCount, index + 1);
-    this.commitState(this.maybeAutoStart(result.state));
+    this.commitState(this.autoStart ? this.tryStartGame(result.state) : result.state);
     return true;
   }
 
@@ -208,7 +215,7 @@ export class HostSession {
   /** 人数が揃っているロビーからホストが明示的に対局を開始する */
   startGame(): boolean {
     if (this.destroyed || this.state.phase !== 'lobby') return false;
-    const started = this.maybeAutoStart(this.state);
+    const started = this.tryStartGame(this.state);
     if (started === this.state) return false;
     this.commitState(started);
     return true;
@@ -247,8 +254,8 @@ export class HostSession {
     return true;
   }
 
-  /** ロビーで人数が揃っていれば自動開局する */
-  private maybeAutoStart(nextState: GameState): GameState {
+  /** ロビーで人数が揃っていれば開局状態を生成する */
+  private tryStartGame(nextState: GameState): GameState {
     const rules = deriveRules(nextState.ruleConfig);
     if (
       nextState.phase !== 'lobby' ||
@@ -447,8 +454,10 @@ export class HostSession {
         return;
       }
 
-      // 設定した人数が揃ったら自動開局（CSPRNG で席順と山牌をシャッフル）
-      this.commitState(this.maybeAutoStart(joinResult.state));
+      // 参加後は待機ロビーを維持し、ホストの開始操作（または autoStart 時）で開局する
+      this.commitState(
+        this.autoStart ? this.tryStartGame(joinResult.state) : joinResult.state,
+      );
       if (this.chatMessages.length > 0) {
         this.sendToConn(conn, {
           kind: 'CHAT_HISTORY',
@@ -691,8 +700,8 @@ export class HostSession {
     if (phase === 'lobby') {
       const missing = this.missingCpuIds();
       if (missing.length === 0) {
-        // CPU 席は揃っているが未開局（人間の参加待ちなど）
-        const started = this.maybeAutoStart(this.state);
+        if (!this.autoStart) return false;
+        const started = this.tryStartGame(this.state);
         if (started !== this.state) {
           this.commitState(started);
           return true;
@@ -705,7 +714,7 @@ export class HostSession {
         name: cpuName(cpuIndexOf(missing[0]!, this.cpuCount)),
       });
       if (result.error) return false;
-      this.commitState(this.maybeAutoStart(result.state));
+      this.commitState(this.autoStart ? this.tryStartGame(result.state) : result.state);
       return true;
     }
 

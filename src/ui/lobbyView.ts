@@ -598,22 +598,25 @@ export function renderWaitingRoom(
   card.appendChild(slots);
 
   const cpuPlayers = view.players.filter((p) => p.playerId.startsWith(CPU_PLAYER_ID_PREFIX));
+  const isFull = view.players.length === rules.playerCount;
   const info = document.createElement('p');
   info.className = 'hub-sub';
-  info.textContent =
-    view.players.length === rules.playerCount
-      ? '参加人数が揃っています。ホストが「対局を開始する」を押すと対局が始まります。'
-      : cpuPlayers.length > 0
-        ? `参加人数（${view.players.length} / ${rules.playerCount}人・うち CPU ${cpuPlayers.length}体）が揃うと自動的に対局が始まります。`
-        : `参加人数（${view.players.length} / ${rules.playerCount}人）が揃うと自動的に対局が始まります。`;
+  info.textContent = isFull
+    ? isHost
+      ? '参加人数が揃っています。「対局を開始する」を押すと対局が始まります。'
+      : '参加人数が揃いました。ホストが「対局を開始する」を押すのをお待ちください。'
+    : cpuPlayers.length > 0
+      ? `参加人数（${view.players.length} / ${rules.playerCount}人・うち CPU ${cpuPlayers.length}体）が揃ったら、ホストが「対局を開始する」を押して対局を始めます。`
+      : `参加人数（${view.players.length} / ${rules.playerCount}人）が揃ったら、ホストが「対局を開始する」を押して対局を始めます。`;
   card.appendChild(info);
 
-  // 人数が揃っている待機ロビーからホストが開始できるボタン
-  if (isHost && view.players.length === rules.playerCount && handlers.onStartGame) {
+  // ホストは人数が揃った状態で開始ボタンを押して対局を開始する
+  if (isHost && handlers.onStartGame) {
     const startBtn = document.createElement('button');
     startBtn.type = 'button';
-    startBtn.className = 'btn btn-primary';
+    startBtn.className = 'btn btn-primary lobby-start-btn';
     startBtn.style.marginBottom = '10px';
+    startBtn.disabled = !isFull;
     startBtn.textContent = '対局を開始する';
     startBtn.addEventListener('click', () => handlers.onStartGame?.());
     card.appendChild(startBtn);

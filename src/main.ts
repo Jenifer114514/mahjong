@@ -116,6 +116,7 @@ class MahjongApp {
     ruleConfig: RuleConfig,
     cpuCount = 0,
     offline = false,
+    autoStart = false,
   ): void {
     this.cleanupSession();
     this.busy = true;
@@ -165,6 +166,7 @@ class MahjongApp {
       cpuCount,
       cpuDelayMs: 650,
       offline,
+      autoStart,
     });
 
     this.activeSession = { role: 'host', session: host };
@@ -177,7 +179,7 @@ class MahjongApp {
     ruleConfig: RuleConfig,
     cpuCount: number,
   ): void {
-    this.createRoom(playerName, ruleConfig, cpuCount, true);
+    this.createRoom(playerName, ruleConfig, cpuCount, true, true);
   }
 
   /** ロビーに CPU を後から追加する（ホストの HostSession のみ） */
