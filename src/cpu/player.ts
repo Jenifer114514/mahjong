@@ -1,4 +1,5 @@
 import type { Action, StateView } from '../types/message';
+import { DEFAULT_CPU_LEVEL } from '../types/rule';
 import type { CallResponseChoice } from '../types/state';
 import type { Tile, TileKind } from '../types/tile';
 import { ALL_TILE_KINDS } from '../types/tile';
@@ -92,6 +93,7 @@ function pickDiscard(view: StateView): CpuAction | null {
 
   const meldCount = self.melds.filter((m) => m.type !== 'ankan').length + 1;
   const visible = buildVisibleCounts(view);
+  const cpuLevel = view.ruleConfig.cpuLevel ?? DEFAULT_CPU_LEVEL;
   const seed = hashSeed([view.viewerPlayerId, view.round?.turnCount ?? 0]);
   const yakuhai = isYakuhaiView(view);
 
@@ -103,7 +105,7 @@ function pickDiscard(view: StateView): CpuAction | null {
     tie: number;
   };
 
-  let best: Score | null = null;
+  const scored: Score[] = [];
   for (const tile of pool) {
     const counts = countsFromTiles(candidates);
     const idx = kindIndex(tile.kind);
@@ -112,24 +114,25 @@ function pickDiscard(view: StateView): CpuAction | null {
     // 進めない打牌は避け、受け入れの広い形を優先する
     const value = tileKeepValue(tile.kind, counts, yakuhai);
     const tie = hashSeed([seed, tile.id]);
-    const score: Score = { tile, shanten, ukeire, value, tie };
-    if (
-      best === null ||
-      score.shanten < best.shanten ||
-      (score.shanten === best.shanten && score.ukeire > best.ukeire + 0) ||
-      (score.shanten === best.shanten &&
-        Math.abs(score.ukeire - best.ukeire) < 1 &&
-        score.value < best.value - 1e-9) ||
-      (score.shanten === best.shanten &&
-        Math.abs(score.ukeire - best.ukeire) < 1 &&
-        Math.abs(score.value - best.value) < 1e-9 &&
-        score.tie < best.tie)
-    ) {
-      best = score;
-    }
+    scored.push({ tile, shanten, ukeire, value, tie });
   }
 
-  if (!best) return null;
+  if (scored.length === 0) return null;
+
+  scored.sort((a, b) => {
+    if (a.shanten !== b.shanten) return a.shanten - b.shanten;
+    if (a.ukeire !== b.ukeire) return b.ukeire - a.ukeire;
+    if (Math.abs(a.value - b.value) >= 1e-9) return a.value - b.value;
+    return a.tie - b.tie;
+  });
+
+  if (cpuLevel === 'easy') {
+    const windowSize = Math.min(3, scored.length);
+    const picked = scored[seed % windowSize]!;
+    return { type: 'DISCARD_TILE', tileId: picked.tile.id };
+  }
+
+  const best = scored[0]!;
 
   // 同評価ならツモ牌を切って手牌の並びを保つ
   if (drawn && drawn.id !== best.tile.id) {
@@ -203,11 +206,24 @@ function decideCallResponse(view: StateView): CpuAction | null {
   const self = view.players.find((p) => p.playerId === view.viewerPlayerId);
   if (!self) return { type: 'CALL_RESPONSE', choice: { type: 'pass' } };
 
+  const cpuLevel = view.ruleConfig.cpuLevel ?? DEFAULT_CPU_LEVEL;
   const isOpen = self.melds.length > 0;
   const allTiles: Tile[] = [...view.myHand];
   if (view.myDrawnTile) allTiles.push(view.myDrawnTile);
   const counts = buildKindCounts(allTiles);
   const seed = hashSeed([view.viewerPlayerId, view.round?.turnCount ?? 0]);
+
+  if (cpuLevel === 'easy') {
+    if (
+      opts.canPon &&
+      (counts.get(opts.discardedTile.kind) ?? 0) >= 2 &&
+      isYakuhaiView(view).has(opts.discardedTile.kind) &&
+      seed % 3 === 0
+    ) {
+      return { type: 'CALL_RESPONSE', choice: { type: 'pon' } };
+    }
+    return { type: 'CALL_RESPONSE', choice: { type: 'pass' } };
+  }
 
   // 大明槓は手が開いている時のみ（門前を壊さない）
   if (opts.canDaiminkan && isOpen && seed % 2 === 0) {
@@ -264,6 +280,8 @@ export function decideCpuAction(view: StateView): CpuAction | null {
   }
 
   const actions = view.mySelfActions;
+  const cpuLevel = view.ruleConfig.cpuLevel ?? DEFAULT_CPU_LEVEL;
+  const seed = hashSeed([view.viewerPlayerId, view.round.turnCount]);
 
   if (actions?.canTsumo) {
     return { type: 'DECLARE_TSUMO' };
@@ -274,16 +292,28 @@ export function decideCpuAction(view: StateView): CpuAction | null {
     return { type: 'DECLARE_KITA', tileId: actions.canKitaTileIds[0]! };
   }
 
-  // 加槓・暗槓は手牌を減らさず打点を上げられるため行う
-  if (actions && actions.canKakanTileIds.length > 0) {
+  // 加槓・暗槓は手牌を減らさず打点を上げられるため行う（やさしめは控えめ）
+  if (
+    actions &&
+    actions.canKakanTileIds.length > 0 &&
+    (cpuLevel !== 'easy' || seed % 2 === 0)
+  ) {
     return { type: 'DECLARE_KAKAN', tileId: actions.canKakanTileIds[0]! };
   }
-  if (actions && actions.canAnkanKinds.length > 0) {
+  if (
+    actions &&
+    actions.canAnkanKinds.length > 0 &&
+    (cpuLevel !== 'easy' || seed % 2 === 0)
+  ) {
     return { type: 'DECLARE_ANKAN', kind: actions.canAnkanKinds[0]! };
   }
 
-  // テンパイならリーチ（打点を伸ばす基本戦略）
-  if (actions && actions.canRiichiTileIds.length > 0) {
+  // テンパイならリーチ（打点を伸ばす基本戦略、やさしめは控えめ）
+  if (
+    actions &&
+    actions.canRiichiTileIds.length > 0 &&
+    (cpuLevel !== 'easy' || seed % 2 === 0)
+  ) {
     const drawnId = view.myDrawnTile?.id;
     const tileId =
       drawnId && actions.canRiichiTileIds.includes(drawnId)

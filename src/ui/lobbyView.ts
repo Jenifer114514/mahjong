@@ -1,7 +1,13 @@
 import { CPU_PLAYER_ID_PREFIX, maxCpuCount } from '../cpu/player';
 import { deriveRules } from '../engine/rules';
 import type { StateView } from '../types/message';
-import type { GameLength, PlayerCount, RuleConfig } from '../types/rule';
+import {
+  DEFAULT_CPU_LEVEL,
+  type CpuLevel,
+  type GameLength,
+  type PlayerCount,
+  type RuleConfig,
+} from '../types/rule';
 
 export interface LobbyHandlers {
   onCreateRoom: (playerName: string, ruleConfig: RuleConfig, cpuCount: number) => void;
@@ -27,6 +33,8 @@ export interface LobbyFormState {
   joinCode: string;
   /** 追加する CPU の人数（0 なら従来どおり人間のみ） */
   cpuCount: number;
+  /** CPU の強さ（既定: 'normal'） */
+  cpuLevel?: CpuLevel;
 }
 
 function createBooleanToggleField(params: {
@@ -152,6 +160,39 @@ export function renderLobbyEntry(
   const cpuSeg = document.createElement('div');
   cpuSeg.className = 'segmented segmented-4';
   cpuField.append(cpuLabel, cpuSeg);
+
+  const cpuLevelField = document.createElement('div');
+  cpuLevelField.className = 'field';
+  const cpuLevelLabel = document.createElement('label');
+  cpuLevelLabel.textContent = 'CPU の強さ';
+  const cpuLevelSeg = document.createElement('div');
+  cpuLevelSeg.className = 'segmented';
+  cpuLevelField.append(cpuLevelLabel, cpuLevelSeg);
+
+  const renderCpuLevelButtons = () => {
+    cpuLevelSeg.innerHTML = '';
+    const currentLevel = formState.cpuLevel ?? DEFAULT_CPU_LEVEL;
+    const levels: Array<{ value: CpuLevel; title: string; sub: string }> = [
+      { value: 'normal', title: '標準', sub: '受け入れ重視・積極的に鳴く/リーチ' },
+      { value: 'easy', title: 'やさしめ', sub: '鳴き・リーチ控えめ' },
+    ];
+    for (const opt of levels) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = `seg-btn seg-btn-sm${currentLevel === opt.value ? ' is-active' : ''}`;
+      const titleSpan = document.createElement('span');
+      titleSpan.textContent = opt.title;
+      const subSpan = document.createElement('span');
+      subSpan.className = 'seg-sub';
+      subSpan.textContent = opt.sub;
+      btn.append(titleSpan, subSpan);
+      btn.addEventListener('click', () => {
+        formState.cpuLevel = opt.value;
+        renderCpuLevelButtons();
+      });
+      cpuLevelSeg.appendChild(btn);
+    }
+  };
 
   const renderCpuButtons = () => {
     cpuSeg.innerHTML = '';
@@ -306,9 +347,21 @@ export function renderLobbyEntry(
 
   renderRuleButtons();
   renderCpuButtons();
+  renderCpuLevelButtons();
   renderLocalRuleToggles();
   countField.append(countLabel, countSeg);
   lengthField.append(lengthLabel, lengthSeg);
+
+  const buildRuleConfig = (): RuleConfig => ({
+    playerCount: formState.playerCount,
+    gameLength: formState.gameLength,
+    tobi: formState.tobi,
+    tsumoLoss: formState.playerCount === 3 ? formState.tsumoLoss : false,
+    allowKuitan: formState.allowKuitan,
+    allowAtozuke: formState.allowAtozuke,
+    honbaBonus: formState.honbaBonus,
+    cpuLevel: formState.cpuLevel ?? DEFAULT_CPU_LEVEL,
+  });
 
   const createBtn = document.createElement('button');
   createBtn.type = 'button';
@@ -317,22 +370,10 @@ export function renderLobbyEntry(
   createBtn.disabled = busy;
   createBtn.textContent = busy ? '接続中...' : '部屋を作成';
   createBtn.addEventListener('click', () => {
-    handlers.onCreateRoom(
-      formState.playerName,
-      {
-        playerCount: formState.playerCount,
-        gameLength: formState.gameLength,
-        tobi: formState.tobi,
-        tsumoLoss: formState.playerCount === 3 ? formState.tsumoLoss : false,
-        allowKuitan: formState.allowKuitan,
-        allowAtozuke: formState.allowAtozuke,
-        honbaBonus: formState.honbaBonus,
-      },
-      formState.cpuCount,
-    );
+    handlers.onCreateRoom(formState.playerName, buildRuleConfig(), formState.cpuCount);
   });
 
-  createCard.append(countField, cpuField, lengthField, localRuleWrap, createBtn);
+  createCard.append(countField, cpuField, cpuLevelField, lengthField, localRuleWrap, createBtn);
 
   // Local (CPU only) game card
   const localCard = document.createElement('div');
@@ -356,15 +397,7 @@ export function renderLobbyEntry(
   localBtn.addEventListener('click', () => {
     handlers.onStartLocalGame(
       formState.playerName,
-      {
-        playerCount: formState.playerCount,
-        gameLength: formState.gameLength,
-        tobi: formState.tobi,
-        tsumoLoss: formState.playerCount === 3 ? formState.tsumoLoss : false,
-        allowKuitan: formState.allowKuitan,
-        allowAtozuke: formState.allowAtozuke,
-        honbaBonus: formState.honbaBonus,
-      },
+      buildRuleConfig(),
       formState.cpuCount > 0 ? formState.cpuCount : maxCpuCount(formState.playerCount),
     );
   });
@@ -501,6 +534,7 @@ export function renderWaitingRoom(
     `喰いタン:${rules.allowKuitan ? 'あり' : 'なし'}`,
     `後付け:${rules.allowAtozuke ? 'あり' : 'なし'}`,
     `本場加算:${rules.honbaBonus ? `あり(${rules.honbaPointsPerStick}点)` : 'なし(表示のみ)'}`,
+    `CPU強さ:${rules.cpuLevel === 'easy' ? 'やさしめ' : '標準'}`,
     ...(rules.playerCount === 3
       ? [`ツモ損:${rules.tsumoLoss ? 'あり' : 'なし'}`]
       : []),

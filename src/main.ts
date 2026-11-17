@@ -4,7 +4,7 @@ import { ClientSession } from './net/client';
 import { HostSession } from './net/host';
 import { normalizeRoomCode } from './net/protocol';
 import type { GameError, StateView } from './types/message';
-import type { RuleConfig } from './types/rule';
+import { DEFAULT_CPU_LEVEL, type RuleConfig } from './types/rule';
 import {
   renderLobbyEntry,
   renderWaitingRoom,
@@ -67,6 +67,7 @@ class MahjongApp {
       honbaBonus: true,
       joinCode: normalizeRoomCode(roomFromUrl),
       cpuCount: 3,
+      cpuLevel: DEFAULT_CPU_LEVEL,
     };
 
     window.addEventListener('beforeunload', () => {

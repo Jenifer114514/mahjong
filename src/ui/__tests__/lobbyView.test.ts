@@ -1,7 +1,12 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest';
 import type { StateView } from '../../types/message';
-import { renderWaitingRoom, type LobbyHandlers } from '../lobbyView';
+import {
+  renderLobbyEntry,
+  renderWaitingRoom,
+  type LobbyFormState,
+  type LobbyHandlers,
+} from '../lobbyView';
 
 // HostSession は peerjs を読み込むためスタブ化する（オフライン対局だけを使う）
 vi.mock('peerjs', () => {
@@ -120,5 +125,44 @@ describe('renderWaitingRoom（CPU の後入れ）', () => {
     expect(addBtn.hasAttribute('disabled')).toBe(true);
 
     session.destroy();
+  });
+
+  it('ロビー入口で CPU の強さ（標準 / やさしめ）を選んで開始できる', () => {
+    const onStartLocalGame = vi.fn();
+    const formState: LobbyFormState = {
+      playerName: 'テスト',
+      playerCount: 4,
+      gameLength: 'tonpuu',
+      tobi: true,
+      tsumoLoss: false,
+      allowKuitan: true,
+      allowAtozuke: true,
+      honbaBonus: true,
+      joinCode: '',
+      cpuCount: 3,
+      cpuLevel: 'normal',
+    };
+
+    const root = document.createElement('div');
+    renderLobbyEntry(
+      root,
+      formState,
+      {
+        onCreateRoom: () => {},
+        onJoinRoom: () => {},
+        onStartLocalGame,
+        onLeaveLobby: () => {},
+      },
+      false,
+    );
+
+    expect(clickByText(root, 'やさしめ')).toBe(true);
+    expect(formState.cpuLevel).toBe('easy');
+    expect(clickByText(root, 'CPU対局をはじめる')).toBe(true);
+    expect(onStartLocalGame).toHaveBeenCalledWith(
+      'テスト',
+      expect.objectContaining({ cpuLevel: 'easy' }),
+      3,
+    );
   });
 });

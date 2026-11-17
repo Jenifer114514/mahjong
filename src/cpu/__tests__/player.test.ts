@@ -11,8 +11,13 @@ function startCpuOnlyGame(
   playerCount: 3 | 4,
   gameLength: 'tonpuu' | 'hanchan',
   seed: number,
+  cpuLevel?: RuleConfig['cpuLevel'],
 ): GameState {
-  const ruleConfig: RuleConfig = { playerCount, gameLength };
+  const ruleConfig: RuleConfig = {
+    playerCount,
+    gameLength,
+    ...(cpuLevel ? { cpuLevel } : {}),
+  };
   const rules = deriveRules(ruleConfig);
   let state = createInitialGameState({
     roomCode: 'CPU001',
@@ -139,5 +144,26 @@ describe('CPU プレイヤー (decideCpuAction)', () => {
     }
     // リーチが発生しないシードでもテスト自体は失敗させない
     expect(true).toBe(true);
+  });
+
+  it('cpuLevel: "easy" でも東風戦を最後まで進行できる', () => {
+    let state = startCpuOnlyGame(4, 'tonpuu', 2026, 'easy');
+    const rules = deriveRules(state.ruleConfig);
+    expect(rules.cpuLevel).toBe('easy');
+
+    let steps = 0;
+    while (state.phase !== 'finished' && steps < 20000) {
+      const actor = actingPlayerId(state);
+      const view = toStateView(state, actor, 0);
+      const decision = decideCpuAction(view);
+      expect(decision).not.toBeNull();
+      state = applyCpu(state, actor, decision!);
+      steps++;
+    }
+
+    expect(state.phase).toBe('finished');
+    const totalScore = state.players.reduce((sum, p) => sum + p.score, 0);
+    const kyotakuLeft = state.kyotakuCount * rules.riichiStickPoints;
+    expect(totalScore + kyotakuLeft).toBe(rules.initialPoints * rules.playerCount);
   });
 });
