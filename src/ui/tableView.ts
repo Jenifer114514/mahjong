@@ -526,7 +526,10 @@ function renderRoundEndOverlay(
     overlay.appendChild(waitMsg);
   }
 
-  container.appendChild(overlay);
+  const backdrop = document.createElement('div');
+  backdrop.className = 'overlay-backdrop overlay-backdrop-modal';
+  backdrop.appendChild(overlay);
+  container.appendChild(backdrop);
 }
 
 function renderMeldGroup(
@@ -1529,16 +1532,11 @@ function renderSelfSeat(
       );
     } else {
       const blocked = forbiddenSet.has(drawn.kind);
-      const lockedByRiichi = canDiscardNow && player.isRiichi;
       handArea.appendChild(
         createTileElement(drawn, {
           clickable: canDiscardNow && !blocked,
-          disabled: canDiscardNow && (blocked || lockedByRiichi),
-          disabledReason: blocked
-            ? '喰い替え禁止のため切れません'
-            : lockedByRiichi
-              ? 'リーチ後はツモ切りしかできません'
-              : undefined,
+          disabled: canDiscardNow && blocked,
+          disabledReason: blocked ? '喰い替え禁止のため切れません' : undefined,
           onClick: () => handlers.onDiscardTile(drawn.id),
         }),
       );
@@ -1685,7 +1683,10 @@ function renderFinishedScreen(
   backBtn.addEventListener('click', handlers.onReturnToLobby);
 
   panel.appendChild(backBtn);
-  container.appendChild(panel);
+  const backdrop = document.createElement('div');
+  backdrop.className = 'overlay-backdrop overlay-backdrop-finished';
+  backdrop.appendChild(panel);
+  container.appendChild(backdrop);
 }
 
 /** CPU 名のラベル（ロビー表示用の再エクスポート） */

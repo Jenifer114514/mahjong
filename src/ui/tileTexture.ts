@@ -396,7 +396,7 @@ function drawPinzu(face: FaceDrawContext, n: number, redFive: boolean): void {
   );
 
   for (const pip of layout) {
-    const color = redFive && pip.color === 'red' ? INK.red : pipColorValue(pip.color);
+    const color = redFive ? INK.red : pipColorValue(pip.color);
     drawPip(face, face.width * pip.x, face.height * pip.y, radius, color);
   }
 }

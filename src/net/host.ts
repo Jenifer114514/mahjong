@@ -97,6 +97,9 @@ export class HostSession {
       // ローカル対局: 通信を張らずに CPU 席だけ用意する
       this.callbacks.onStatusChange('ready', 'ローカル対局（CPU戦）');
       this.bootstrapCpuSeats();
+      if (this.cpuCount <= 0) {
+        this.emitHostView();
+      }
       return;
     }
     this.callbacks.onStatusChange('initializing', 'PeerJS サーバーに接続中...');
@@ -199,6 +202,52 @@ export class HostSession {
     return isCpuPlayerId(playerId);
   }
 
+  private remapHostPlayerId(prevId: string, nextId: string): void {
+    if (prevId === nextId) return;
+    const round = this.state.round;
+    let nextRound = round;
+    if (round?.pendingResponse) {
+      const pending = round.pendingResponse;
+      const remapRecord = <T>(rec: Record<string, T>): Record<string, T> => {
+        if (!(prevId in rec)) return rec;
+        const next: Record<string, T> = {};
+        for (const [key, val] of Object.entries(rec)) {
+          next[key === prevId ? nextId : key] = val;
+        }
+        return next;
+      };
+      nextRound = {
+        ...round,
+        pendingResponse: {
+          ...pending,
+          optionsByPlayerId: remapRecord(pending.optionsByPlayerId),
+          responses: remapRecord(pending.responses),
+          riichiDeclaration:
+            pending.riichiDeclaration?.playerId === prevId
+              ? { ...pending.riichiDeclaration, playerId: nextId }
+              : pending.riichiDeclaration,
+          kakanTarget:
+            pending.kakanTarget?.playerId === prevId
+              ? { ...pending.kakanTarget, playerId: nextId }
+              : pending.kakanTarget,
+          ankanTarget:
+            pending.ankanTarget?.playerId === prevId
+              ? { ...pending.ankanTarget, playerId: nextId }
+              : pending.ankanTarget,
+        },
+      };
+    }
+
+    this.state = {
+      ...this.state,
+      hostPlayerId: nextId,
+      players: this.state.players.map((p) =>
+        p.playerId === prevId ? { ...p, playerId: nextId } : p,
+      ),
+      round: nextRound,
+    };
+  }
+
   private openPeerWithCurrentRoomCode(): void {
     const peerId = roomCodeToPeerId(this.state.roomCode);
     const peer = new Peer(peerId, PEER_OPTIONS);
@@ -212,13 +261,7 @@ export class HostSession {
         return;
       }
       opened = true;
-      this.state = {
-        ...this.state,
-        hostPlayerId: id,
-        players: this.state.players.map((p, idx) =>
-          idx === 0 ? { ...p, playerId: id } : p,
-        ),
-      };
+      this.remapHostPlayerId(this.state.hostPlayerId, id);
       this.callbacks.onStatusChange('ready', '参加者待機中');
       this.emitHostView();
     });
@@ -241,11 +284,8 @@ export class HostSession {
         this.state = {
           ...this.state,
           roomCode: nextCode,
-          hostPlayerId: nextHostId,
-          players: this.state.players.map((p, idx) =>
-            idx === 0 ? { ...p, playerId: nextHostId } : p,
-          ),
         };
+        this.remapHostPlayerId(this.state.hostPlayerId, nextHostId);
         this.openPeerWithCurrentRoomCode();
         return;
       }
@@ -529,9 +569,16 @@ export class HostSession {
     this.scheduleCpuTick();
   }
 
+  private hasAnyCpu(): boolean {
+    return (
+      this.cpuCount > 0 ||
+      this.state.players.some((p) => this.isCpuPlayer(p.playerId))
+    );
+  }
+
   /** CPU の手番・応答待ちが残っていれば次の一手を予約する */
   private scheduleCpuTick(): void {
-    if (this.destroyed || this.cpuCount <= 0) return;
+    if (this.destroyed || !this.hasAnyCpu()) return;
     const phase = this.state.phase;
     if (phase === 'finished') return;
 
@@ -555,7 +602,7 @@ export class HostSession {
    * タイマー経由の自動進行のほか、テストから決定的に駆動する場合にも使う。
    */
   runCpuStepOnce(): boolean {
-    if (this.destroyed || this.cpuCount <= 0) return false;
+    if (this.destroyed || !this.hasAnyCpu()) return false;
     const phase = this.state.phase;
 
     if (phase === 'lobby') {

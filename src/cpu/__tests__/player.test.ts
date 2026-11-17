@@ -166,4 +166,43 @@ describe('CPU プレイヤー (decideCpuAction)', () => {
     const kyotakuLeft = state.kyotakuCount * rules.riichiStickPoints;
     expect(totalScore + kyotakuLeft).toBe(rules.initialPoints * rules.playerCount);
   });
+
+  it('門前（meldCount=0）の七対子聴牌では七対子シャンテンを認識してリーチする', () => {
+    let state = startCpuOnlyGame(4, 'tonpuu', 123);
+    const turnSeat = state.round!.currentTurnIndex;
+    const actor = state.players.find((p) => p.seatIndex === turnSeat)!;
+
+    // 13枚の手牌: 6対子 + 単騎候補（面子手では 3向聴だが七対子で聴牌）
+    const handKinds = [
+      '1m', '1m',
+      '3m', '3m',
+      '5p', '5p',
+      '7p', '7p',
+      '2s', '2s',
+      '4s', '4s',
+      '1z',
+    ] as const;
+    const nextPlayers = state.players.map((p) =>
+      p.playerId === actor.playerId
+        ? {
+            ...p,
+            hand: handKinds.map((kind, idx) => ({
+              id: `chiitoi-h-${idx}`,
+              kind,
+              isRed: false,
+            })),
+            drawnTile: { id: 'chiitoi-drawn', kind: '9s' as const, isRed: false },
+            melds: [],
+          }
+        : p,
+    );
+    state = { ...state, players: nextPlayers };
+
+    const view = toStateView(state, actor.playerId, 0);
+    const decision = decideCpuAction(view);
+    expect(decision).toEqual({
+      type: 'DECLARE_RIICHI',
+      tileId: expect.stringMatching(/^chiitoi-/),
+    });
+  });
 });

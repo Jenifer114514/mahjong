@@ -219,6 +219,44 @@ describe('tileTexture', () => {
     expect(fills[texts.lastIndexOf('五')]?.toLowerCase()).toBe('#c3222b');
   });
 
+  it('赤ドラの五筒は 5 つの丸すべてが赤になる（通常の五筒は外周4つが青）', () => {
+    const { factory } = createRecordingGlobal();
+
+    const normal = factory(200, 263);
+    const normalFills: string[] = [];
+    const origNormalFill = normal.ctx.fill as (...args: unknown[]) => void;
+    normal.ctx.fill = (...args: unknown[]) => {
+      normalFills.push(String(normal.ctx.fillStyle).toLowerCase());
+      origNormalFill(...args);
+    };
+    drawTileFace(normal.ctx as unknown as CanvasRenderingContext2D, '5p', {
+      width: 200,
+      height: 263,
+      isRed: false,
+    });
+
+    const red = factory(200, 263);
+    const redFills: string[] = [];
+    const origRedFill = red.ctx.fill as (...args: unknown[]) => void;
+    red.ctx.fill = (...args: unknown[]) => {
+      redFills.push(String(red.ctx.fillStyle).toLowerCase());
+      origRedFill(...args);
+    };
+    drawTileFace(red.ctx as unknown as CanvasRenderingContext2D, '5p', {
+      width: 200,
+      height: 263,
+      isRed: true,
+    });
+
+    // 通常の5p: 外周4つの的は青 (#1b4f9c)、中央1つのみ赤 (#c3222b)
+    expect(normalFills.filter((c) => c === '#1b4f9c').length).toBeGreaterThan(0);
+    expect(normalFills.filter((c) => c === '#c3222b')).toHaveLength(3);
+
+    // 赤5p: 5つの的すべてが赤（青い的は 0、赤は 5 * 3 = 15 回）
+    expect(redFills.filter((c) => c === '#1b4f9c')).toHaveLength(0);
+    expect(redFills.filter((c) => c === '#c3222b')).toHaveLength(15);
+  });
+
   it('全 34 種 + 赤ドラを例外なく描ける', () => {
     const { factory } = createRecordingGlobal();
     for (const key of createAtlasKeys(true)) {

@@ -91,7 +91,7 @@ function pickDiscard(view: StateView): CpuAction | null {
   const pool = allowed.length > 0 ? allowed : candidates;
   if (pool.length === 0) return null;
 
-  const meldCount = self.melds.filter((m) => m.type !== 'ankan').length + 1;
+  const meldCount = self.melds.length;
   const visible = buildVisibleCounts(view);
   const cpuLevel = view.ruleConfig.cpuLevel ?? DEFAULT_CPU_LEVEL;
   const seed = hashSeed([view.viewerPlayerId, view.round?.turnCount ?? 0]);

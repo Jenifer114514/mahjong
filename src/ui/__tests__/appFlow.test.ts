@@ -88,11 +88,12 @@ describe('アプリ起動とローカルCPU対局', () => {
     const root = document.getElementById('app') as HTMLElement;
     clickByText(root, 'button', 'CPU対局をはじめる');
 
-    // 自分の手番になるまで待つ（CPU 3体が打牌を終えるまで）
+    // 自分の手番になるまで待つ（CPU 3体が打牌を終えるまで。途中で鳴き確認が出たらスルー）
     let acted = false;
     let before = 0;
     for (let i = 0; i < 200 && !acted; i++) {
       await new Promise((resolve) => setTimeout(resolve, 40));
+      clickByText(root, '.call-action-bar button', 'スルー');
       const clickable = root.querySelectorAll<HTMLElement>(
         '.seat-self .hand-area .mj-tile-clickable',
       );
