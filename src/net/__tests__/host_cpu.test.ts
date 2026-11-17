@@ -313,4 +313,81 @@ describe('HostSession の CPU 統合', () => {
 
     session.destroy();
   });
+
+  it('ホストおよび参加クライアントのチャットメッセージを相互配信し、後発参加者へ履歴を送る', () => {
+    peerInstances.length = 0;
+    const chatLog: Array<{ senderName: string; text: string }> = [];
+    const session = new HostSession(
+      'ホスト',
+      { playerCount: 4, gameLength: 'tonpuu' },
+      {
+        onViewChange: () => {},
+        onStatusChange: () => {},
+        onError: () => {},
+        onChatMessage: (m) => chatLog.push({ senderName: m.senderName, text: m.text }),
+      },
+      { cpuCount: 0, cpuDelayMs: 0, cpuScheduler: () => {} },
+    );
+    session.start();
+    const peer = peerInstances.at(-1)!;
+    peer.emit('open', peer.id);
+
+    const makeFakeConn = (connPeer: string) => {
+      const sent: unknown[] = [];
+      const handlers: Record<string, Array<(...args: unknown[]) => void>> = {};
+      return {
+        peer: connPeer,
+        open: true,
+        sent,
+        on(event: string, cb: (...args: unknown[]) => void) {
+          handlers[event] = handlers[event] ?? [];
+          handlers[event]!.push(cb);
+        },
+        emit(event: string, ...args: unknown[]) {
+          for (const cb of handlers[event] ?? []) cb(...args);
+        },
+        send(msg: unknown) {
+          sent.push(msg);
+        },
+        close() {
+          this.open = false;
+        },
+      };
+    };
+
+    const guest1 = makeFakeConn('guest-1');
+    peer.emit('connection', guest1);
+    guest1.emit('open');
+    guest1.emit('data', { kind: 'JOIN', playerName: 'ゲスト1' });
+
+    // ホストから送信 → ホスト自身と guest1 へ配信される
+    expect(session.sendChat('よろしく！')).toBe(true);
+    expect(chatLog).toEqual([{ senderName: 'ホスト', text: 'よろしく！' }]);
+    expect(guest1.sent.some((m: unknown) =>
+      typeof m === 'object' && m !== null && (m as { kind?: string }).kind === 'CHAT_MESSAGE',
+    )).toBe(true);
+
+    // guest1 から送信 → ホストにも配信される
+    guest1.emit('data', { kind: 'CHAT', text: 'お願いします！' });
+    expect(chatLog).toEqual([
+      { senderName: 'ホスト', text: 'よろしく！' },
+      { senderName: 'ゲスト1', text: 'お願いします！' },
+    ]);
+
+    // 後から参加した guest2 へチャット履歴が送られる
+    const guest2 = makeFakeConn('guest-2');
+    peer.emit('connection', guest2);
+    guest2.emit('open');
+    guest2.emit('data', { kind: 'JOIN', playerName: 'ゲスト2' });
+    const historyMsg = guest2.sent.find(
+      (m: unknown) =>
+        typeof m === 'object' && m !== null && (m as { kind?: string }).kind === 'CHAT_HISTORY',
+    ) as { payload: Array<{ text: string }> } | undefined;
+    expect(historyMsg?.payload.map((m) => m.text)).toEqual([
+      'よろしく！',
+      'お願いします！',
+    ]);
+
+    session.destroy();
+  });
 });

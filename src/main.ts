@@ -3,7 +3,7 @@ import { CPU_PLAYER_ID_PREFIX } from './cpu/player';
 import { ClientSession } from './net/client';
 import { HostSession } from './net/host';
 import { normalizeRoomCode } from './net/protocol';
-import type { GameError, StateView } from './types/message';
+import type { ChatMessage, GameError, StateView } from './types/message';
 import { DEFAULT_CPU_LEVEL, type RuleConfig } from './types/rule';
 import {
   renderLobbyEntry,
@@ -24,6 +24,8 @@ type Session =
 
 class MahjongApp {
   private readonly root: HTMLElement;
+  private readonly mainLayer: HTMLElement;
+  private readonly floatingLayer: HTMLElement;
   private activeSession: Session | null = null;
   private currentView: StateView | null = null;
   private statusText = '未接続';
@@ -35,6 +37,12 @@ class MahjongApp {
   private selectedDiscardTileId: string | null = null;
   private roundEndStep: RoundEndStep = 'details';
   private leaveConfirmPending = false;
+  private settingsOpen = false;
+  private chatOpen = false;
+  private chatMessages: ChatMessage[] = [];
+  private unreadChatCount = 0;
+  private chatDraft = '';
+  private fullscreenError: string | null = null;
   private autoTsumogiriEnabled = true;
   private autoAgariEnabled = false;
   private autoNoCallEnabled = false;
@@ -42,6 +50,11 @@ class MahjongApp {
   private autoAssistTimerId: ReturnType<typeof setTimeout> | null = null;
   private countdownDeadline: number | null = null;
   private countdownTimerId: ReturnType<typeof setInterval> | null = null;
+  private readonly handleFullscreenChange = () => {
+    if (this.settingsOpen) {
+      this.renderFloating();
+    }
+  };
 
   private readonly formState: LobbyFormState;
   /** 牌面スプライトシートの準備完了後に一度だけ再描画するためのフラグ */
@@ -59,6 +72,13 @@ class MahjongApp {
 
   constructor(root: HTMLElement) {
     this.root = root;
+    this.mainLayer = document.createElement('div');
+    this.mainLayer.className = 'app-main-layer';
+    this.floatingLayer = document.createElement('div');
+    this.floatingLayer.className = 'app-floating-layer';
+    this.root.innerHTML = '';
+    this.root.append(this.mainLayer, this.floatingLayer);
+
     const params = new URLSearchParams(window.location.search);
     const roomFromUrl = params.get('room') ?? '';
 
@@ -79,6 +99,11 @@ class MahjongApp {
     window.addEventListener('beforeunload', () => {
       this.cleanupSession();
     });
+    document.addEventListener('fullscreenchange', this.handleFullscreenChange);
+    document.addEventListener(
+      'webkitfullscreenchange',
+      this.handleFullscreenChange,
+    );
 
     // 対局画面では横画面を必須にする（縦持ち時はローテーション案内で覆う）
     watchOrientation(() => this.syncOrientationOverlay());
@@ -129,6 +154,12 @@ class MahjongApp {
       },
       onError: (err) => {
         this.handleGameError(err);
+      },
+      onChatMessage: (message) => {
+        this.handleIncomingChat(message);
+      },
+      onChatHistory: (messages) => {
+        this.handleChatHistory(messages);
       },
     }, {
       cpuCount,
@@ -228,6 +259,12 @@ class MahjongApp {
       },
       onError: (err) => {
         this.handleGameError(err);
+      },
+      onChatMessage: (message) => {
+        this.handleIncomingChat(message);
+      },
+      onChatHistory: (messages) => {
+        this.handleChatHistory(messages);
       },
     });
 
@@ -425,9 +462,104 @@ class MahjongApp {
     this.stopAutoTsumogiriTimer();
     this.stopAutoAssistTimer();
     this.stopCountdownTicker();
+    this.settingsOpen = false;
+    this.chatOpen = false;
+    this.chatMessages = [];
+    this.unreadChatCount = 0;
+    this.chatDraft = '';
+    this.fullscreenError = null;
+    this.renderFloating();
     if (!this.activeSession) return;
     this.activeSession.session.destroy();
     this.activeSession = null;
+  }
+
+  private handleIncomingChat(message: ChatMessage): void {
+    if (this.chatMessages.some((m) => m.id === message.id)) return;
+    this.chatMessages = [...this.chatMessages.slice(-49), message];
+    if (this.chatOpen) {
+      this.unreadChatCount = 0;
+      const list = this.floatingLayer.querySelector<HTMLElement>('.chat-messages-list');
+      if (list) {
+        this.populateChatMessagesList(list);
+      } else {
+        this.renderFloating();
+      }
+      return;
+    }
+    this.unreadChatCount += 1;
+    this.render();
+  }
+
+  private handleChatHistory(messages: ChatMessage[]): void {
+    const existingIds = new Set(this.chatMessages.map((m) => m.id));
+    const merged = [...this.chatMessages];
+    for (const msg of messages) {
+      if (!existingIds.has(msg.id)) {
+        existingIds.add(msg.id);
+        merged.push(msg);
+      }
+    }
+    this.chatMessages = merged.slice(-50);
+    if (this.chatOpen) {
+      const list = this.floatingLayer.querySelector<HTMLElement>('.chat-messages-list');
+      if (list) {
+        this.populateChatMessagesList(list);
+      } else {
+        this.renderFloating();
+      }
+    }
+  }
+
+  private sendChatMessage(text: string): boolean {
+    if (!this.activeSession) return false;
+    const ok = this.activeSession.session.sendChat(text);
+    if (ok) {
+      this.chatDraft = '';
+    }
+    return ok;
+  }
+
+  private isFullscreenActive(): boolean {
+    const doc = document as Document & { webkitFullscreenElement?: Element | null };
+    return Boolean(doc.fullscreenElement ?? doc.webkitFullscreenElement);
+  }
+
+  private async setFullscreen(enabled: boolean): Promise<void> {
+    this.fullscreenError = null;
+    const doc = document as Document & {
+      webkitFullscreenElement?: Element | null;
+      webkitExitFullscreen?: () => Promise<void> | void;
+    };
+    const rootEl = document.documentElement as HTMLElement & {
+      webkitRequestFullscreen?: () => Promise<void> | void;
+    };
+
+    try {
+      if (enabled) {
+        if (!this.isFullscreenActive()) {
+          if (typeof rootEl.requestFullscreen === 'function') {
+            await rootEl.requestFullscreen();
+          } else if (typeof rootEl.webkitRequestFullscreen === 'function') {
+            await rootEl.webkitRequestFullscreen();
+          } else {
+            this.fullscreenError =
+              'お使いのブラウザではフル画面表示に対応していません。';
+          }
+        }
+      } else if (this.isFullscreenActive()) {
+        if (typeof doc.exitFullscreen === 'function') {
+          await doc.exitFullscreen();
+        } else if (typeof doc.webkitExitFullscreen === 'function') {
+          await doc.webkitExitFullscreen();
+        }
+      }
+    } catch {
+      this.fullscreenError = enabled
+        ? 'フル画面表示に切り替えられませんでした。ブラウザの設定をご確認ください。'
+        : 'フル画面表示の解除に失敗しました。';
+    }
+    this.renderFloating();
   }
 
   private dispatchAction(fn: (session: HostSession | ClientSession) => void): void {
@@ -513,7 +645,7 @@ class MahjongApp {
   }
 
   private render(): void {
-    this.root.innerHTML = '';
+    this.mainLayer.innerHTML = '';
 
     // 対局中は「雀卓だけ」を表示する（トップバーやサイドパネルを出さない）
     const inGame =
@@ -630,9 +762,24 @@ class MahjongApp {
         content,
         view,
         {
-          // 対局中はトップバーを出さないので、離脱手段は卓上に置く
+          // 対局中はトップバーを出さないので、離脱・設定・チャットは卓上に置く
           canLeaveGame: Boolean(this.activeSession),
           onLeaveGame: () => this.confirmLeaveGame(),
+          onOpenSettings: () => {
+            this.settingsOpen = !this.settingsOpen;
+            this.chatOpen = false;
+            this.fullscreenError = null;
+            this.renderFloating();
+          },
+          onOpenChat: () => {
+            this.chatOpen = !this.chatOpen;
+            this.settingsOpen = false;
+            if (this.chatOpen && this.unreadChatCount > 0) {
+              this.unreadChatCount = 0;
+              this.render();
+            }
+            this.renderFloating();
+          },
           onSelectTile: (tileId) => {
             this.selectedDiscardTileId = tileId;
           },
@@ -722,15 +869,215 @@ class MahjongApp {
           autoNoCallEnabled: this.autoNoCallEnabled,
           selectedTileId: this.selectedDiscardTileId,
           roundEndStep: this.roundEndStep,
+          unreadChatCount: this.unreadChatCount,
         },
       );
     }
 
-    this.root.appendChild(shell);
+    this.mainLayer.appendChild(shell);
     if (this.leaveConfirmPending && inGame) {
-      this.root.appendChild(this.renderLeaveConfirmModal());
+      this.mainLayer.appendChild(this.renderLeaveConfirmModal());
     }
     this.syncOrientationOverlay();
+  }
+
+  private renderFloating(): void {
+    this.floatingLayer.innerHTML = '';
+    const inGame =
+      this.currentView !== null && this.currentView.phase !== 'lobby';
+    if (!inGame) return;
+
+    if (this.settingsOpen) {
+      this.floatingLayer.appendChild(this.renderSettingsModal());
+    } else if (this.chatOpen) {
+      this.floatingLayer.appendChild(this.renderChatModal());
+    }
+  }
+
+  private renderSettingsModal(): HTMLElement {
+    const backdrop = document.createElement('div');
+    backdrop.className = 'overlay-backdrop overlay-backdrop-modal table-settings-modal';
+    backdrop.setAttribute('role', 'dialog');
+    backdrop.setAttribute('aria-modal', 'true');
+    backdrop.addEventListener('click', (e) => {
+      if (e.target === backdrop) {
+        this.settingsOpen = false;
+        this.renderFloating();
+      }
+    });
+
+    const panel = document.createElement('div');
+    panel.className = 'overlay-panel table-settings-panel';
+
+    const header = document.createElement('div');
+    header.className = 'table-modal-header';
+
+    const title = document.createElement('h3');
+    title.textContent = '設定';
+
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'btn btn-secondary table-modal-close-btn';
+    closeBtn.textContent = '閉じる';
+    closeBtn.addEventListener('click', () => {
+      this.settingsOpen = false;
+      this.renderFloating();
+    });
+
+    header.append(title, closeBtn);
+
+    const row = document.createElement('div');
+    row.className = 'setting-toggle-row';
+
+    const label = document.createElement('div');
+    label.className = 'setting-toggle-label';
+    label.innerHTML =
+      '<strong>フル画面表示</strong><span class="hub-sub">画面全体を広く使って対局します</span>';
+
+    const controls = document.createElement('div');
+    controls.className = 'segmented setting-toggle-controls';
+
+    const active = this.isFullscreenActive();
+    const onBtn = document.createElement('button');
+    onBtn.type = 'button';
+    onBtn.className = `seg-btn${active ? ' is-active' : ''}`;
+    onBtn.textContent = 'する';
+    onBtn.setAttribute('aria-pressed', active ? 'true' : 'false');
+    onBtn.addEventListener('click', () => {
+      void this.setFullscreen(true);
+    });
+
+    const offBtn = document.createElement('button');
+    offBtn.type = 'button';
+    offBtn.className = `seg-btn${!active ? ' is-active' : ''}`;
+    offBtn.textContent = 'しない';
+    offBtn.setAttribute('aria-pressed', !active ? 'true' : 'false');
+    offBtn.addEventListener('click', () => {
+      void this.setFullscreen(false);
+    });
+
+    controls.append(onBtn, offBtn);
+    row.append(label, controls);
+    panel.append(header, row);
+
+    if (this.fullscreenError) {
+      const note = document.createElement('div');
+      note.className = 'fullscreen-error-note';
+      note.textContent = this.fullscreenError;
+      panel.appendChild(note);
+    }
+
+    backdrop.appendChild(panel);
+    return backdrop;
+  }
+
+  private renderChatModal(): HTMLElement {
+    const backdrop = document.createElement('div');
+    backdrop.className = 'overlay-backdrop overlay-backdrop-modal table-chat-modal';
+    backdrop.setAttribute('role', 'dialog');
+    backdrop.setAttribute('aria-modal', 'true');
+    backdrop.addEventListener('click', (e) => {
+      if (e.target === backdrop) {
+        this.chatOpen = false;
+        this.renderFloating();
+      }
+    });
+
+    const panel = document.createElement('div');
+    panel.className = 'overlay-panel table-chat-panel';
+
+    const header = document.createElement('div');
+    header.className = 'table-modal-header';
+
+    const title = document.createElement('h3');
+    title.textContent = 'チャット';
+
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'btn btn-secondary table-modal-close-btn';
+    closeBtn.textContent = '閉じる';
+    closeBtn.addEventListener('click', () => {
+      this.chatOpen = false;
+      this.renderFloating();
+    });
+
+    header.append(title, closeBtn);
+
+    const list = document.createElement('div');
+    list.className = 'chat-messages-list';
+    this.populateChatMessagesList(list);
+
+    const quickBar = document.createElement('div');
+    quickBar.className = 'chat-quick-bar';
+    for (const phrase of ['よろしく！', 'ありがとう！', 'お見事！', 'もう1回！']) {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'btn btn-secondary chat-quick-btn';
+      chip.textContent = phrase;
+      chip.addEventListener('click', () => {
+        this.sendChatMessage(phrase);
+      });
+      quickBar.appendChild(chip);
+    }
+
+    const form = document.createElement('form');
+    form.className = 'chat-input-row';
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'input chat-input';
+    input.placeholder = 'メッセージを入力...';
+    input.maxLength = 200;
+    input.value = this.chatDraft;
+    input.addEventListener('input', () => {
+      this.chatDraft = input.value;
+    });
+
+    const sendBtn = document.createElement('button');
+    sendBtn.type = 'submit';
+    sendBtn.className = 'btn btn-primary chat-send-btn';
+    sendBtn.textContent = '送信';
+
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      if (this.sendChatMessage(input.value)) {
+        input.value = '';
+      }
+    });
+
+    form.append(input, sendBtn);
+    panel.append(header, list, quickBar, form);
+    backdrop.appendChild(panel);
+    return backdrop;
+  }
+
+  private populateChatMessagesList(list: HTMLElement): void {
+    list.innerHTML = '';
+    if (this.chatMessages.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'hub-sub chat-empty';
+      empty.textContent = 'メッセージはまだありません';
+      list.appendChild(empty);
+      return;
+    }
+
+    const viewerId = this.currentView?.viewerPlayerId ?? '';
+    for (const msg of this.chatMessages) {
+      const item = document.createElement('div');
+      item.className = `chat-message-item${msg.senderId === viewerId ? ' is-self' : ''}`;
+
+      const sender = document.createElement('span');
+      sender.className = 'chat-message-sender';
+      sender.textContent = msg.senderName;
+
+      const text = document.createElement('span');
+      text.className = 'chat-message-text';
+      text.textContent = msg.text;
+
+      item.append(sender, text);
+      list.appendChild(item);
+    }
+    list.scrollTop = list.scrollHeight;
   }
 }
 

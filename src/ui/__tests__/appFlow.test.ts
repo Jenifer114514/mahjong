@@ -183,4 +183,73 @@ describe('アプリ起動とローカルCPU対局', () => {
     expect(root.querySelector('.table-stage')).toBeNull();
     expect(root.textContent).toContain('部屋を作る（ホスト）');
   });
+
+  it('設定ボタンでフル画面表示のON/OFF設定が開き、チャットボタンでメッセージ送信できる', async () => {
+    bootApp();
+    await loadMain();
+
+    let fsEl: Element | null = null;
+    Object.defineProperty(document, 'fullscreenElement', {
+      configurable: true,
+      get: () => fsEl,
+    });
+    const reqFs = vi.fn(async () => {
+      fsEl = document.documentElement;
+      document.dispatchEvent(new Event('fullscreenchange'));
+    });
+    const exitFs = vi.fn(async () => {
+      fsEl = null;
+      document.dispatchEvent(new Event('fullscreenchange'));
+    });
+    document.documentElement.requestFullscreen = reqFs;
+    document.exitFullscreen = exitFs;
+
+    const root = document.getElementById('app') as HTMLElement;
+    expect(clickByText(root, 'button', 'CPU対局をはじめる')).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    // 退出の横に設定とチャットがある
+    expect(root.querySelector('.table-chrome-chat')).not.toBeNull();
+    expect(root.querySelector('.table-chrome-settings')).not.toBeNull();
+    expect(root.querySelector('.table-chrome-leave')).not.toBeNull();
+
+    // 設定を開いてフル画面表示を「する」→「しない」に切り替える
+    root.querySelector<HTMLButtonElement>('.table-chrome-settings')!.click();
+    const settingsModal = root.querySelector('.table-settings-modal');
+    expect(settingsModal).not.toBeNull();
+    expect(settingsModal!.textContent).toContain('フル画面表示');
+
+    expect(clickByText(root, '.table-settings-modal .seg-btn', 'する')).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(reqFs).toHaveBeenCalledTimes(1);
+
+    expect(clickByText(root, '.table-settings-modal .seg-btn', 'しない')).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(exitFs).toHaveBeenCalledTimes(1);
+
+    expect(clickByText(root, '.table-settings-modal button', '閉じる')).toBe(true);
+    expect(root.querySelector('.table-settings-modal')).toBeNull();
+
+    // チャットを開いて定型文・入力送信できる
+    root.querySelector<HTMLButtonElement>('.table-chrome-chat')!.click();
+    const chatModal = root.querySelector('.table-chat-modal');
+    expect(chatModal).not.toBeNull();
+    expect(clickByText(root, '.table-chat-modal .chat-quick-btn', 'よろしく！')).toBe(true);
+
+    const input = root.querySelector<HTMLInputElement>('.table-chat-modal .chat-input')!;
+    input.value = 'おつかれさまです';
+    input.dispatchEvent(new Event('input'));
+    root.querySelector<HTMLFormElement>('.table-chat-modal .chat-input-row')!.dispatchEvent(
+      new Event('submit', { cancelable: true }),
+    );
+
+    const items = Array.from(root.querySelectorAll('.chat-message-item')).map(
+      (el) => el.textContent ?? '',
+    );
+    expect(items.some((t) => t.includes('よろしく！'))).toBe(true);
+    expect(items.some((t) => t.includes('おつかれさまです'))).toBe(true);
+
+    expect(clickByText(root, '.table-chat-modal button', '閉じる')).toBe(true);
+    expect(root.querySelector('.table-chat-modal')).toBeNull();
+  });
 });

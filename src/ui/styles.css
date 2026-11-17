@@ -34,6 +34,11 @@ input {
   font: inherit;
 }
 
+.app-main-layer,
+.app-floating-layer {
+  display: contents;
+}
+
 .app-shell {
   min-height: 100vh;
   display: flex;
@@ -1273,7 +1278,7 @@ input {
   inset: 0;
   pointer-events: none;
   z-index: 0;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' preserveAspectRatio='none'%3E%3Crect x='25' y='18' width='50' height='60' fill='none' stroke='%23071022' stroke-opacity='0.48' stroke-width='1.5' vector-effect='non-scaling-stroke'/%3E%3Cline x1='0' y1='0' x2='25' y2='18' stroke='%23071022' stroke-opacity='0.42' stroke-width='1.5' vector-effect='non-scaling-stroke'/%3E%3Cline x1='100' y1='0' x2='75' y2='18' stroke='%23071022' stroke-opacity='0.42' stroke-width='1.5' vector-effect='non-scaling-stroke'/%3E%3Cline x1='0' y1='100' x2='25' y2='78' stroke='%23071022' stroke-opacity='0.42' stroke-width='1.5' vector-effect='non-scaling-stroke'/%3E%3Cline x1='100' y1='100' x2='75' y2='78' stroke='%23071022' stroke-opacity='0.42' stroke-width='1.5' vector-effect='non-scaling-stroke'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' preserveAspectRatio='none'%3E%3Crect x='29' y='18' width='42' height='60' fill='none' stroke='%23071022' stroke-opacity='0.48' stroke-width='1.5' vector-effect='non-scaling-stroke'/%3E%3Cline x1='0' y1='0' x2='29' y2='18' stroke='%23071022' stroke-opacity='0.42' stroke-width='1.5' vector-effect='non-scaling-stroke'/%3E%3Cline x1='100' y1='0' x2='71' y2='18' stroke='%23071022' stroke-opacity='0.42' stroke-width='1.5' vector-effect='non-scaling-stroke'/%3E%3Cline x1='0' y1='100' x2='29' y2='78' stroke='%23071022' stroke-opacity='0.42' stroke-width='1.5' vector-effect='non-scaling-stroke'/%3E%3Cline x1='100' y1='100' x2='71' y2='78' stroke='%23071022' stroke-opacity='0.42' stroke-width='1.5' vector-effect='non-scaling-stroke'/%3E%3C/svg%3E");
   background-size: 100% 100%;
 }
 
@@ -1522,7 +1527,7 @@ input {
   display: none;
 }
 
-/* 4人卓のバッジ位置（左右席は手牌と河の間へ配置） */
+/* 4人卓のバッジ位置（左右席は手牌と河の間かつ卓の黒線より外側へ配置） */
 .seat-orient-top > .seat-header {
   grid-column: 5;
   grid-row: 1 / 3;
@@ -1537,20 +1542,20 @@ input {
 .seat-orient-left > .seat-header {
   grid-column: 1;
   grid-row: 3;
-  justify-self: end;
+  justify-self: start;
   align-self: center;
   margin-top: 0;
-  margin-right: clamp(6px, 2vw, 22px);
+  margin-left: calc(var(--left-side-hand-inset) + 32px);
   width: 84px;
 }
 
 .seat-orient-right > .seat-header {
   grid-column: 5;
   grid-row: 3;
-  justify-self: start;
+  justify-self: end;
   align-self: center;
   margin-top: 0;
-  margin-left: clamp(6px, 2vw, 22px);
+  margin-right: calc(var(--side-hand-inset) + 32px);
   width: 84px;
 }
 
@@ -2211,17 +2216,22 @@ input {
   letter-spacing: 0.02em;
 }
 
-/* ---------- 卓上の操作（右上: 退出） ---------- */
+/* ---------- 卓上の操作（右上: チャット・設定・退出） ---------- */
 .table-chrome {
   position: absolute;
   top: 8px;
   right: 20px;
   z-index: 14;
   display: flex;
+  align-items: center;
   gap: 6px;
 }
 
 .table-chrome-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   font-family: inherit;
   font-size: 0.72rem;
   font-weight: 700;
@@ -2239,6 +2249,160 @@ input {
   color: var(--accent-gold);
   border-color: var(--border-gold);
   background: rgba(18, 26, 42, 0.94);
+}
+
+.table-chrome-chat.has-unread {
+  border-color: rgba(240, 201, 92, 0.7);
+}
+
+.chat-unread-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--accent-red);
+  color: #fff;
+  font-size: 0.64rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+/* ---------- 設定・チャットモーダル ---------- */
+.table-settings-panel,
+.table-chat-panel {
+  width: min(440px, 100%);
+  padding: 14px 16px;
+  gap: 10px;
+}
+
+.table-chat-panel {
+  max-height: min(440px, calc(100vh - 16px));
+  max-height: min(440px, calc(100dvh - 16px));
+}
+
+.table-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.table-modal-header h3 {
+  margin: 0;
+  font-size: 1rem;
+  color: var(--accent-gold);
+}
+
+.table-modal-close-btn {
+  padding: 4px 10px;
+  font-size: 0.78rem;
+}
+
+.setting-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.setting-toggle-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.setting-toggle-controls {
+  flex: 0 0 auto;
+}
+
+.fullscreen-error-note {
+  font-size: 0.8rem;
+  color: #ffb8b8;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(229, 83, 83, 0.14);
+  border: 1px solid rgba(229, 83, 83, 0.4);
+}
+
+.chat-messages-list {
+  flex: 1 1 auto;
+  min-height: 90px;
+  max-height: 220px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(5, 11, 10, 0.65);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.chat-empty {
+  text-align: center;
+  margin: auto 0;
+}
+
+.chat-message-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 0.84rem;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.chat-message-item.is-self {
+  background: rgba(240, 201, 92, 0.1);
+  border: 1px solid rgba(240, 201, 92, 0.24);
+}
+
+.chat-message-sender {
+  flex: 0 0 auto;
+  font-weight: 700;
+  color: var(--accent-gold);
+  font-size: 0.78rem;
+}
+
+.chat-message-text {
+  color: var(--text-main);
+}
+
+.chat-quick-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chat-quick-btn {
+  padding: 4px 9px;
+  font-size: 0.76rem;
+}
+
+.chat-input-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.chat-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.chat-send-btn {
+  flex: 0 0 auto;
+  padding: 8px 14px;
 }
 
 /* ---------- 左端の縦型クイック補助バー（理 / 和 / 鳴 / 切） ---------- */
@@ -2586,9 +2750,14 @@ input {
     font-size: 0.7rem;
   }
 
-  .seat-orient-left > .seat-header,
+  .seat-orient-left > .seat-header {
+    width: 76px;
+    margin-left: calc(var(--left-side-hand-inset) + 26px);
+  }
+
   .seat-orient-right > .seat-header {
     width: 76px;
+    margin-right: calc(var(--side-hand-inset) + 26px);
   }
 
   .seat-orient-top > .seat-header {
@@ -2765,10 +2934,16 @@ input {
     font-size: 0.66rem;
   }
 
-  .seat-orient-left > .seat-header,
+  .seat-orient-left > .seat-header {
+    width: 68px;
+    padding: 3px 4px;
+    margin-left: calc(var(--left-side-hand-inset) + 22px);
+  }
+
   .seat-orient-right > .seat-header {
     width: 68px;
     padding: 3px 4px;
+    margin-right: calc(var(--side-hand-inset) + 22px);
   }
 
   .seat-orient-top > .seat-header,
@@ -2983,9 +3158,14 @@ input {
     font-size: 0.6rem;
   }
 
-  .seat-orient-left > .seat-header,
+  .seat-orient-left > .seat-header {
+    width: 60px;
+    margin-left: calc(var(--left-side-hand-inset) + 20px);
+  }
+
   .seat-orient-right > .seat-header {
     width: 60px;
+    margin-right: calc(var(--side-hand-inset) + 20px);
   }
 
   .seat-orient-top > .seat-header,
@@ -3012,6 +3192,22 @@ input {
   .table-chrome-btn {
     padding: 3px 8px;
     font-size: 0.64rem;
+  }
+
+  .table-settings-panel,
+  .table-chat-panel {
+    padding: 10px 12px;
+    gap: 7px;
+  }
+
+  .table-chat-panel {
+    max-height: calc(100vh - 10px);
+    max-height: calc(100dvh - 10px);
+  }
+
+  .chat-messages-list {
+    min-height: 64px;
+    max-height: 120px;
   }
 
   .table-left-actions {
@@ -3046,11 +3242,14 @@ input {
     --left-side-hand-inset: 72px;
   }
 
-  .seat-orient-left > .seat-header,
+  .seat-orient-left > .seat-header {
+    width: 54px;
+    margin-left: calc(var(--left-side-hand-inset) + 18px);
+  }
+
   .seat-orient-right > .seat-header {
     width: 54px;
-    margin-left: 4px;
-    margin-right: 4px;
+    margin-right: calc(var(--side-hand-inset) + 18px);
   }
 }
 

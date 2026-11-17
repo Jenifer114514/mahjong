@@ -1,5 +1,10 @@
 import Peer, { type DataConnection } from 'peerjs';
-import type { ClientMessage, GameError, StateView } from '../types/message';
+import type {
+  ChatMessage,
+  ClientMessage,
+  GameError,
+  StateView,
+} from '../types/message';
 import type { CallResponseChoice } from '../types/state';
 import type { TileKind } from '../types/tile';
 import {
@@ -20,6 +25,8 @@ export interface ClientSessionCallbacks {
   onViewChange: (view: StateView) => void;
   onStatusChange: (status: ClientConnectionStatus, detail?: string) => void;
   onError: (error: GameError) => void;
+  onChatMessage?: (message: ChatMessage) => void;
+  onChatHistory?: (messages: ChatMessage[]) => void;
 }
 
 const CONNECT_TIMEOUT_MS = 15000;
@@ -112,6 +119,10 @@ export class ClientSession {
           this.hasJoined = true;
           this.callbacks.onStatusChange('connected', '接続済み');
           this.callbacks.onViewChange(msg.payload);
+        } else if (msg.kind === 'CHAT_MESSAGE') {
+          this.callbacks.onChatMessage?.(msg.payload);
+        } else if (msg.kind === 'CHAT_HISTORY') {
+          this.callbacks.onChatHistory?.(msg.payload);
         } else {
           this.clearTimeout();
           this.callbacks.onError(msg.payload);
@@ -214,6 +225,16 @@ export class ClientSession {
       kind: 'ACTION',
       action: { type: 'DECLARE_KYUUSHU_KYUUHAI' },
     });
+  }
+
+  sendChat(text: string): boolean {
+    const trimmed = text.trim().slice(0, 200);
+    if (!trimmed) return false;
+    this.send({
+      kind: 'CHAT',
+      text: trimmed,
+    });
+    return true;
   }
 
   private send(msg: ClientMessage): void {

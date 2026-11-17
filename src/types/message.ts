@@ -215,11 +215,23 @@ export interface GameError {
   message: string;
 }
 
+export interface ChatMessage {
+  id: string;
+  senderId: string;
+  senderName: string;
+  text: string;
+  timestamp: number;
+}
+
 /** クライアント → ホスト（要求のみ送る） */
 export type ClientMessage =
   | {
       kind: 'JOIN';
       playerName: string;
+    }
+  | {
+      kind: 'CHAT';
+      text: string;
     }
   | {
       kind: 'ACTION';
@@ -240,6 +252,14 @@ export type HostMessage =
   | {
       kind: 'STATE_VIEW';
       payload: StateView;
+    }
+  | {
+      kind: 'CHAT_MESSAGE';
+      payload: ChatMessage;
+    }
+  | {
+      kind: 'CHAT_HISTORY';
+      payload: ChatMessage[];
     }
   | {
       kind: 'ERROR';
