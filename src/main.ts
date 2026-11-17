@@ -34,7 +34,11 @@ class MahjongApp {
   private riichiSelectingMode = false;
   private leaveConfirmPending = false;
   private autoTsumogiriEnabled = true;
+  private autoAgariEnabled = false;
+  private autoNoCallEnabled = false;
+  private settingsOpen = false;
   private autoTsumogiriTimerId: ReturnType<typeof setTimeout> | null = null;
+  private autoAssistTimerId: ReturnType<typeof setTimeout> | null = null;
   private countdownDeadline: number | null = null;
   private countdownTimerId: ReturnType<typeof setInterval> | null = null;
 
@@ -212,6 +216,7 @@ class MahjongApp {
 
   private applyStateView(view: StateView): void {
     this.stopAutoTsumogiriTimer();
+    this.stopAutoAssistTimer();
     this.riichiSelectingMode = false;
     this.currentView = view;
     if (
@@ -224,8 +229,78 @@ class MahjongApp {
     } else {
       this.stopCountdownTicker();
     }
+    this.scheduleAutoAssistIfNeeded(view);
     this.scheduleAutoTsumogiriIfNeeded(view);
     this.render();
+  }
+
+  private scheduleAutoAssistIfNeeded(view: StateView): void {
+    if (!this.activeSession || this.actionInFlight) return;
+    if (this.autoAgariEnabled) {
+      if (view.phase === 'awaiting_responses' && view.myCallOptions?.canRon) {
+        this.autoAssistTimerId = setTimeout(() => {
+          this.autoAssistTimerId = null;
+          if (
+            !this.autoAgariEnabled ||
+            !this.activeSession ||
+            this.actionInFlight ||
+            this.currentView !== view
+          ) {
+            return;
+          }
+          this.dispatchAction((s) => s.respondToCall({ type: 'ron' }));
+        }, 200);
+        return;
+      }
+      const selfPlayer = view.players.find(
+        (p) => p.seatIndex === view.viewerSeatIndex,
+      );
+      if (
+        view.phase === 'playing' &&
+        selfPlayer?.isCurrentTurn &&
+        view.mySelfActions?.canTsumo
+      ) {
+        this.autoAssistTimerId = setTimeout(() => {
+          this.autoAssistTimerId = null;
+          if (
+            !this.autoAgariEnabled ||
+            !this.activeSession ||
+            this.actionInFlight ||
+            this.currentView !== view
+          ) {
+            return;
+          }
+          this.dispatchAction((s) => s.declareTsumo());
+        }, 200);
+        return;
+      }
+    }
+    if (
+      this.autoNoCallEnabled &&
+      view.phase === 'awaiting_responses' &&
+      view.myCallOptions !== null &&
+      !view.myCallOptions.canRon
+    ) {
+      this.autoAssistTimerId = setTimeout(() => {
+        this.autoAssistTimerId = null;
+        if (
+          !this.autoNoCallEnabled ||
+          !this.activeSession ||
+          this.actionInFlight ||
+          this.currentView !== view
+        ) {
+          return;
+        }
+        this.dispatchAction((s) => s.respondToCall({ type: 'pass' }));
+      }, 180);
+    }
+  }
+
+  private stopAutoAssistTimer(): void {
+    if (this.autoAssistTimerId !== null) {
+      clearTimeout(this.autoAssistTimerId);
+      this.autoAssistTimerId = null;
+    }
   }
 
   private scheduleAutoTsumogiriIfNeeded(view: StateView): void {
@@ -293,6 +368,7 @@ class MahjongApp {
 
   private handleGameError(err: GameError): void {
     this.stopAutoTsumogiriTimer();
+    this.stopAutoAssistTimer();
     this.riichiSelectingMode = false;
     this.actionInFlight = false;
     this.errorBanner = err.message;
@@ -306,6 +382,7 @@ class MahjongApp {
     this.actionInFlight = false;
     this.riichiSelectingMode = false;
     this.leaveConfirmPending = false;
+    this.settingsOpen = false;
     this.errorBanner = null;
     this.statusText = '未接続';
     this.statusKind = 'normal';
@@ -314,6 +391,7 @@ class MahjongApp {
 
   private cleanupSession(): void {
     this.stopAutoTsumogiriTimer();
+    this.stopAutoAssistTimer();
     this.stopCountdownTicker();
     if (!this.activeSession) return;
     this.activeSession.session.destroy();
@@ -563,6 +641,26 @@ class MahjongApp {
             }
             this.render();
           },
+          onToggleAutoAgari: (enabled) => {
+            this.autoAgariEnabled = enabled;
+            this.stopAutoAssistTimer();
+            if (this.currentView && enabled) {
+              this.scheduleAutoAssistIfNeeded(this.currentView);
+            }
+            this.render();
+          },
+          onToggleAutoNoCall: (enabled) => {
+            this.autoNoCallEnabled = enabled;
+            this.stopAutoAssistTimer();
+            if (this.currentView && enabled) {
+              this.scheduleAutoAssistIfNeeded(this.currentView);
+            }
+            this.render();
+          },
+          onToggleSettings: (open) => {
+            this.settingsOpen = open;
+            this.render();
+          },
           onAdvanceRound: () => {
             if (this.activeSession?.role === 'host' && !this.actionInFlight) {
               this.actionInFlight = true;
@@ -575,6 +673,9 @@ class MahjongApp {
         {
           riichiSelectingMode: this.riichiSelectingMode,
           autoTsumogiriEnabled: this.autoTsumogiriEnabled,
+          autoAgariEnabled: this.autoAgariEnabled,
+          autoNoCallEnabled: this.autoNoCallEnabled,
+          settingsOpen: this.settingsOpen,
         },
       );
     }

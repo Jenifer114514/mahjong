@@ -42,6 +42,9 @@ export interface TableHandlers {
   onDeclareKyuushuKyuuhai: () => void;
   onToggleRiichiMode?: (enabled: boolean) => void;
   onToggleAutoTsumogiri?: (enabled: boolean) => void;
+  onToggleAutoAgari?: (enabled: boolean) => void;
+  onToggleAutoNoCall?: (enabled: boolean) => void;
+  onToggleSettings?: (open: boolean) => void;
   onAdvanceRound: () => void;
   onReturnToLobby: () => void;
   /** 対局中に卓上から部屋を離れる（トップバーを出さないため） */
@@ -53,11 +56,17 @@ export interface TableHandlers {
 export interface TableUiState {
   riichiSelectingMode: boolean;
   autoTsumogiriEnabled: boolean;
+  autoAgariEnabled?: boolean;
+  autoNoCallEnabled?: boolean;
+  settingsOpen?: boolean;
 }
 
 const DEFAULT_TABLE_UI_STATE: TableUiState = {
   riichiSelectingMode: false,
   autoTsumogiriEnabled: true,
+  autoAgariEnabled: false,
+  autoNoCallEnabled: false,
+  settingsOpen: false,
 };
 
 const MELD_TYPE_LABELS: Record<Meld['type'], string> = {
@@ -175,9 +184,12 @@ export function renderGameTable(
   }
 
   // 対局中は雀卓だけを表示する（局情報・スコア・ドラは卓の中に集約）
-  if (handlers.canLeaveGame && handlers.onLeaveGame) {
-    felt.appendChild(renderTableChrome(handlers));
+  const chrome = renderTableChrome(view, handlers, uiState);
+  if (chrome) {
+    felt.appendChild(chrome);
   }
+
+  felt.appendChild(renderLeftActionBar(handlers, uiState));
 
   const doraPanel = renderDoraPanel(view);
   if (doraPanel) {
@@ -778,9 +790,8 @@ function renderAgariWinnerCard(
 }
 
 /**
- * 卓の左上に固定するドラ表示。
- * 実物の雀卓でもドラ表示牌は卓の隅にまとまって置かれるため、
- * 中央の「場」から切り離して常に見える位置に出す。
+ * 卓の左上に固定するドラ表示パネル（雀魂準拠）。
+ * ドラ表示牌 5 枠 + リーチ棒・本場棒の集計 + 対局モード表記をコンパクトにまとめる。
  */
 function renderDoraPanel(view: StateView): HTMLElement | null {
   const round = view.round;
@@ -789,19 +800,10 @@ function renderDoraPanel(view: StateView): HTMLElement | null {
 
   const panel = document.createElement('div');
   panel.className = 'dora-panel';
+  panel.setAttribute('aria-label', 'ドラ表示');
 
-  const head = document.createElement('div');
-  head.className = 'dora-panel-head';
-
-  const label = document.createElement('span');
-  label.className = 'dora-panel-label';
-  label.textContent = 'ドラ表示';
-
-  const count = document.createElement('span');
-  count.className = 'dora-panel-count';
-  count.textContent = `${round.doraIndicators.length} / ${rules.doraIndicatorCount}`;
-
-  head.append(label, count);
+  const box = document.createElement('div');
+  box.className = 'dora-panel-box';
 
   const tiles = document.createElement('div');
   tiles.className = 'dora-panel-tiles';
@@ -810,120 +812,196 @@ function renderDoraPanel(view: StateView): HTMLElement | null {
     if (indicator) {
       tiles.appendChild(createTileElement(indicator, { small: true }));
     } else {
-      tiles.appendChild(createTileBackElement(true, true));
+      const back = createTileBackElement(true, true);
+      back.classList.add('dora-slot-back');
+      tiles.appendChild(back);
     }
   }
 
-  panel.append(head, tiles);
-  return panel;
-}
+  const sticks = document.createElement('div');
+  sticks.className = 'dora-panel-sticks';
 
-/** 卓の上に置く最小限の操作（対局中はトップバーを出さないため） */
-function renderTableChrome(handlers: TableHandlers): HTMLElement {
-  const bar = document.createElement('div');
-  bar.className = 'table-chrome';
+  const kyotakuItem = document.createElement('span');
+  kyotakuItem.className = 'dora-stick-item';
+  kyotakuItem.title = `供託リーチ棒 ${view.kyotakuCount}本 (${(view.kyotakuCount * rules.riichiStickPoints).toLocaleString()}点)`;
+  kyotakuItem.innerHTML = `<span class="stick-icon stick-riichi" aria-hidden="true"></span><span>× ${view.kyotakuCount}</span>`;
 
-  const leave = document.createElement('button');
-  leave.type = 'button';
-  leave.className = 'table-chrome-leave';
-  leave.textContent = '退出';
-  leave.title = '対局を離れてロビーに戻る';
-  leave.addEventListener('click', () => handlers.onLeaveGame?.());
+  const honbaItem = document.createElement('span');
+  honbaItem.className = 'dora-stick-item';
+  honbaItem.title = `本場 ${round.honba}本場`;
+  honbaItem.innerHTML = `<span class="stick-icon stick-honba" aria-hidden="true"></span><span>× ${round.honba}</span>`;
 
-  bar.appendChild(leave);
-  return bar;
-}
+  sticks.append(kyotakuItem, honbaItem);
 
-function renderCenterHub(view: StateView): HTMLElement {
-  const wrap = document.createElement('div');
-  wrap.className = 'seat-center';
-
-  const hub = document.createElement('div');
-  hub.className = 'center-hub';
-
-  const round = view.round;
-  const rules = deriveRules(view.ruleConfig);
-
-  hub.appendChild(renderCompass(view));
-
-  const roundLabel = document.createElement('div');
-  roundLabel.className = 'round-label';
-  roundLabel.textContent = round
-    ? formatRoundName(round.roundWind, round.kyokuNumber, round.honba)
-    : '対局';
-
-  const wallCounter = document.createElement('div');
-  wallCounter.className = 'wall-counter';
-  wallCounter.textContent = round
-    ? `残り牌数: ${round.remainingWallCount} 枚`
-    : '';
-
-  hub.append(roundLabel, wallCounter);
-
-  if (round && !rules.honbaBonus && round.honba > 0) {
-    const honbaNote = document.createElement('div');
-    honbaNote.className = 'honba-note';
-    honbaNote.textContent = '本場加算なしルール';
-    hub.appendChild(honbaNote);
+  if (round.kanCount > 0) {
+    const kanTag = document.createElement('span');
+    kanTag.className = 'dora-kan-tag';
+    kanTag.textContent = `槓${round.kanCount}/${rules.maxKansPerRound}`;
+    sticks.appendChild(kanTag);
   }
 
-  if (round) {
-    const kyotakuBadge = document.createElement('div');
-    kyotakuBadge.className = 'kyotaku-badge';
-    kyotakuBadge.textContent = `供託: ${view.kyotakuCount}本 (${(view.kyotakuCount * rules.riichiStickPoints).toLocaleString()}点)`;
-    hub.appendChild(kyotakuBadge);
+  box.append(tiles, sticks);
 
-    if (round.kanCount > 0) {
-      const kanBadge = document.createElement('div');
-      kanBadge.className = 'hub-sub';
-      kanBadge.textContent = `カン回数: ${round.kanCount} / ${rules.maxKansPerRound}`;
-      hub.appendChild(kanBadge);
-    }
-  }
-
-  if (view.phase === 'awaiting_responses' && view.myCallOptions !== null) {
-    const waitBadge = document.createElement('div');
-    waitBadge.className = 'response-wait-badge';
-    const secs =
-      view.responseRemainingMs !== null
-        ? Math.ceil(view.responseRemainingMs / 1000)
-        : null;
-    waitBadge.innerHTML =
-      secs !== null
-        ? `鳴き・ロン応答待ち (残り <span data-countdown-ms>${secs}</span>秒)`
-        : '鳴き・ロン応答待ち';
-    hub.appendChild(waitBadge);
-  }
-
-  const sub = document.createElement('div');
-  sub.className = 'hub-sub';
+  const mode = document.createElement('div');
+  mode.className = 'dora-panel-mode';
   const lengthJa = view.ruleConfig.gameLength === 'tonpuu' ? '東風戦' : '半荘戦';
   const roomLabel =
     view.roomCode === 'LOCAL' ? 'ローカルCPU戦' : `部屋 ${view.roomCode}`;
-  sub.textContent = round
-    ? `${view.ruleConfig.playerCount}人 ${lengthJa} (${round.roundIndex + 1} / ${round.totalRounds}局) ・ ${roomLabel}`
-    : '';
+  mode.textContent = `${view.ruleConfig.playerCount}人${lengthJa}・${roomLabel}`;
 
-  hub.appendChild(sub);
-  wrap.appendChild(hub);
-  return wrap;
+  panel.append(box, mode);
+
+  if (!rules.honbaBonus && round.honba > 0) {
+    const honbaNote = document.createElement('div');
+    honbaNote.className = 'honba-note';
+    honbaNote.textContent = '本場加算なし';
+    panel.appendChild(honbaNote);
+  }
+
+  return panel;
 }
 
-/**
- * 卓の中央に置く方位リング。
- * 実物の雀卓と同じく、各プレイヤーの席（自風）と手番が一目で分かるようにする。
- */
-function renderCompass(view: StateView): HTMLElement {
-  const ring = document.createElement('div');
-  ring.className = 'table-compass';
+/** 卓の右上に置く操作ボタン（設定・退出） */
+function renderTableChrome(
+  view: StateView,
+  handlers: TableHandlers,
+  uiState: TableUiState,
+): HTMLElement | null {
+  const showLeave = Boolean(handlers.canLeaveGame && handlers.onLeaveGame);
+  const showSettings = Boolean(handlers.onToggleSettings);
+  if (!showLeave && !showSettings) {
+    return null;
+  }
 
-  const positions: Array<{ side: SeatSide; label: string }> = [
-    { side: 'top', label: '対面' },
-    { side: 'right', label: '下家' },
-    { side: 'left', label: '上家' },
-    { side: 'self', label: '自分' },
-  ];
+  const bar = document.createElement('div');
+  bar.className = 'table-chrome';
 
+  if (showSettings) {
+    const settingsBtn = document.createElement('button');
+    settingsBtn.type = 'button';
+    settingsBtn.className = `table-chrome-btn table-chrome-settings${
+      uiState.settingsOpen ? ' is-open' : ''
+    }`;
+    settingsBtn.textContent = '設定';
+    settingsBtn.title = '対局補助とルール確認';
+    settingsBtn.addEventListener('click', () =>
+      handlers.onToggleSettings?.(!uiState.settingsOpen),
+    );
+    bar.appendChild(settingsBtn);
+  }
+
+  if (showLeave) {
+    const leave = document.createElement('button');
+    leave.type = 'button';
+    leave.className = 'table-chrome-btn table-chrome-leave';
+    leave.textContent = '退出';
+    leave.title = '対局を離れてロビーに戻る';
+    leave.addEventListener('click', () => handlers.onLeaveGame?.());
+    bar.appendChild(leave);
+  }
+
+  if (uiState.settingsOpen && showSettings) {
+    const rules = deriveRules(view.ruleConfig);
+    const pop = document.createElement('div');
+    pop.className = 'table-settings-popover';
+
+    const title = document.createElement('div');
+    title.className = 'table-settings-title';
+    title.textContent = '対局設定・ルール';
+    pop.appendChild(title);
+
+    const makeToggle = (
+      label: string,
+      active: boolean,
+      onClick?: () => void,
+    ): HTMLButtonElement => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = `table-settings-toggle${active ? ' is-on' : ''}`;
+      btn.textContent = `${label}: ${active ? 'ON' : 'OFF'}`;
+      if (onClick) btn.addEventListener('click', onClick);
+      return btn;
+    };
+
+    pop.append(
+      makeToggle('自動和了 (和)', Boolean(uiState.autoAgariEnabled), () =>
+        handlers.onToggleAutoAgari?.(!uiState.autoAgariEnabled),
+      ),
+      makeToggle('鳴き無し (鳴)', Boolean(uiState.autoNoCallEnabled), () =>
+        handlers.onToggleAutoNoCall?.(!uiState.autoNoCallEnabled),
+      ),
+      makeToggle('自動ツモ切り (切)', uiState.autoTsumogiriEnabled, () =>
+        handlers.onToggleAutoTsumogiri?.(!uiState.autoTsumogiriEnabled),
+      ),
+    );
+
+    const ruleSummary = document.createElement('div');
+    ruleSummary.className = 'table-settings-rules';
+    ruleSummary.textContent = [
+      `${rules.playerCount}人 ${rules.gameLength === 'tonpuu' ? '東風' : '半荘'}`,
+      rules.allowKuitan ? '喰いタンあり' : '喰いタンなし',
+      rules.allowAtozuke ? '後付けあり' : '先付け',
+      rules.tobi ? 'トビあり' : 'トビなし',
+    ].join(' / ');
+    pop.appendChild(ruleSummary);
+    bar.appendChild(pop);
+  }
+
+  return bar;
+}
+
+/** 卓の左端に置く縦型クイック補助バー（理 / 和 / 鳴 / 切） */
+function renderLeftActionBar(
+  handlers: TableHandlers,
+  uiState: TableUiState,
+): HTMLElement {
+  const bar = document.createElement('div');
+  bar.className = 'table-left-actions';
+
+  const makeTab = (
+    char: string,
+    title: string,
+    active: boolean,
+    onClick?: () => void,
+  ): HTMLButtonElement => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = `left-action-tab${active ? ' is-active' : ''}`;
+    btn.textContent = char;
+    btn.title = title;
+    btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+    if (onClick) {
+      btn.addEventListener('click', onClick);
+    }
+    return btn;
+  };
+
+  bar.append(
+    makeTab('理', '自動理牌（有効）', true),
+    makeTab(
+      '和',
+      '自動和了（ONでツモ・ロンを自動実行）',
+      Boolean(uiState.autoAgariEnabled),
+      () => handlers.onToggleAutoAgari?.(!uiState.autoAgariEnabled),
+    ),
+    makeTab(
+      '鳴',
+      '鳴き無し（ONでポン・チー・カンを自動パス）',
+      Boolean(uiState.autoNoCallEnabled),
+      () => handlers.onToggleAutoNoCall?.(!uiState.autoNoCallEnabled),
+    ),
+    makeTab(
+      '切',
+      'リーチ後ツモ切り（ONで自動ツモ切り）',
+      uiState.autoTsumogiriEnabled,
+      () => handlers.onToggleAutoTsumogiri?.(!uiState.autoTsumogiriEnabled),
+    ),
+  );
+
+  return bar;
+}
+
+function getSeatPlayersMap(view: StateView): Map<SeatSide, PublicPlayerView> {
   const playerCount = view.players.length;
   const bySide = new Map<SeatSide, PublicPlayerView>();
   const selfPlayer = view.players.find((p) => p.seatIndex === view.viewerSeatIndex);
@@ -945,6 +1023,82 @@ function renderCompass(view: StateView): HTMLElement {
     );
     if (top) bySide.set('top', top);
   }
+  return bySide;
+}
+
+function renderCenterHub(view: StateView): HTMLElement {
+  const wrap = document.createElement('div');
+  wrap.className = 'seat-center';
+
+  const hub = document.createElement('div');
+  hub.className = 'center-hub';
+
+  const round = view.round;
+  const bySide = getSeatPlayersMap(view);
+
+  hub.appendChild(renderCompass(view, bySide));
+
+  const scoresLayer = document.createElement('div');
+  scoresLayer.className = 'console-scores';
+  for (const side of ['top', 'right', 'self', 'left'] as const) {
+    const player = bySide.get(side);
+    const cell = document.createElement('div');
+    cell.className = `console-score console-score-${side}${
+      player?.isCurrentTurn ? ' is-turn' : ''
+    }${player?.isRiichi ? ' is-riichi' : ''}${!player ? ' is-empty' : ''}`;
+    if (player) {
+      const val = document.createElement('span');
+      val.className = 'console-score-val';
+      val.textContent = String(player.score);
+      cell.appendChild(val);
+    }
+    scoresLayer.appendChild(cell);
+  }
+  hub.appendChild(scoresLayer);
+
+  const core = document.createElement('div');
+  core.className = 'console-core';
+
+  const roundLabel = document.createElement('div');
+  roundLabel.className = 'round-label';
+  roundLabel.textContent = round
+    ? formatRoundName(round.roundWind, round.kyokuNumber)
+    : '対局';
+
+  const wallCounter = document.createElement('div');
+  wallCounter.className = 'wall-counter';
+  wallCounter.textContent = round ? `余 ${round.remainingWallCount}` : '';
+
+  core.append(roundLabel, wallCounter);
+
+  if (round && round.honba > 0) {
+    const honbaTag = document.createElement('div');
+    honbaTag.className = 'console-honba';
+    honbaTag.textContent = `${round.honba}本場`;
+    core.appendChild(honbaTag);
+  }
+
+  hub.appendChild(core);
+  wrap.appendChild(hub);
+  return wrap;
+}
+
+/**
+ * 卓の中央に置く方位表示（四隅の自風＋手番＋リーチ表示）。
+ */
+function renderCompass(
+  view: StateView,
+  bySide: Map<SeatSide, PublicPlayerView> = getSeatPlayersMap(view),
+): HTMLElement {
+  const ring = document.createElement('div');
+  ring.className = 'table-compass';
+
+  const positions: Array<{ side: SeatSide; label: string }> = [
+    { side: 'top', label: '対面' },
+    { side: 'right', label: '下家' },
+    { side: 'left', label: '上家' },
+    { side: 'self', label: '自分' },
+  ];
 
   for (const { side } of positions) {
     const player = bySide.get(side);
@@ -975,25 +1129,64 @@ function renderCompass(view: StateView): HTMLElement {
   return ring;
 }
 
+function createSeatAvatar(
+  player: PublicPlayerView,
+  isSelf: boolean,
+): HTMLElement {
+  const frame = document.createElement('div');
+  frame.className = `seat-avatar${isSelf ? ' is-self' : ''}${
+    player.isCurrentTurn ? ' is-turn' : ''
+  }`;
+  frame.setAttribute('aria-hidden', 'true');
+
+  const palettes: Record<string, { bg1: string; bg2: string; accent: string }> = {
+    E: { bg1: '#5d1c24', bg2: '#2d0c12', accent: '#f3cb68' },
+    S: { bg1: '#1b4d40', bg2: '#0d2620', accent: '#7ce8b8' },
+    W: { bg1: '#1d3a68', bg2: '#0d1b36', accent: '#82c5ff' },
+    N: { bg1: '#3d255e', bg2: '#1b102d', accent: '#d8b4fe' },
+  };
+  const pal = palettes[player.seatWind ?? 'E'] ?? palettes.E!;
+  const initial = Array.from(player.name.trim())[0] ?? (isSelf ? '自' : '家');
+
+  frame.innerHTML = `<svg viewBox="0 0 40 40" class="seat-avatar-svg"><defs><linearGradient id="av-${player.seatIndex}" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="${pal.bg1}"/><stop offset="100%" stop-color="${pal.bg2}"/></linearGradient></defs><rect width="40" height="40" rx="4" fill="url(#av-${player.seatIndex})"/><circle cx="20" cy="16" r="7.5" fill="${pal.accent}" fill-opacity="0.26" stroke="${pal.accent}" stroke-width="1.2"/><path d="M9 36c1.5-6.5 6-10 11-10s9.5 3.5 11 10" fill="${pal.accent}" fill-opacity="0.24" stroke="${pal.accent}" stroke-width="1.1"/><text x="20" y="20" text-anchor="middle" font-size="11" font-weight="800" fill="#f7f4ea">${escapeSvgText(initial)}</text></svg>`;
+
+  return frame;
+}
+
+function escapeSvgText(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 function renderSeatHeader(
   player: PublicPlayerView,
   isSelf: boolean,
   isSelfFuriten = false,
 ): HTMLElement {
   const header = document.createElement('div');
-  header.className = 'seat-header';
+  header.className = `seat-header${player.isCurrentTurn ? ' is-turn' : ''}`;
 
-  const identity = document.createElement('div');
-  identity.className = 'seat-identity';
+  const cardTop = document.createElement('div');
+  cardTop.className = 'seat-card-top';
+  cardTop.appendChild(createSeatAvatar(player, isSelf));
 
   if (player.seatWind) {
     const windBadge = document.createElement('span');
     windBadge.className = `wind-badge${player.isDealer ? ' is-dealer' : ''}`;
     windBadge.textContent = windToJa(player.seatWind);
-    identity.appendChild(windBadge);
+    cardTop.appendChild(windBadge);
   }
 
+  const info = document.createElement('div');
+  info.className = 'seat-card-info';
+
+  const identity = document.createElement('div');
+  identity.className = 'seat-identity';
+
   const nameSpan = document.createElement('span');
+  nameSpan.className = 'seat-name';
   nameSpan.textContent = isSelf ? `${player.name}（あなた）` : player.name;
   identity.appendChild(nameSpan);
 
@@ -1006,7 +1199,7 @@ function renderSeatHeader(
 
   if (player.isDealer) {
     const oya = document.createElement('span');
-    oya.className = 'hub-sub';
+    oya.className = 'oya-tag';
     oya.textContent = '親';
     identity.appendChild(oya);
   }
@@ -1043,14 +1236,14 @@ function renderSeatHeader(
   score.className = 'seat-score';
   score.textContent = `${player.score.toLocaleString()}点`;
 
-  header.append(identity, score);
+  info.append(identity, score);
+  header.append(cardTop, info);
   return header;
 }
 
 /**
  * 河（捨て牌）を再現する。
- * 実物の麻雀と同じく、各プレイヤーの手前から中央へ向かって 6 枚ずつ折り返して並べ、
- * 牌は席の向きに合わせて回転させる（対面は逆さ、左右は縦向き）。
+ * 実物の麻雀と同じく、中央のデジタル盤の周囲に各席の河を6枚折り返しで配置する。
  */
 function renderDiscardRiver(
   player: PublicPlayerView,
@@ -1090,7 +1283,7 @@ function renderDiscardRiver(
   if (visible.length === 0) {
     const empty = document.createElement('span');
     empty.className = 'river-empty';
-    empty.textContent = '—';
+    empty.setAttribute('aria-hidden', 'true');
     river.appendChild(empty);
   }
 
@@ -1450,8 +1643,6 @@ function renderSelfSeat(
   }`;
   box.dataset.seat = 'self';
 
-  box.appendChild(renderSeatHeader(player, true, view.isFuriten));
-
   const isMyTurn = view.phase === 'playing' && player.isCurrentTurn;
   const canDiscardNow =
     isMyTurn && (view.myDrawnTile !== null || view.myHand.length % 3 === 2);
@@ -1463,11 +1654,17 @@ function renderSelfSeat(
   const controls = document.createElement('div');
   controls.className = 'self-controls';
 
-  controls.appendChild(buildTurnPrompt(view, canDiscardNow));
+  const topBar = document.createElement('div');
+  topBar.className = 'self-top-bar';
+  topBar.appendChild(renderSeatHeader(player, true, view.isFuriten));
+
+  const actionDock = document.createElement('div');
+  actionDock.className = 'self-action-dock';
+  actionDock.appendChild(buildTurnPrompt(view, canDiscardNow));
 
   const callBar = renderCallResponseBar(view, handlers);
   if (callBar) {
-    controls.appendChild(callBar);
+    actionDock.appendChild(callBar);
   }
 
   const selfActionsBar = renderSelfTurnActionsBar(
@@ -1478,8 +1675,23 @@ function renderSelfSeat(
     canDiscardNow,
   );
   if (selfActionsBar) {
-    controls.appendChild(selfActionsBar);
+    actionDock.appendChild(selfActionsBar);
   }
+
+  if (
+    view.phase === 'awaiting_responses' &&
+    view.myCallOptions !== null &&
+    view.responseRemainingMs !== null
+  ) {
+    const secs = Math.ceil(view.responseRemainingMs / 1000);
+    const timer = document.createElement('div');
+    timer.className = 'table-timer-digits';
+    timer.innerHTML = `<span data-countdown-ms>${secs}</span>`;
+    actionDock.appendChild(timer);
+  }
+
+  topBar.appendChild(actionDock);
+  controls.appendChild(topBar);
 
   const forbiddenSet = new Set(canDiscardNow ? view.kuikaeForbiddenKinds : []);
   const handArea = document.createElement('div');
@@ -1549,12 +1761,21 @@ function renderSelfSeat(
     }
   }
 
-  controls.appendChild(handArea);
+  const handDock = document.createElement('div');
+  handDock.className = 'self-hand-dock';
 
+  const meldsSlot = document.createElement('div');
+  meldsSlot.className = 'self-melds-dock';
   const meldsEl = renderMeldsAndKita(player, 'self');
   if (meldsEl) {
-    controls.appendChild(meldsEl);
+    meldsSlot.appendChild(meldsEl);
   }
+
+  const rightSpacer = document.createElement('div');
+  rightSpacer.className = 'self-hand-spacer';
+
+  handDock.append(meldsSlot, handArea, rightSpacer);
+  controls.appendChild(handDock);
 
   box.appendChild(controls);
 
