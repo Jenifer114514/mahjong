@@ -201,12 +201,11 @@ describe('renderWaitingRoom（CPU の後入れ）', () => {
     expect(clickByText(root, '半荘戦')).toBe(true);
     expect(onUpdateRuleConfig).toHaveBeenCalledWith({ gameLength: 'hanchan' });
 
-    // ON/OFF トグル群（トビ終了・喰いタン・後付け・本場加算・ダブロン・喰い替え禁止・CPUやさしめ）
-    const offButtons = [...root.querySelectorAll('button')].filter((b) =>
-      b.textContent?.startsWith('OFF'),
-    );
-    expect(offButtons.length).toBeGreaterThanOrEqual(7);
-    offButtons[1]!.click(); // 喰いタン OFF
+    // ON/OFF トグルスイッチ群（トビ終了・喰いタン・後付け・本場加算・ダブロン・喰い替え禁止・CPUやさしめ）
+    const switches = [...root.querySelectorAll<HTMLButtonElement>('[role="switch"].toggle-switch')];
+    expect(switches.length).toBeGreaterThanOrEqual(7);
+    expect(switches[1]!.getAttribute('aria-checked')).toBe('true');
+    switches[1]!.click(); // 喰いタン ON -> OFF
     expect(onUpdateRuleConfig).toHaveBeenCalledWith({ allowKuitan: false });
 
     // ゲスト視点では設定パネルを出さない

@@ -213,17 +213,23 @@ describe('アプリ起動とローカルCPU対局', () => {
     expect(root.querySelector('.table-chrome-settings')).not.toBeNull();
     expect(root.querySelector('.table-chrome-leave')).not.toBeNull();
 
-    // 設定を開いてフル画面表示を「する」→「しない」に切り替える
+    // 設定を開いてフル画面表示トグルを OFF → ON → OFF に切り替える
     root.querySelector<HTMLButtonElement>('.table-chrome-settings')!.click();
     const settingsModal = root.querySelector('.table-settings-modal');
     expect(settingsModal).not.toBeNull();
     expect(settingsModal!.textContent).toContain('フル画面表示');
 
-    expect(clickByText(root, '.table-settings-modal .seg-btn', 'する')).toBe(true);
+    const fsSwitch1 = root.querySelector<HTMLButtonElement>('.table-settings-modal [role="switch"]')!;
+    expect(fsSwitch1.getAttribute('aria-checked')).toBe('false');
+    expect(fsSwitch1.textContent).toContain('OFF');
+    fsSwitch1.click();
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(reqFs).toHaveBeenCalledTimes(1);
 
-    expect(clickByText(root, '.table-settings-modal .seg-btn', 'しない')).toBe(true);
+    const fsSwitch2 = root.querySelector<HTMLButtonElement>('.table-settings-modal [role="switch"]')!;
+    expect(fsSwitch2.getAttribute('aria-checked')).toBe('true');
+    expect(fsSwitch2.textContent).toContain('ON');
+    fsSwitch2.click();
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(exitFs).toHaveBeenCalledTimes(1);
 

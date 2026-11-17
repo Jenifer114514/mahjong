@@ -52,38 +52,44 @@ function createOnOffToggleField(params: {
   const field = document.createElement('div');
   field.className = 'field rule-toggle-field';
 
-  const lbl = document.createElement('label');
+  const meta = document.createElement('div');
+  meta.className = 'rule-toggle-meta';
+
+  const lbl = document.createElement('span');
+  lbl.className = 'rule-toggle-label';
   lbl.textContent = params.label;
 
-  const seg = document.createElement('div');
-  seg.className = 'segmented';
+  const subSpan = document.createElement('span');
+  subSpan.className = 'seg-sub rule-toggle-sub';
+  subSpan.textContent = params.value ? params.onSub : params.offSub;
 
-  const options = [
-    { val: true, title: 'ON', sub: params.onSub },
-    { val: false, title: 'OFF', sub: params.offSub },
-  ];
-  for (const opt of options) {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = `seg-btn seg-btn-sm${params.value === opt.val ? ' is-active' : ''}`;
-    btn.setAttribute('aria-pressed', params.value === opt.val ? 'true' : 'false');
-    btn.disabled = Boolean(params.disabled);
+  meta.append(lbl, subSpan);
 
-    const titleSpan = document.createElement('span');
-    titleSpan.textContent = opt.title;
-    const subSpan = document.createElement('span');
-    subSpan.className = 'seg-sub';
-    subSpan.textContent = opt.sub;
+  const toggleBtn = document.createElement('button');
+  toggleBtn.type = 'button';
+  toggleBtn.className = `toggle-switch${params.value ? ' is-on' : ''}`;
+  toggleBtn.setAttribute('role', 'switch');
+  toggleBtn.setAttribute('aria-checked', params.value ? 'true' : 'false');
+  toggleBtn.setAttribute('aria-label', params.label);
+  toggleBtn.disabled = Boolean(params.disabled);
 
-    btn.append(titleSpan, subSpan);
-    btn.addEventListener('click', () => {
-      if (params.value === opt.val) return;
-      params.onChange(opt.val);
-    });
-    seg.appendChild(btn);
-  }
+  const track = document.createElement('span');
+  track.className = 'toggle-track';
+  track.setAttribute('aria-hidden', 'true');
+  const thumb = document.createElement('span');
+  thumb.className = 'toggle-thumb';
+  track.appendChild(thumb);
 
-  field.append(lbl, seg);
+  const stateText = document.createElement('span');
+  stateText.className = 'toggle-state-text';
+  stateText.textContent = params.value ? 'ON' : 'OFF';
+
+  toggleBtn.append(track, stateText);
+  toggleBtn.addEventListener('click', () => {
+    params.onChange(!params.value);
+  });
+
+  field.append(meta, toggleBtn);
   return field;
 }
 
