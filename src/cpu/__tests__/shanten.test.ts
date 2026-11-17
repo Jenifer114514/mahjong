@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
+import { deriveRules } from '../../engine/rules';
 import { ALL_TILE_KINDS, type Tile } from '../../types/tile';
-import { analyzeHand, countsFromTiles, handShanten } from '../shanten';
+import {
+  analyzeHand,
+  countsFromTiles,
+  handShanten,
+  kokushiShanten,
+} from '../shanten';
 
 function tiles(kinds: string[], prefix = 't'): Tile[] {
   const used = new Map<string, number>();
@@ -41,5 +47,20 @@ describe('shanten', () => {
     const result = analyzeHand(c, 0, visible);
     expect(result.shanten).toBe(0);
     expect(result.ukeire).toBeGreaterThan(0);
+  });
+
+  it('3人麻雀では allowedKinds により 2m..8m を受け入れに含めない', () => {
+    const sanmaRules = deriveRules({ playerCount: 3, gameLength: 'tonpuu' });
+    const allowedKinds = new Set(sanmaRules.allowedTileKinds);
+    // 3面子 + 孤立4枚(2シャンテン): 1m にくっつく 2m/3m を受け入れに数えないことを確認
+    const c = counts(['1m','2p','3p','4p','5p','6p','7p','2s','3s','4s','8s','5z','6z']);
+    const visible = new Array(ALL_TILE_KINDS.length).fill(0);
+
+    const fourP = analyzeHand(c, 0, visible);
+    const threeP = analyzeHand(c, 0, visible, allowedKinds);
+
+    expect(threeP.shanten).toBe(fourP.shanten);
+    expect(fourP.ukeire - threeP.ukeire).toBe(8);
+    expect(kokushiShanten(counts(['1m','9m','1p','9p','1s','9s','1z','2z','3z','4z','5z','6z','7z']))).toBe(0);
   });
 });
