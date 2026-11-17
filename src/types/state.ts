@@ -157,6 +157,12 @@ export interface FinalKyotakuAward {
   points: number;
 }
 
+export interface SpectatorState {
+  spectatorId: string;
+  name: string;
+  connected: boolean;
+}
+
 export interface PlayerState {
   playerId: string;
   name: string;
@@ -230,4 +236,6 @@ export interface GameState {
   /** 終局時に場に残っていた供託を最終トップへ加算した記録 */
   finalKyotakuAward: FinalKyotakuAward | null;
   round: RoundState | null;
+  /** 観戦者一覧（対局中・満席時に入室した参加者） */
+  spectators?: SpectatorState[];
 }

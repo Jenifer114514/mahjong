@@ -83,8 +83,8 @@ describe('HostSession の CPU 統合', () => {
     drain();
 
     const view = views.at(-1)!;
-    // 開局直後は自分の応答待ちで止まることがある（どちらも対局開始済み）
-    expect(['playing', 'awaiting_responses']).toContain(view.phase);
+    // 開局直後は自分の応答待ち（座席ランダム時はCPU東家の局進行で終局・局終了になることもある）
+    expect(['playing', 'awaiting_responses', 'round_end']).toContain(view.phase);
     expect(view.players).toHaveLength(4);
     expect(view.players.filter((p) => isCpuPlayerId(p.playerId))).toHaveLength(3);
     expect(view.players.map((p) => p.name)).toContain('CPU1');

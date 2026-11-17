@@ -51,14 +51,23 @@ function cloneAgariWinner(w: RoundAgariWinner): RoundAgariWinner {
   };
 }
 
+export interface ToStateViewOptions {
+  perspectiveSeatIndex?: number;
+  hostEpoch?: number;
+}
+
 export function toStateView(
   state: GameState,
   viewerPlayerId: string,
   now = 0,
+  options: ToStateViewOptions = {},
 ): StateView {
   const rules = deriveRules(state.ruleConfig);
   const viewer = state.players.find((p) => p.playerId === viewerPlayerId);
-  if (!viewer) {
+  const spectator = viewer
+    ? undefined
+    : (state.spectators ?? []).find((s) => s.spectatorId === viewerPlayerId);
+  if (!viewer && !spectator) {
     throw new Error(`Viewer player not found: ${viewerPlayerId}`);
   }
 
@@ -66,6 +75,7 @@ export function toStateView(
   let responseRemainingMs: number | null = null;
 
   if (
+    viewer &&
     state.phase === 'awaiting_responses' &&
     state.round?.pendingResponse
   ) {
@@ -192,12 +202,13 @@ export function toStateView(
     : null;
 
   const isViewerTurn =
+    Boolean(viewer) &&
     state.phase === 'playing' &&
     state.round !== null &&
-    viewer.seatIndex === state.round.currentTurnIndex;
+    viewer!.seatIndex === state.round.currentTurnIndex;
 
   let mySelfActions: SelfTurnActionsView | null = null;
-  if (isViewerTurn && state.round) {
+  if (viewer && isViewerTurn && state.round) {
     const actions = getSelfTurnActions(viewer, state.round, rules);
     if (
       actions.canTsumo ||
@@ -212,20 +223,31 @@ export function toStateView(
   }
 
   const kuikaeForbiddenKinds =
-    isViewerTurn && state.round
+    viewer && isViewerTurn && state.round
       ? [...state.round.kuikaeForbiddenKinds]
       : [];
 
   const isFuriten =
-    state.round !== null && state.phase !== 'round_end' && state.phase !== 'finished'
+    viewer &&
+    state.round !== null &&
+    state.phase !== 'round_end' &&
+    state.phase !== 'finished'
       ? isPlayerFuriten(viewer, rules)
       : false;
+
+  const spectatorSeatCount = state.players.length;
+  const spectatorSeatIndex =
+    spectatorSeatCount > 0
+      ? (((options.perspectiveSeatIndex ?? 0) % spectatorSeatCount) +
+          spectatorSeatCount) %
+        spectatorSeatCount
+      : 0;
 
   return {
     roomCode: state.roomCode,
     hostPlayerId: state.hostPlayerId,
-    viewerPlayerId: viewer.playerId,
-    viewerSeatIndex: viewer.seatIndex,
+    viewerPlayerId: viewer ? viewer.playerId : spectator!.spectatorId,
+    viewerSeatIndex: viewer ? viewer.seatIndex : spectatorSeatIndex,
     ruleConfig: { ...state.ruleConfig },
     phase: viewPhase,
     players,
@@ -234,13 +256,16 @@ export function toStateView(
     finalKyotakuAward: state.finalKyotakuAward
       ? { ...state.finalKyotakuAward }
       : null,
-    myHand: viewer.hand.map((t) => ({ ...t })),
-    myDrawnTile: viewer.drawnTile ? { ...viewer.drawnTile } : null,
+    myHand: viewer ? viewer.hand.map((t) => ({ ...t })) : [],
+    myDrawnTile: viewer && viewer.drawnTile ? { ...viewer.drawnTile } : null,
     myCallOptions,
     mySelfActions,
     isFuriten,
     kuikaeForbiddenKinds,
     responseRemainingMs,
     round,
+    isSpectator: Boolean(spectator),
+    spectators: (state.spectators ?? []).map((s) => ({ ...s })),
+    ...(options.hostEpoch !== undefined ? { hostEpoch: options.hostEpoch } : {}),
   };
 }

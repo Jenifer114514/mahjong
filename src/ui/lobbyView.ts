@@ -1,5 +1,12 @@
-import { CPU_PLAYER_ID_PREFIX, maxCpuCount } from '../cpu/player';
+import { CPU_PLAYER_ID_PREFIX, isCpuPlayerId, maxCpuCount } from '../cpu/player';
 import { deriveRules } from '../engine/rules';
+import {
+  PERMANENT_ROOMS,
+  formatRoomDisplayName,
+  getPermanentRoom,
+  type PermanentRoomId,
+} from '../net/rooms';
+import type { SavedSessionRecord } from '../net/storage';
 import type { StateView } from '../types/message';
 import {
   DEFAULT_CPU_LEVEL,
@@ -15,6 +22,12 @@ export interface LobbyHandlers {
   onStartLocalGame: (playerName: string, ruleConfig: RuleConfig, cpuCount: number) => void;
   onJoinRoom: (roomCode: string, playerName: string) => void;
   onLeaveLobby: () => void;
+  /** 常設ルーム（銅・銀・金の間）へ入室する（空きならホスト化・開催中なら参加/観戦） */
+  onJoinPermanentRoom?: (roomId: PermanentRoomId, playerName: string) => void;
+  /** 保存された前回セッションへ再接続する */
+  onReconnectSession?: () => void;
+  /** 保存された前回セッション履歴を破棄する */
+  onDiscardSavedSession?: () => void;
   /** ロビーに CPU を 1 体追加する（ホストのみ） */
   onAddCpu?: () => void;
   /** ロビーから CPU を 1 体減らす（ホストのみ） */
@@ -23,6 +36,14 @@ export interface LobbyHandlers {
   onUpdateRuleConfig?: (patch: Partial<RuleConfig>) => void;
   /** 人数が揃っているロビーから対局を開始する（ホストのみ） */
   onStartGame?: () => void;
+  /** 他の接続中プレイヤーへホスト権限を委譲する */
+  onTransferHost?: (targetPlayerId: string) => void;
+  /** ホストを他の参加者へ譲って自分は退出する */
+  onTransferHostAndLeave?: () => void;
+}
+
+export interface LobbyEntryOptions {
+  savedSession?: SavedSessionRecord | null;
 }
 
 export interface LobbyFormState {
@@ -98,11 +119,53 @@ export function renderLobbyEntry(
   formState: LobbyFormState,
   handlers: LobbyHandlers,
   busy: boolean,
+  options: LobbyEntryOptions = {},
 ): void {
   container.innerHTML = '';
 
   const wrap = document.createElement('div');
   wrap.className = 'lobby-wrap';
+
+  // 再接続バナー（前回のオンライン対局履歴が残っている場合のみ表示）
+  const saved = options.savedSession;
+  if (saved && handlers.onReconnectSession) {
+    const reconnectCard = document.createElement('div');
+    reconnectCard.className = 'card reconnect-card';
+
+    const rcInfo = document.createElement('div');
+    rcInfo.className = 'reconnect-info';
+
+    const rcTitle = document.createElement('h2');
+    rcTitle.textContent = '前回の対局に再接続できます';
+
+    const rcSub = document.createElement('p');
+    rcSub.className = 'hub-sub';
+    rcSub.style.margin = '0';
+    rcSub.textContent = `${formatRoomDisplayName(saved.roomCode)} / ${saved.playerName}${saved.isSpectator ? '（観戦）' : ''}`;
+
+    rcInfo.append(rcTitle, rcSub);
+
+    const rcActions = document.createElement('div');
+    rcActions.className = 'reconnect-actions';
+
+    const reconnectBtn = document.createElement('button');
+    reconnectBtn.type = 'button';
+    reconnectBtn.className = 'btn btn-primary reconnect-btn';
+    reconnectBtn.disabled = busy;
+    reconnectBtn.textContent = busy ? '接続中...' : '再接続する';
+    reconnectBtn.addEventListener('click', () => handlers.onReconnectSession?.());
+
+    const discardBtn = document.createElement('button');
+    discardBtn.type = 'button';
+    discardBtn.className = 'btn btn-secondary reconnect-discard-btn';
+    discardBtn.disabled = busy;
+    discardBtn.textContent = '履歴を消す';
+    discardBtn.addEventListener('click', () => handlers.onDiscardSavedSession?.());
+
+    rcActions.append(reconnectBtn, discardBtn);
+    reconnectCard.append(rcInfo, rcActions);
+    wrap.appendChild(reconnectCard);
+  }
 
   // Player name card
   const nameCard = document.createElement('div');
@@ -129,6 +192,78 @@ export function renderLobbyEntry(
   nameField.append(nameLabel, nameInput);
   nameCard.appendChild(nameField);
   wrap.appendChild(nameCard);
+
+  // 常設ルーム（銅の間 / 銀の間 / 金の間）
+  const permCard = document.createElement('div');
+  permCard.className = 'card permanent-rooms-card';
+
+  const permHeader = document.createElement('div');
+  permHeader.className = 'permanent-rooms-header';
+
+  const permTitle = document.createElement('h2');
+  permTitle.style.margin = '0';
+  permTitle.textContent = '常設ルーム（銅の間・銀の間・金の間）';
+
+  const permSub = document.createElement('p');
+  permSub.className = 'hub-sub';
+  permSub.style.margin = '4px 0 12px';
+  permSub.textContent =
+    '開いている卓があれば参加（対局中・満席時は観戦）し、無人の場合は自動でホストとして部屋を開きます。';
+
+  permHeader.append(permTitle, permSub);
+
+  const permGrid = document.createElement('div');
+  permGrid.className = 'permanent-rooms-grid';
+
+  for (const room of PERMANENT_ROOMS) {
+    const item = document.createElement('div');
+    item.className = `permanent-room-item ${room.badgeClass}`;
+    item.dataset.roomId = room.id;
+
+    const topRow = document.createElement('div');
+    topRow.className = 'permanent-room-top';
+
+    const tierBadge = document.createElement('span');
+    tierBadge.className = `permanent-room-tier ${room.badgeClass}`;
+    tierBadge.textContent = room.tierLabel;
+
+    const codeBadge = document.createElement('span');
+    codeBadge.className = 'permanent-room-code';
+    codeBadge.textContent = room.id;
+
+    topRow.append(tierBadge, codeBadge);
+
+    const roomTitle = document.createElement('h3');
+    roomTitle.className = 'permanent-room-name';
+    roomTitle.textContent = room.name;
+
+    const roomDesc = document.createElement('p');
+    roomDesc.className = 'hub-sub permanent-room-desc';
+    roomDesc.textContent = room.description;
+
+    const roomRules = document.createElement('div');
+    roomRules.className = 'permanent-room-rules';
+    roomRules.textContent = room.rulesSummary;
+
+    const enterBtn = document.createElement('button');
+    enterBtn.type = 'button';
+    enterBtn.className = 'btn btn-primary permanent-room-enter-btn';
+    enterBtn.disabled = busy;
+    enterBtn.textContent = busy ? '接続中...' : `${room.name}に入る`;
+    enterBtn.addEventListener('click', () => {
+      if (handlers.onJoinPermanentRoom) {
+        handlers.onJoinPermanentRoom(room.id, formState.playerName);
+      } else {
+        handlers.onJoinRoom(room.id, formState.playerName);
+      }
+    });
+
+    item.append(topRow, roomTitle, roomDesc, roomRules, enterBtn);
+    permGrid.appendChild(item);
+  }
+
+  permCard.append(permHeader, permGrid);
+  wrap.appendChild(permCard);
 
   const grid = document.createElement('div');
   grid.className = 'lobby-grid';
@@ -289,6 +424,12 @@ export function renderLobbyEntry(
 
   codeField.append(codeLabel, codeInput);
 
+  const joinNote = document.createElement('p');
+  joinNote.className = 'hub-sub';
+  joinNote.style.margin = '0 0 12px';
+  joinNote.textContent =
+    '待機中ならプレイヤーとして参加、対局中や満席時は観戦として入室します。';
+
   const joinBtn = document.createElement('button');
   joinBtn.type = 'button';
   joinBtn.className = 'btn btn-primary';
@@ -299,7 +440,7 @@ export function renderLobbyEntry(
     handlers.onJoinRoom(formState.joinCode, formState.playerName);
   });
 
-  joinCard.append(joinTitle, codeField, joinBtn);
+  joinCard.append(joinTitle, codeField, joinNote, joinBtn);
 
   grid.append(createCard, joinCard, localCard);
   wrap.appendChild(grid);
@@ -313,9 +454,11 @@ export function renderWaitingRoom(
 ): void {
   container.innerHTML = '';
   const rules = deriveRules(view.ruleConfig);
-  const isHost = view.viewerPlayerId === view.hostPlayerId;
+  const isSpectator = Boolean(view.isSpectator);
+  const isHost = !isSpectator && view.viewerPlayerId === view.hostPlayerId;
   // ローカル対局（CPU戦）では部屋コードを表示しない
   const isLocalGame = view.roomCode === 'LOCAL';
+  const permRoom = getPermanentRoom(view.roomCode);
 
   const card = document.createElement('div');
   card.className = 'card';
@@ -323,10 +466,22 @@ export function renderWaitingRoom(
   const title = document.createElement('h2');
   title.textContent = isLocalGame
     ? 'ローカル対局（CPU戦）'
-    : isHost
-      ? '対局ロビー（ホスト待機中）'
-      : '対局ロビー（待機中）';
+    : permRoom
+      ? `${permRoom.name} (${permRoom.id}) — ${isHost ? 'ホスト待機中' : isSpectator ? '観戦待機中' : '待機中'}`
+      : isHost
+        ? '対局ロビー（ホスト待機中）'
+        : isSpectator
+          ? '対局ロビー（観戦待機中）'
+          : '対局ロビー（待機中）';
   card.appendChild(title);
+
+  if (isSpectator) {
+    const specNotice = document.createElement('div');
+    specNotice.className = 'spectator-lobby-banner';
+    specNotice.textContent =
+      '現在は満席のため「観戦」として入室しています。対局が始まると観戦画面に切り替わります。';
+    card.appendChild(specNotice);
+  }
 
   // Room code box
   const codeBox = document.createElement('div');
@@ -588,8 +743,29 @@ export function renderWaitingRoom(
 
     if (player) {
       const badge = player.playerId === view.hostPlayerId ? ' [ホスト]' : '';
-      const selfTag = player.playerId === view.viewerPlayerId ? ' (あなた)' : '';
-      slot.innerHTML = `<div><strong>${escapeHtml(player.name)}</strong>${badge}${selfTag}</div><div class="hub-sub">参加済み</div>`;
+      const selfTag =
+        !isSpectator && player.playerId === view.viewerPlayerId ? ' (あなた)' : '';
+      const statusLabel = player.connected ? '参加済み' : '切断（再接続待ち）';
+      const headerDiv = document.createElement('div');
+      headerDiv.innerHTML = `<div><strong>${escapeHtml(player.name)}</strong>${badge}${selfTag}</div><div class="hub-sub">${statusLabel}</div>`;
+      slot.appendChild(headerDiv);
+
+      if (
+        isHost &&
+        player.playerId !== view.hostPlayerId &&
+        !isCpuPlayerId(player.playerId) &&
+        player.connected &&
+        handlers.onTransferHost
+      ) {
+        const transferBtn = document.createElement('button');
+        transferBtn.type = 'button';
+        transferBtn.className = 'btn btn-secondary lobby-transfer-btn';
+        transferBtn.textContent = 'ホストを譲る';
+        transferBtn.addEventListener('click', () => {
+          handlers.onTransferHost?.(player.playerId);
+        });
+        slot.appendChild(transferBtn);
+      }
     } else {
       slot.textContent = `空席（参加待ち ${i + 1}/${rules.playerCount}）`;
     }
@@ -597,7 +773,21 @@ export function renderWaitingRoom(
   }
   card.appendChild(slots);
 
+  const connectedSpectators = (view.spectators ?? []).filter((s) => s.connected);
+  if (connectedSpectators.length > 0) {
+    const specLine = document.createElement('div');
+    specLine.className = 'hub-sub lobby-spectators-line';
+    specLine.textContent = `観戦待機 (${connectedSpectators.length}人): ${connectedSpectators.map((s) => s.name).join('、')}`;
+    card.appendChild(specLine);
+  }
+
   const cpuPlayers = view.players.filter((p) => p.playerId.startsWith(CPU_PLAYER_ID_PREFIX));
+  const otherConnectedHumans = view.players.filter(
+    (p) =>
+      p.playerId !== view.hostPlayerId &&
+      !isCpuPlayerId(p.playerId) &&
+      p.connected,
+  );
   const isFull = view.players.length === rules.playerCount;
   const info = document.createElement('p');
   info.className = 'hub-sub';
@@ -660,8 +850,13 @@ export function renderWaitingRoom(
   const leaveBtn = document.createElement('button');
   leaveBtn.type = 'button';
   leaveBtn.className = 'btn btn-danger';
-  leaveBtn.textContent = isHost ? '部屋を閉じる' : '退室する';
-  leaveBtn.addEventListener('click', handlers.onLeaveLobby);
+  if (isHost && otherConnectedHumans.length > 0 && handlers.onTransferHostAndLeave) {
+    leaveBtn.textContent = 'ホストを譲って退出';
+    leaveBtn.addEventListener('click', () => handlers.onTransferHostAndLeave?.());
+  } else {
+    leaveBtn.textContent = isHost ? '部屋を閉じる' : '退室する';
+    leaveBtn.addEventListener('click', handlers.onLeaveLobby);
+  }
   card.appendChild(leaveBtn);
 
   container.appendChild(card);

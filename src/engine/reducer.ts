@@ -230,6 +230,7 @@ export function createInitialGameState(params: CreateInitialGameParams): GameSta
     kyotakuCount: 0,
     finalKyotakuAward: null,
     round: null,
+    spectators: [],
   };
 }
 
@@ -248,7 +249,10 @@ export function validateAction(
           message: 'すでに対局が開始されています。',
         };
       }
-      if (state.players.some((p) => p.playerId === action.playerId)) {
+      if (
+        state.players.some((p) => p.playerId === action.playerId) ||
+        (state.spectators ?? []).some((s) => s.spectatorId === action.playerId)
+      ) {
         return {
           code: 'DUPLICATE_PLAYER',
           message: 'すでに参加済みのプレイヤーです。',
@@ -875,6 +879,63 @@ export function validateAction(
         return {
           code: 'ROOM_FULL',
           message: `現在の参加人数（${state.players.length}人）が${nextRules.playerCount}人を超えているため変更できません。先に人数を減らしてください。`,
+        };
+      }
+      return null;
+    }
+
+    case 'JOIN_SPECTATOR': {
+      if (
+        state.players.some((p) => p.playerId === action.spectatorId) ||
+        (state.spectators ?? []).some((s) => s.spectatorId === action.spectatorId)
+      ) {
+        return {
+          code: 'DUPLICATE_PLAYER',
+          message: 'すでに参加済みのIDです。',
+        };
+      }
+      return null;
+    }
+
+    case 'LEAVE_SPECTATOR':
+    case 'SET_SPECTATOR_CONNECTED': {
+      if (!(state.spectators ?? []).some((s) => s.spectatorId === action.spectatorId)) {
+        return {
+          code: 'PLAYER_NOT_FOUND',
+          message: '観戦者が見つかりません。',
+        };
+      }
+      return null;
+    }
+
+    case 'TRANSFER_HOST': {
+      const target = state.players.find((p) => p.playerId === action.newHostPlayerId);
+      if (!target) {
+        return {
+          code: 'PLAYER_NOT_FOUND',
+          message: '引き継ぎ先のプレイヤーが見つかりません。',
+        };
+      }
+      if (target.playerId.startsWith('cpu-')) {
+        return {
+          code: 'UNAUTHORIZED_ACTION',
+          message: 'CPU にはホスト権限を引き継げません。',
+        };
+      }
+      return null;
+    }
+
+    case 'RESET_TO_LOBBY': {
+      if (state.phase !== 'finished') {
+        return {
+          code: 'INVALID_PHASE',
+          message: '終局後のみロビーに戻せます。',
+        };
+      }
+      if (action.playerId !== state.hostPlayerId) {
+        return {
+          code: 'UNAUTHORIZED_ACTION',
+          message: '次の対局へ戻せるのはホストだけです。',
         };
       }
       return null;
@@ -2285,6 +2346,86 @@ export function reduce(
           ...p,
           score: nextRules.initialPoints,
         })),
+      };
+    }
+
+    case 'JOIN_SPECTATOR': {
+      const existing = state.spectators ?? [];
+      const nextSpectator = {
+        spectatorId: action.spectatorId,
+        name: normalizePlayerName(action.name, existing.length + 1),
+        connected: true,
+      };
+      return {
+        ...state,
+        spectators: [...existing, nextSpectator],
+      };
+    }
+
+    case 'LEAVE_SPECTATOR': {
+      return {
+        ...state,
+        spectators: (state.spectators ?? []).filter(
+          (s) => s.spectatorId !== action.spectatorId,
+        ),
+      };
+    }
+
+    case 'SET_SPECTATOR_CONNECTED': {
+      return {
+        ...state,
+        spectators: (state.spectators ?? []).map((s) =>
+          s.spectatorId === action.spectatorId
+            ? { ...s, connected: action.connected }
+            : s,
+        ),
+      };
+    }
+
+    case 'TRANSFER_HOST': {
+      return {
+        ...state,
+        hostPlayerId: action.newHostPlayerId,
+      };
+    }
+
+    case 'RESET_TO_LOBBY': {
+      const remainingPlayers = state.players
+        .filter(
+          (p) =>
+            p.playerId === state.hostPlayerId ||
+            p.connected ||
+            p.playerId.startsWith('cpu-'),
+        )
+        .slice(0, rules.playerCount)
+        .map((p, idx) => ({
+          ...p,
+          seatIndex: idx,
+          score: rules.initialPoints,
+          hand: [],
+          drawnTile: null,
+          discards: [],
+          discardedKinds: [],
+          sameTurnFuriten: false,
+          isRiichiFuriten: false,
+          isRiichi: false,
+          isDoubleRiichi: false,
+          ippatsuEligible: false,
+          pendingRiichiSideways: false,
+          isRinshanDraw: false,
+          melds: [],
+          kitaTiles: [],
+          connected: p.playerId === state.hostPlayerId ? true : p.connected,
+        }));
+      return {
+        ...state,
+        phase: 'lobby',
+        players: remainingPlayers,
+        initialDealerIndex: 0,
+        kyotakuCount: 0,
+        finalKyotakuAward: null,
+        round: null,
+        spectators: (state.spectators ?? []).filter((s) => s.connected),
       };
     }
   }

@@ -1,10 +1,30 @@
 import './ui/styles.css';
 import './ui/refine.css';
 import { CPU_PLAYER_ID_PREFIX } from './cpu/player';
-import { ClientSession } from './net/client';
-import { HostSession } from './net/host';
+import {
+  ClientSession,
+  type ClientSessionCallbacks,
+  type PromoteFromCheckpointParams,
+} from './net/client';
+import { HostSession, type HostSessionCallbacks } from './net/host';
 import { normalizeRoomCode } from './net/protocol';
-import type { ChatMessage, GameError, StateView } from './types/message';
+import {
+  formatRoomDisplayName,
+  getPermanentRoom,
+  type PermanentRoomId,
+} from './net/rooms';
+import {
+  clearSavedSessionRecord,
+  loadSavedSessionRecord,
+  saveSessionRecord,
+  type SavedSessionRecord,
+} from './net/storage';
+import type {
+  ChatMessage,
+  GameError,
+  HostSnapshotPayload,
+  StateView,
+} from './types/message';
 import { DEFAULT_CPU_LEVEL, type RuleConfig } from './types/rule';
 import {
   renderLobbyEntry,
@@ -51,6 +71,8 @@ class MahjongApp {
   private autoAssistTimerId: ReturnType<typeof setTimeout> | null = null;
   private countdownDeadline: number | null = null;
   private countdownTimerId: ReturnType<typeof setInterval> | null = null;
+  private savedSession: SavedSessionRecord | null = null;
+  private perspectiveSeatIndex = 0;
   private readonly handleFullscreenChange = () => {
     if (this.settingsOpen) {
       this.renderFloating();
@@ -109,36 +131,28 @@ class MahjongApp {
     // 対局画面では横画面を必須にする（縦持ち時はローテーション案内で覆う）
     watchOrientation(() => this.syncOrientationOverlay());
 
+    this.savedSession = loadSavedSessionRecord();
     this.render();
   }
 
-  private createRoom(
-    playerName: string,
-    ruleConfig: RuleConfig,
-    cpuCount = 0,
-    offline = false,
-    autoStart = false,
-  ): void {
-    this.cleanupSession();
-    this.busy = true;
-    this.errorBanner = null;
-    this.statusText = '部屋を作成中...';
-    this.statusKind = 'normal';
-    this.render();
-
-    const host = new HostSession(playerName, ruleConfig, {
+  private buildHostCallbacks(
+    getHost: () => HostSession,
+    options: { fixedRoomCode?: string } = {},
+  ): HostSessionCallbacks {
+    return {
       onViewChange: (view) => {
         this.busy = false;
         this.actionInFlight = false;
         this.applyStateView(view);
       },
       onStatusChange: (status, detail) => {
+        const host = getHost();
         if (status === 'ready') {
           this.busy = false;
           this.statusKind = 'ok';
           this.statusText = host.isOffline()
             ? 'ローカル対局（CPU戦）'
-            : `ホスト稼働中 (${host.getRoomCode()})`;
+            : `${formatRoomDisplayName(host.getRoomCode())} (ホスト)`;
         } else if (status === 'error') {
           this.busy = false;
           this.statusKind = 'err';
@@ -163,15 +177,298 @@ class MahjongApp {
       onChatHistory: (messages) => {
         this.handleChatHistory(messages);
       },
-    }, {
-      cpuCount,
-      cpuDelayMs: 650,
-      offline,
-      autoStart,
-    });
+      onWelcome: (welcome) => {
+        const host = getHost();
+        if (host.isOffline()) return;
+        const record: SavedSessionRecord = {
+          roomCode: welcome.roomCode,
+          hostPeerId: welcome.hostPeerId,
+          hostEpoch: welcome.hostEpoch,
+          playerId: welcome.playerId,
+          playerName: welcome.playerName,
+          reconnectToken: welcome.reconnectToken,
+          isSpectator: false,
+          updatedAt: Date.now(),
+        };
+        this.savedSession = record;
+        saveSessionRecord(record);
+      },
+      onPermanentRoomClaimConflict: (roomCode) => {
+        if (options.fixedRoomCode && roomCode === options.fixedRoomCode) {
+          this.joinRoom(roomCode, this.formState.playerName);
+        }
+      },
+      onHostSelfDemoted: (migration, localToken, localPlayerId) => {
+        this.transitionToClientAfterHandover(
+          migration.roomCode,
+          this.currentView?.players.find((p) => p.playerId === localPlayerId)
+            ?.name ?? this.formState.playerName,
+          localToken,
+          migration.hostEpoch,
+          migration.newHostPeerId,
+        );
+      },
+    };
+  }
+
+  private buildClientCallbacks(roomCode: string): ClientSessionCallbacks {
+    const label = formatRoomDisplayName(roomCode);
+    return {
+      onViewChange: (view) => {
+        this.busy = false;
+        this.actionInFlight = false;
+        this.applyStateView(view);
+      },
+      onStatusChange: (status, detail) => {
+        if (status === 'connected') {
+          this.busy = false;
+          this.statusKind = 'ok';
+          this.statusText = this.currentView?.isSpectator
+            ? `${label}（観戦中）`
+            : `${label} に接続中`;
+        } else if (status === 'error' || status === 'disconnected') {
+          this.busy = false;
+          this.statusKind = 'err';
+          this.statusText = status === 'disconnected' ? '切断' : 'エラー';
+          this.errorBanner = detail ?? '接続が切断されました。';
+        } else {
+          this.statusKind = 'normal';
+          this.statusText = detail ?? '接続中...';
+        }
+        this.render();
+      },
+      onError: (err) => {
+        this.handleGameError(err);
+      },
+      onChatMessage: (message) => {
+        this.handleIncomingChat(message);
+      },
+      onChatHistory: (messages) => {
+        this.handleChatHistory(messages);
+      },
+      onWelcome: (welcome) => {
+        const record: SavedSessionRecord = {
+          roomCode: welcome.roomCode,
+          hostPeerId: welcome.hostPeerId,
+          hostEpoch: welcome.hostEpoch,
+          playerId: welcome.playerId,
+          playerName: welcome.playerName,
+          reconnectToken: welcome.reconnectToken,
+          isSpectator: welcome.isSpectator,
+          updatedAt: Date.now(),
+        };
+        this.savedSession = record;
+        saveSessionRecord(record);
+      },
+      onMigrated: (migration) => {
+        if (this.savedSession && this.savedSession.roomCode === migration.roomCode) {
+          this.savedSession = {
+            ...this.savedSession,
+            hostEpoch: migration.hostEpoch,
+            hostPeerId: migration.newHostPeerId,
+            updatedAt: Date.now(),
+          };
+          saveSessionRecord(this.savedSession);
+        }
+      },
+      onHostHandover: (snapshot) => {
+        this.promoteToHostFromSnapshot(snapshot);
+      },
+      onPromoteFromCheckpoint: (params) => {
+        this.promoteToHostFromCheckpoint(params);
+      },
+    };
+  }
+
+  private createRoom(
+    playerName: string,
+    ruleConfig: RuleConfig,
+    cpuCount = 0,
+    offline = false,
+    autoStart = false,
+    fixedRoomCode?: string,
+  ): void {
+    this.cleanupSession();
+    this.busy = true;
+    this.errorBanner = null;
+    this.statusText = fixedRoomCode
+      ? `${formatRoomDisplayName(fixedRoomCode)} を開設中...`
+      : '部屋を作成中...';
+    this.statusKind = 'normal';
+    this.render();
+
+    let host!: HostSession;
+    host = new HostSession(
+      playerName,
+      ruleConfig,
+      this.buildHostCallbacks(() => host, { fixedRoomCode }),
+      {
+        cpuCount,
+        cpuDelayMs: 650,
+        offline,
+        autoStart,
+        fixedRoomCode,
+      },
+    );
 
     this.activeSession = { role: 'host', session: host };
     host.start();
+  }
+
+  /** 常設ルーム（銅・銀・金の間）への入室（既存部屋があれば参加/観戦、無人なら自動で立卓） */
+  private joinPermanentRoom(roomId: PermanentRoomId, playerName: string): void {
+    const def = getPermanentRoom(roomId);
+    if (!def) return;
+
+    const matchingSaved =
+      this.savedSession && this.savedSession.roomCode === roomId
+        ? this.savedSession
+        : null;
+
+    this.cleanupSession();
+    this.busy = true;
+    this.errorBanner = null;
+    this.statusText = `${def.name} に接続確認中...`;
+    this.statusKind = 'normal';
+    this.render();
+
+    const baseCallbacks = this.buildClientCallbacks(roomId);
+    const client = new ClientSession(
+      roomId,
+      playerName,
+      {
+        ...baseCallbacks,
+        onNoHostAvailable: () => {
+          this.createRoom(
+            playerName,
+            { ...def.defaultRuleConfig },
+            0,
+            false,
+            false,
+            roomId,
+          );
+        },
+      },
+      {
+        connectTimeoutMs: 4500,
+        ...(matchingSaved
+          ? {
+              reconnectToken: matchingSaved.reconnectToken,
+              initialHostEpoch: matchingSaved.hostEpoch,
+              initialHostPeerId: matchingSaved.hostPeerId,
+              preferSpectate: matchingSaved.isSpectator,
+            }
+          : {}),
+      },
+    );
+
+    this.activeSession = { role: 'client', session: client };
+    client.connect();
+  }
+
+  /** 保存されたセッション情報を使って再接続する */
+  private reconnectSavedSession(): void {
+    const saved = this.savedSession;
+    if (!saved) return;
+    this.joinRoom(saved.roomCode, saved.playerName, {
+      reconnectToken: saved.reconnectToken,
+      initialHostEpoch: saved.hostEpoch,
+      initialHostPeerId: saved.hostPeerId,
+      preferSpectate: saved.isSpectator,
+    });
+  }
+
+  private discardSavedSession(): void {
+    clearSavedSessionRecord();
+    this.savedSession = null;
+    this.render();
+  }
+
+  private promoteToHostFromSnapshot(snapshot: HostSnapshotPayload): void {
+    this.activeSession = null;
+    this.busy = false;
+    this.errorBanner = null;
+    const hostName =
+      snapshot.state.players.find(
+        (p) => p.playerId === snapshot.state.hostPlayerId,
+      )?.name ?? 'ホスト';
+
+    let host!: HostSession;
+    host = new HostSession(
+      hostName,
+      snapshot.state.ruleConfig,
+      this.buildHostCallbacks(() => host),
+      {
+        cpuDelayMs: 650,
+        initialSnapshot: snapshot,
+      },
+    );
+
+    this.activeSession = { role: 'host', session: host };
+    this.statusKind = 'ok';
+    this.statusText = `${formatRoomDisplayName(snapshot.state.roomCode)} (ホスト引継)`;
+    host.start();
+  }
+
+  private promoteToHostFromCheckpoint(params: PromoteFromCheckpointParams): void {
+    this.activeSession = null;
+    this.busy = false;
+    this.errorBanner = null;
+    const hostName =
+      params.latestView.players.find((p) => p.playerId === params.myPlayerId)
+        ?.name ?? 'ホスト';
+
+    let host!: HostSession;
+    host = new HostSession(
+      hostName,
+      params.latestView.ruleConfig,
+      this.buildHostCallbacks(() => host),
+      {
+        cpuDelayMs: 650,
+        pendingTakeover: {
+          hostEpoch: params.hostEpoch,
+          seq: params.checkpoint.seq,
+          ivBase64: params.checkpoint.ivBase64,
+          ciphertextBase64: params.checkpoint.ciphertextBase64,
+          localPlayerId: params.myPlayerId,
+          localReconnectToken: params.myReconnectToken,
+          fallbackView: {
+            ...params.latestView,
+            hostPlayerId: params.myPlayerId,
+            hostEpoch: params.hostEpoch,
+          },
+          initialKeyBase64: params.initialKeyBase64,
+        },
+      },
+    );
+
+    this.activeSession = { role: 'host', session: host };
+    this.statusKind = 'ok';
+    this.statusText = `${formatRoomDisplayName(params.latestView.roomCode)} (ホスト引継)`;
+    host.start();
+  }
+
+  private transitionToClientAfterHandover(
+    roomCode: string,
+    playerName: string,
+    reconnectToken: string,
+    hostEpoch: number,
+    hostPeerId: string,
+  ): void {
+    this.activeSession = null;
+    this.busy = true;
+    const client = new ClientSession(
+      roomCode,
+      playerName,
+      this.buildClientCallbacks(roomCode),
+      {
+        reconnectToken,
+        initialHostEpoch: hostEpoch,
+        initialHostPeerId: hostPeerId,
+      },
+    );
+    this.activeSession = { role: 'client', session: client };
+    client.connect();
   }
 
   /** 通信なしの CPU 対局を開始する */
@@ -223,7 +520,32 @@ class MahjongApp {
     this.activeSession.session.startGame();
   }
 
-  private joinRoom(roomCode: string, playerName: string): void {
+  private transferHostAndStay(targetPlayerId: string): void {
+    if (this.activeSession?.role !== 'host') return;
+    this.activeSession.session.transferHost(targetPlayerId, {
+      stayAsClient: true,
+    });
+  }
+
+  private transferHostAndLeave(): void {
+    if (this.activeSession?.role === 'host') {
+      this.activeSession.session.transferHost(undefined, {
+        stayAsClient: false,
+      });
+    }
+    this.returnToLobby({ skipTransfer: true });
+  }
+
+  private joinRoom(
+    roomCode: string,
+    playerName: string,
+    overrides?: {
+      reconnectToken?: string;
+      initialHostEpoch?: number;
+      initialHostPeerId?: string;
+      preferSpectate?: boolean;
+    },
+  ): void {
     const normalized = normalizeRoomCode(roomCode);
     if (normalized.length === 0) {
       this.errorBanner = '部屋コードを入力してください。';
@@ -231,45 +553,34 @@ class MahjongApp {
       return;
     }
 
+    const matchingSaved =
+      !overrides &&
+      this.savedSession &&
+      this.savedSession.roomCode === normalized
+        ? this.savedSession
+        : null;
+
     this.cleanupSession();
     this.busy = true;
     this.errorBanner = null;
-    this.statusText = `部屋 ${normalized} に接続中...`;
+    this.statusText = `${formatRoomDisplayName(normalized)} に接続中...`;
     this.statusKind = 'normal';
     this.render();
 
-    const client = new ClientSession(normalized, playerName, {
-      onViewChange: (view) => {
-        this.busy = false;
-        this.actionInFlight = false;
-        this.applyStateView(view);
-      },
-      onStatusChange: (status, detail) => {
-        if (status === 'connected') {
-          this.busy = false;
-          this.statusKind = 'ok';
-          this.statusText = `部屋 ${normalized} に接続中`;
-        } else if (status === 'error' || status === 'disconnected') {
-          this.busy = false;
-          this.statusKind = 'err';
-          this.statusText = status === 'disconnected' ? '切断' : 'エラー';
-          this.errorBanner = detail ?? '接続が切断されました。';
-        } else {
-          this.statusKind = 'normal';
-          this.statusText = detail ?? '接続中...';
-        }
-        this.render();
-      },
-      onError: (err) => {
-        this.handleGameError(err);
-      },
-      onChatMessage: (message) => {
-        this.handleIncomingChat(message);
-      },
-      onChatHistory: (messages) => {
-        this.handleChatHistory(messages);
-      },
-    });
+    const client = new ClientSession(
+      normalized,
+      playerName,
+      this.buildClientCallbacks(normalized),
+      overrides ??
+        (matchingSaved
+          ? {
+              reconnectToken: matchingSaved.reconnectToken,
+              initialHostEpoch: matchingSaved.hostEpoch,
+              initialHostPeerId: matchingSaved.hostPeerId,
+              preferSpectate: matchingSaved.isSpectator,
+            }
+          : {}),
+    );
 
     this.activeSession = { role: 'client', session: client };
     client.connect();
@@ -305,7 +616,7 @@ class MahjongApp {
   }
 
   private scheduleAutoAssistIfNeeded(view: StateView): void {
-    if (!this.activeSession || this.actionInFlight) return;
+    if (!this.activeSession || this.actionInFlight || view.isSpectator) return;
     if (this.autoAgariEnabled) {
       if (view.phase === 'awaiting_responses' && view.myCallOptions?.canRon) {
         this.autoAssistTimerId = setTimeout(() => {
@@ -374,7 +685,12 @@ class MahjongApp {
   }
 
   private scheduleAutoTsumogiriIfNeeded(view: StateView): void {
-    if (!this.autoTsumogiriEnabled || !this.activeSession || this.actionInFlight) {
+    if (
+      !this.autoTsumogiriEnabled ||
+      !this.activeSession ||
+      this.actionInFlight ||
+      view.isSpectator
+    ) {
       return;
     }
     if (view.phase !== 'playing') return;
@@ -446,7 +762,18 @@ class MahjongApp {
     this.render();
   }
 
-  private returnToLobby(): void {
+  private returnToLobby(options: { skipTransfer?: boolean } = {}): void {
+    if (
+      !options.skipTransfer &&
+      this.activeSession?.role === 'host' &&
+      !this.activeSession.session.isOffline() &&
+      this.activeSession.session.getConnectedRemoteHumanIds().length > 0
+    ) {
+      this.activeSession.session.transferHost(undefined, { stayAsClient: false });
+      this.activeSession = null;
+    }
+    clearSavedSessionRecord();
+    this.savedSession = null;
     this.cleanupSession();
     this.currentView = null;
     this.busy = false;
@@ -455,6 +782,7 @@ class MahjongApp {
     this.selectedDiscardTileId = null;
     this.roundEndStep = 'details';
     this.leaveConfirmPending = false;
+    this.perspectiveSeatIndex = 0;
     this.errorBanner = null;
     this.statusText = '未接続';
     this.statusKind = 'normal';
@@ -592,15 +920,27 @@ class MahjongApp {
     panel.className = 'overlay-panel';
     panel.style.maxWidth = '420px';
 
+    const isSpectator = Boolean(this.currentView?.isSpectator);
+    const hasHandoverTarget =
+      this.activeSession?.role === 'host' &&
+      !this.activeSession.session.isOffline() &&
+      this.activeSession.session.getConnectedRemoteHumanIds().length > 0;
+
     const title = document.createElement('h3');
     title.style.margin = '0';
     title.style.color = 'var(--accent-gold)';
-    title.textContent = '対局を離れますか？';
+    title.textContent = isSpectator
+      ? '観戦を終了しますか？'
+      : '対局を離れますか？';
 
     const desc = document.createElement('p');
     desc.className = 'hub-sub';
     desc.style.margin = '0';
-    desc.textContent = 'ロビーに戻ると、現在の対局の進行状況は失われます。';
+    desc.textContent = isSpectator
+      ? 'ロビーに戻ります（途中から再度観戦することもできます）。'
+      : hasHandoverTarget
+        ? '退出すると、ホスト権限が自動的に他の参加者へ引き継がれて対局が続行されます。'
+        : 'ロビーに戻ると、現在の対局の進行状況は失われます。';
 
     const actions = document.createElement('div');
     actions.style.display = 'flex';
@@ -610,7 +950,7 @@ class MahjongApp {
     const cancelBtn = document.createElement('button');
     cancelBtn.type = 'button';
     cancelBtn.className = 'btn btn-secondary';
-    cancelBtn.textContent = '対局を続ける';
+    cancelBtn.textContent = isSpectator ? '観戦を続ける' : '対局を続ける';
     cancelBtn.addEventListener('click', () => {
       this.leaveConfirmPending = false;
       this.render();
@@ -619,7 +959,9 @@ class MahjongApp {
     const leaveBtn = document.createElement('button');
     leaveBtn.type = 'button';
     leaveBtn.className = 'btn btn-danger';
-    leaveBtn.textContent = 'ロビーに戻る';
+    leaveBtn.textContent = hasHandoverTarget
+      ? 'ホストを譲って退出'
+      : 'ロビーに戻る';
     leaveBtn.addEventListener('click', () => this.returnToLobby());
 
     actions.append(cancelBtn, leaveBtn);
@@ -748,16 +1090,25 @@ class MahjongApp {
       onJoinRoom: (code: string, name: string) => this.joinRoom(code, name),
       onStartLocalGame: (name: string, ruleConfig: RuleConfig, cpuCount: number) =>
         this.startLocalGame(name, ruleConfig, cpuCount),
+      onJoinPermanentRoom: (roomId: PermanentRoomId, name: string) =>
+        this.joinPermanentRoom(roomId, name),
+      onReconnectSession: () => this.reconnectSavedSession(),
+      onDiscardSavedSession: () => this.discardSavedSession(),
       onLeaveLobby: () => this.returnToLobby(),
       onAddCpu: () => this.addCpuToLobby(),
       onRemoveCpu: () => this.removeCpuFromLobby(),
       onUpdateRuleConfig: (patch: Partial<RuleConfig>) =>
         this.updateLobbyRules(patch),
       onStartGame: () => this.startLobbyGame(),
+      onTransferHost: (targetPlayerId: string) =>
+        this.transferHostAndStay(targetPlayerId),
+      onTransferHostAndLeave: () => this.transferHostAndLeave(),
     };
 
     if (!view) {
-      renderLobbyEntry(content, this.formState, lobbyHandlers, this.busy);
+      renderLobbyEntry(content, this.formState, lobbyHandlers, this.busy, {
+        savedSession: this.savedSession,
+      });
     } else if (view.phase === 'lobby') {
       renderWaitingRoom(content, view, lobbyHandlers);
     } else {
@@ -788,6 +1139,15 @@ class MahjongApp {
           },
           onChangeRoundEndStep: (step) => {
             this.roundEndStep = step;
+          },
+          onChangePerspective: (seatIndex) => {
+            this.perspectiveSeatIndex = seatIndex;
+            this.render();
+          },
+          onResetToLobby: () => {
+            if (this.activeSession?.role === 'host' && !this.actionInFlight) {
+              this.activeSession.session.resetToLobby();
+            }
           },
           onDiscardTile: (tileId) => {
             this.selectedDiscardTileId = null;
@@ -873,6 +1233,7 @@ class MahjongApp {
           selectedTileId: this.selectedDiscardTileId,
           roundEndStep: this.roundEndStep,
           unreadChatCount: this.unreadChatCount,
+          perspectiveSeatIndex: this.perspectiveSeatIndex,
         },
       );
     }
@@ -963,6 +1324,44 @@ class MahjongApp {
 
     row.append(label, toggleBtn);
     panel.append(header, row);
+
+    if (
+      this.activeSession?.role === 'host' &&
+      !this.activeSession.session.isOffline() &&
+      this.currentView
+    ) {
+      const candidates = this.activeSession.session.getConnectedRemoteHumanIds();
+      if (candidates.length > 0) {
+        const handoverBox = document.createElement('div');
+        handoverBox.className = 'setting-handover-box';
+
+        const handoverTitle = document.createElement('strong');
+        handoverTitle.textContent = 'ホスト権限の引き継ぎ';
+
+        const handoverSub = document.createElement('span');
+        handoverSub.className = 'hub-sub';
+        handoverSub.textContent = '他のオンライン参加者へホスト権限を譲ります';
+
+        const btnRow = document.createElement('div');
+        btnRow.className = 'setting-handover-btns';
+        for (const pid of candidates) {
+          const p = this.currentView.players.find((pl) => pl.playerId === pid);
+          if (!p) continue;
+          const b = document.createElement('button');
+          b.type = 'button';
+          b.className = 'btn btn-secondary';
+          b.textContent = `${p.name} に譲る`;
+          b.addEventListener('click', () => {
+            this.settingsOpen = false;
+            this.renderFloating();
+            this.transferHostAndStay(pid);
+          });
+          btnRow.appendChild(b);
+        }
+        handoverBox.append(handoverTitle, handoverSub, btnRow);
+        panel.appendChild(handoverBox);
+      }
+    }
 
     if (this.fullscreenError) {
       const note = document.createElement('div');

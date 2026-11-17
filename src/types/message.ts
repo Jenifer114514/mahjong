@@ -6,6 +6,7 @@ import type {
   DiscardEntry,
   FinalKyotakuAward,
   GamePhase,
+  GameState,
   Meld,
   NextRoundDecision,
   RoundAgariWinner,
@@ -98,7 +99,35 @@ export type Action =
       type: 'UPDATE_RULE_CONFIG';
       playerId: string;
       patch: Partial<RuleConfig>;
+    }
+  | {
+      type: 'JOIN_SPECTATOR';
+      spectatorId: string;
+      name: string;
+    }
+  | {
+      type: 'LEAVE_SPECTATOR';
+      spectatorId: string;
+    }
+  | {
+      type: 'SET_SPECTATOR_CONNECTED';
+      spectatorId: string;
+      connected: boolean;
+    }
+  | {
+      type: 'TRANSFER_HOST';
+      newHostPlayerId: string;
+    }
+  | {
+      type: 'RESET_TO_LOBBY';
+      playerId: string;
     };
+
+export interface PublicSpectatorView {
+  spectatorId: string;
+  name: string;
+  connected: boolean;
+}
 
 export interface PublicPlayerView {
   playerId: string;
@@ -186,6 +215,12 @@ export interface StateView {
   /** 応答待ちの残り時間(ms)（クライアントのタイマー表示用） */
   responseRemainingMs: number | null;
   round: RoundView | null;
+  /** 観戦者視点かどうか */
+  isSpectator?: boolean;
+  /** 現在の観戦者一覧 */
+  spectators?: PublicSpectatorView[];
+  /** ホスト引き継ぎ世代番号 */
+  hostEpoch?: number;
 }
 
 export type ErrorCode =
@@ -223,15 +258,71 @@ export interface ChatMessage {
   timestamp: number;
 }
 
+export interface SessionWelcomePayload {
+  roomCode: string;
+  playerId: string;
+  playerName: string;
+  reconnectToken: string;
+  isSpectator: boolean;
+  hostEpoch: number;
+  hostPeerId: string;
+}
+
+export interface HostSnapshotPayload {
+  state: GameState;
+  chatMessages: ChatMessage[];
+  chatSeq: number;
+  playerTokens: Record<string, string>;
+  spectatorTokens: Record<string, string>;
+  hostEpoch: number;
+  permanentRoom: boolean;
+}
+
+export interface HostCheckpointPayload {
+  hostEpoch: number;
+  seq: number;
+  backupPlayerId: string;
+  ivBase64: string;
+  ciphertextBase64: string;
+  inlineKeyBase64?: string;
+}
+
+export interface CheckpointKeyPayload {
+  hostEpoch: number;
+  seq: number;
+  keyBase64: string;
+}
+
+export interface HostRedirectPayload {
+  roomCode: string;
+  hostPeerId: string;
+  hostEpoch: number;
+}
+
+export interface HostMigratingPayload {
+  roomCode: string;
+  newHostPlayerId: string;
+  newHostPeerId: string;
+  hostEpoch: number;
+}
+
 /** クライアント → ホスト（要求のみ送る） */
 export type ClientMessage =
   | {
       kind: 'JOIN';
       playerName: string;
+      reconnectToken?: string;
+      preferSpectate?: boolean;
     }
   | {
       kind: 'CHAT';
       text: string;
+    }
+  | {
+      kind: 'CHECKPOINT_KEY_SHARE';
+      hostEpoch: number;
+      seq: number;
+      keyBase64: string;
     }
   | {
       kind: 'ACTION';
@@ -254,12 +345,36 @@ export type HostMessage =
       payload: StateView;
     }
   | {
+      kind: 'SESSION_WELCOME';
+      payload: SessionWelcomePayload;
+    }
+  | {
       kind: 'CHAT_MESSAGE';
       payload: ChatMessage;
     }
   | {
       kind: 'CHAT_HISTORY';
       payload: ChatMessage[];
+    }
+  | {
+      kind: 'HOST_HANDOVER';
+      payload: HostSnapshotPayload;
+    }
+  | {
+      kind: 'HOST_CHECKPOINT';
+      payload: HostCheckpointPayload;
+    }
+  | {
+      kind: 'CHECKPOINT_KEY';
+      payload: CheckpointKeyPayload;
+    }
+  | {
+      kind: 'HOST_MIGRATING';
+      payload: HostMigratingPayload;
+    }
+  | {
+      kind: 'HOST_REDIRECT';
+      payload: HostRedirectPayload;
     }
   | {
       kind: 'ERROR';
