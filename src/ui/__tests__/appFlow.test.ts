@@ -82,9 +82,16 @@ describe('アプリ起動とローカルCPU対局', () => {
     // 3人麻雀にするとツモ損トグルも出る
     expect(root.textContent).toContain('ツモ損');
 
-    // CPU を 2 体追加すると 3人麻雀が開局する
+    // CPU を 2 体追加しても自動開局せず、開始ボタンが有効になって押すと開局する
     expect(clickByText(root, 'button', 'CPU を追加')).toBe(true);
     expect(clickByText(root, 'button', 'CPU を追加')).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    expect(root.querySelector('.table-stage')).toBeNull();
+    const startBtn = root.querySelector<HTMLButtonElement>('.lobby-start-btn')!;
+    expect(startBtn).not.toBeNull();
+    expect(startBtn.disabled).toBe(false);
+    startBtn.click();
     await new Promise((resolve) => setTimeout(resolve, 40));
 
     expect(root.querySelector('.table-stage.is-landscape')).not.toBeNull();
@@ -213,17 +220,23 @@ describe('アプリ起動とローカルCPU対局', () => {
     expect(root.querySelector('.table-chrome-settings')).not.toBeNull();
     expect(root.querySelector('.table-chrome-leave')).not.toBeNull();
 
-    // 設定を開いてフル画面表示を「する」→「しない」に切り替える
+    // 設定を開いてフル画面表示トグルを OFF → ON → OFF に切り替える
     root.querySelector<HTMLButtonElement>('.table-chrome-settings')!.click();
     const settingsModal = root.querySelector('.table-settings-modal');
     expect(settingsModal).not.toBeNull();
     expect(settingsModal!.textContent).toContain('フル画面表示');
 
-    expect(clickByText(root, '.table-settings-modal .seg-btn', 'する')).toBe(true);
+    const fsSwitch1 = root.querySelector<HTMLButtonElement>('.table-settings-modal [role="switch"]')!;
+    expect(fsSwitch1.getAttribute('aria-checked')).toBe('false');
+    expect(fsSwitch1.textContent).toContain('OFF');
+    fsSwitch1.click();
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(reqFs).toHaveBeenCalledTimes(1);
 
-    expect(clickByText(root, '.table-settings-modal .seg-btn', 'しない')).toBe(true);
+    const fsSwitch2 = root.querySelector<HTMLButtonElement>('.table-settings-modal [role="switch"]')!;
+    expect(fsSwitch2.getAttribute('aria-checked')).toBe('true');
+    expect(fsSwitch2.textContent).toContain('ON');
+    fsSwitch2.click();
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(exitFs).toHaveBeenCalledTimes(1);
 

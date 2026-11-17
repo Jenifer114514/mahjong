@@ -1,17 +1,18 @@
 :root {
-  --bg-page: #0a1714;
-  --bg-felt: #104538;
-  --bg-felt-dark: #0b3128;
-  --bg-panel: rgba(9, 24, 20, 0.88);
-  --border-gold: rgba(212, 175, 55, 0.45);
+  --bg-page: #091224;
+  --bg-felt: #1b3463;
+  --bg-felt-dark: #0f1e3d;
+  --bg-panel: rgba(12, 23, 47, 0.9);
+  --border-gold: rgba(118, 168, 245, 0.42);
   --accent-gold: #f0c95c;
-  --accent-green: #38c172;
+  --accent-blue: #4f9dff;
+  --accent-green: #4f9dff;
   --accent-red: #e55353;
-  --text-main: #f4f7f5;
-  --text-muted: #9eb5ae;
+  --text-main: #f2f6fc;
+  --text-muted: #9bb1d4;
   --tile-bg: #f3f1ea;
   --tile-edge: #d8d4c8;
-  --tile-back: #256f5c;
+  --tile-back: #264d8c;
 }
 
 * {
@@ -23,7 +24,7 @@ body {
   margin: 0;
   padding: 0;
   min-height: 100%;
-  background: radial-gradient(circle at top, #12362d 0%, var(--bg-page) 75%);
+  background: radial-gradient(circle at top, #172f5c 0%, var(--bg-page) 75%);
   color: var(--text-main);
   font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Kaku Gothic ProN',
     'Yu Gothic UI', 'Noto Sans JP', sans-serif;
@@ -70,20 +71,20 @@ input {
   font-size: 1rem;
   font-weight: 700;
   letter-spacing: 0.04em;
-  color: var(--accent-gold);
+  color: #a9ceff;
 }
 
 .status-pill {
   font-size: 0.82rem;
   padding: 4px 10px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(120, 165, 240, 0.14);
   color: var(--text-muted);
 }
 
 .status-pill.is-ok {
-  background: rgba(56, 193, 114, 0.18);
-  color: #8ee7b2;
+  background: rgba(79, 157, 255, 0.22);
+  color: #9fd0ff;
 }
 
 .status-pill.is-err {
@@ -115,15 +116,16 @@ input {
 
 .card {
   background: var(--bg-panel);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(124, 170, 242, 0.24);
   border-radius: 12px;
   padding: 18px;
+  box-shadow: 0 10px 28px rgba(4, 10, 24, 0.45);
 }
 
 .card h2 {
   margin: 0 0 12px;
   font-size: 1.05rem;
-  color: var(--accent-gold);
+  color: #9cc6ff;
 }
 
 .lobby-grid {
@@ -148,8 +150,8 @@ input {
   width: 100%;
   padding: 10px 12px;
   border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(130, 175, 245, 0.28);
+  background: rgba(6, 13, 28, 0.7);
   color: var(--text-main);
 }
 
@@ -169,8 +171,8 @@ input {
 .seg-btn {
   padding: 10px 12px;
   border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(130, 175, 245, 0.24);
+  background: rgba(79, 157, 255, 0.06);
   color: var(--text-main);
   cursor: pointer;
   text-align: center;
@@ -178,10 +180,11 @@ input {
 }
 
 .seg-btn.is-active {
-  border-color: var(--accent-gold);
-  background: rgba(240, 201, 92, 0.18);
-  color: var(--accent-gold);
+  border-color: #6ab0ff;
+  background: rgba(79, 157, 255, 0.24);
+  color: #e3f0ff;
   font-weight: 700;
+  box-shadow: 0 0 0 1px rgba(106, 176, 255, 0.28);
 }
 
 .seg-sub {
@@ -206,13 +209,15 @@ input {
 }
 
 .btn-primary {
-  background: var(--accent-gold);
-  color: #1a1608;
+  background: linear-gradient(135deg, #2a6be6 0%, #448aff 100%);
+  border-color: rgba(130, 185, 255, 0.45);
+  color: #ffffff;
+  box-shadow: 0 4px 12px rgba(38, 102, 224, 0.32);
 }
 
 .btn-secondary {
-  background: rgba(255, 255, 255, 0.1);
-  border-color: rgba(255, 255, 255, 0.2);
+  background: rgba(100, 150, 235, 0.14);
+  border-color: rgba(125, 175, 250, 0.28);
   color: var(--text-main);
 }
 
@@ -220,6 +225,71 @@ input {
   background: rgba(229, 83, 83, 0.22);
   border-color: rgba(229, 83, 83, 0.55);
   color: #ffd5d5;
+}
+
+/* Toggle Switch (ON/OFF) */
+.toggle-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px;
+  border: none;
+  background: transparent;
+  color: var(--text-main);
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.toggle-switch:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.toggle-track {
+  position: relative;
+  display: inline-block;
+  width: 46px;
+  height: 26px;
+  border-radius: 999px;
+  background: rgba(95, 125, 175, 0.34);
+  border: 1px solid rgba(145, 175, 225, 0.32);
+  transition: background 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.toggle-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #d8e4f8;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+  transition: transform 0.18s ease, background 0.18s ease;
+}
+
+.toggle-switch.is-on .toggle-track {
+  background: linear-gradient(135deg, #2d77f5 0%, #58a6ff 100%);
+  border-color: rgba(155, 206, 255, 0.72);
+  box-shadow: 0 0 10px rgba(79, 157, 255, 0.42);
+}
+
+.toggle-switch.is-on .toggle-thumb {
+  transform: translateX(20px);
+  background: #ffffff;
+}
+
+.toggle-state-text {
+  min-width: 28px;
+  text-align: left;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+}
+
+.toggle-switch.is-on .toggle-state-text {
+  color: #8cc2ff;
 }
 
 /* Waiting room */
@@ -231,7 +301,7 @@ input {
   gap: 12px;
   padding: 14px 16px;
   border-radius: 10px;
-  background: rgba(0, 0, 0, 0.35);
+  background: rgba(7, 15, 34, 0.65);
   border: 1px solid var(--border-gold);
   margin-bottom: 14px;
 }
@@ -240,7 +310,7 @@ input {
   font-size: 1.8rem;
   font-weight: 800;
   letter-spacing: 0.22em;
-  color: var(--accent-gold);
+  color: #98c7ff;
 }
 
 .room-code-actions {
@@ -259,8 +329,8 @@ input {
 .player-slot {
   padding: 12px;
   border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(125, 175, 250, 0.22);
+  background: rgba(79, 157, 255, 0.06);
 }
 
 .player-slot.is-empty {
@@ -308,8 +378,8 @@ input {
 }
 
 .seat-box {
-  background: rgba(6, 22, 18, 0.52);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(8, 17, 36, 0.56);
+  border: 1px solid rgba(125, 175, 250, 0.18);
   border-radius: 10px;
   padding: 10px;
   display: flex;
@@ -507,9 +577,9 @@ input {
   width: 22px;
   height: 31px;
   border-radius: 2px;
-  background: linear-gradient(180deg, #2d8770 0%, var(--tile-back) 100%);
-  border-color: #184e40;
-  border-bottom-color: #123c31;
+  background: linear-gradient(180deg, #3566b8 0%, var(--tile-back) 100%);
+  border-color: #193769;
+  border-bottom-color: #12284e;
 }
 
 .mj-tile-back.mj-tile-back-meld {
@@ -570,8 +640,8 @@ input {
 }
 
 .meld-group-kita {
-  border-color: rgba(89, 217, 153, 0.4);
-  background: rgba(89, 217, 153, 0.08);
+  border-color: rgba(105, 178, 255, 0.45);
+  background: rgba(79, 157, 255, 0.1);
 }
 
 .meld-label {
@@ -702,7 +772,7 @@ input {
 }
 
 .mj-tile-latest {
-  outline: 2px solid #59d999;
+  outline: 2px solid #63b3ff;
 }
 
 .mj-tile-rank {
@@ -795,7 +865,7 @@ input {
 }
 
 .delta-pos {
-  color: #6ee7a8;
+  color: #72c3ff;
   font-weight: 700;
 }
 
@@ -807,13 +877,38 @@ input {
 /* Stage 3A: Room local rule toggles, furiten & agari disclosure */
 .rule-toggle-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 10px;
   margin-bottom: 14px;
 }
 
 .rule-toggle-field {
   margin-bottom: 0;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px;
+  border-radius: 9px;
+  background: rgba(79, 157, 255, 0.06);
+  border: 1px solid rgba(125, 175, 250, 0.2);
+}
+
+.rule-toggle-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.rule-toggle-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.rule-toggle-sub {
+  margin-top: 0;
 }
 
 .seg-btn-sm {
@@ -905,9 +1000,9 @@ input {
 }
 
 .yaku-chip.is-dora {
-  background: rgba(56, 193, 114, 0.16);
-  border-color: rgba(56, 193, 114, 0.45);
-  color: #a6f2c7;
+  background: rgba(79, 157, 255, 0.18);
+  border-color: rgba(110, 178, 255, 0.45);
+  color: #b8dcff;
 }
 
 .yaku-chip.is-yakuman {
@@ -985,9 +1080,9 @@ input {
   border-radius: 999px;
   font-size: 0.78rem;
   font-weight: 800;
-  background: rgba(56, 193, 114, 0.22);
-  border: 1px solid rgba(56, 193, 114, 0.6);
-  color: #8bf3b7;
+  background: rgba(79, 157, 255, 0.22);
+  border: 1px solid rgba(110, 178, 255, 0.6);
+  color: #a8d4ff;
 }
 
 .noten-badge {
@@ -1140,7 +1235,7 @@ input {
   gap: 14px;
   padding: 28px;
   text-align: center;
-  background: radial-gradient(circle at 50% 40%, #12362d 0%, #08120f 80%);
+  background: radial-gradient(circle at 50% 40%, #193468 0%, #070e1f 80%);
 }
 
 .rotate-overlay-icon {
@@ -2293,7 +2388,7 @@ input {
 .table-modal-header h3 {
   margin: 0;
   font-size: 1rem;
-  color: var(--accent-gold);
+  color: #9cc6ff;
 }
 
 .table-modal-close-btn {
@@ -2308,8 +2403,8 @@ input {
   gap: 12px;
   padding: 10px 12px;
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(79, 157, 255, 0.08);
+  border: 1px solid rgba(125, 175, 250, 0.22);
 }
 
 .setting-toggle-label {
@@ -2341,8 +2436,8 @@ input {
   gap: 6px;
   padding: 8px 10px;
   border-radius: 8px;
-  background: rgba(5, 11, 10, 0.65);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(7, 14, 31, 0.72);
+  border: 1px solid rgba(125, 175, 250, 0.18);
 }
 
 .chat-empty {
@@ -2456,9 +2551,9 @@ input {
 }
 
 .left-action-tab.is-active {
-  color: #63f093;
-  background: rgba(56, 193, 114, 0.24);
-  text-shadow: 0 0 8px rgba(99, 240, 147, 0.45);
+  color: #7cc4ff;
+  background: rgba(79, 157, 255, 0.26);
+  text-shadow: 0 0 8px rgba(124, 196, 255, 0.5);
 }
 
 /* ---------- 対局中は「雀卓だけ」をフルスクリーン表示 ---------- */
@@ -2499,8 +2594,8 @@ input {
   margin: 4px 0 14px;
   padding: 12px 14px;
   border-radius: 10px;
-  background: rgba(240, 201, 92, 0.06);
-  border: 1px dashed rgba(240, 201, 92, 0.35);
+  background: rgba(79, 157, 255, 0.08);
+  border: 1px dashed rgba(120, 178, 255, 0.38);
 }
 
 .lobby-cpu-buttons {
@@ -2527,14 +2622,14 @@ input {
   margin: 12px 0;
   padding: 12px 14px;
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(79, 157, 255, 0.05);
+  border: 1px solid rgba(125, 175, 250, 0.22);
 }
 
 .lobby-settings-title {
   font-size: 0.88rem;
   font-weight: 700;
-  color: var(--accent-gold);
+  color: #9cc6ff;
 }
 
 /* ---------- オーバーレイ・和了役表示 ---------- */
@@ -2549,7 +2644,7 @@ input {
   position: fixed;
   inset: 0;
   z-index: 50;
-  background: rgba(4, 12, 10, 0.72);
+  background: rgba(5, 10, 24, 0.76);
   backdrop-filter: blur(4px);
 }
 

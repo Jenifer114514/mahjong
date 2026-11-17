@@ -40,6 +40,7 @@ const { HostSession } = await import('../host');
 function createSession(
   cpuCount: number,
   playerCount: 3 | 4 = 4,
+  autoStart = false,
 ): {
   session: InstanceType<typeof HostSession>;
   views: StateView[];
@@ -59,6 +60,7 @@ function createSession(
     {
       cpuCount,
       cpuDelayMs: 0,
+      autoStart,
       // テストでは自走させず、明示的に runCpuStepOnce を呼ぶ
       cpuScheduler: () => {},
     },
@@ -75,8 +77,8 @@ function createSession(
 }
 
 describe('HostSession の CPU 統合', () => {
-  it('CPU 席をロビーに追加し、人数が揃うと自動開局する', () => {
-    const { session, drain, views } = createSession(3, 4);
+  it('autoStart 指定時は CPU 席をロビーに追加し、人数が揃うと自動開局する', () => {
+    const { session, drain, views } = createSession(3, 4, true);
     session.start();
     drain();
 
@@ -93,6 +95,7 @@ describe('HostSession の CPU 統合', () => {
   it('CPU だけで 1 局を最後まで進行できる', () => {
     const { session, drain, views } = createSession(3, 4);
     session.start();
+    expect(session.startGame()).toBe(true);
 
     // 自分の手番はテストから代わりに打牌して進める
     let guard = 0;
@@ -124,7 +127,7 @@ describe('HostSession の CPU 統合', () => {
   });
 
   it('CPU のみ（ホストも CPU 化できない場合）でも応答待ちが勝手に埋まる', () => {
-    const { session, drain, views } = createSession(2, 3);
+    const { session, drain, views } = createSession(2, 3, true);
     session.start();
     drain(2000);
 
@@ -135,7 +138,7 @@ describe('HostSession の CPU 統合', () => {
     session.destroy();
   });
 
-  it('ロビーで CPU を後から追加でき、席が埋まると自動開局する', () => {
+  it('ロビーで CPU や参加者が揃っても自動開局せず、ホストの startGame() で開局する', () => {
     // 最初は CPU 0 体（人間 1 人 + CPU 3 体の 4 人麻雀を想定）
     const { session, drain, views } = createSession(0, 4);
     session.start();
@@ -148,9 +151,17 @@ describe('HostSession の CPU 統合', () => {
 
     expect(session.addCpu()).toBe(true);
     expect(views.at(-1)!.players).toHaveLength(3);
+    // 揃う前は startGame() できない
+    expect(session.startGame()).toBe(false);
 
-    // 3 体目で席が埋まり、自動開局する
+    // 3 体目で席が埋まっても、まだロビーで待機する（自動開局しない）
     expect(session.addCpu()).toBe(true);
+    drain(50);
+    expect(views.at(-1)!.players).toHaveLength(4);
+    expect(views.at(-1)!.phase).toBe('lobby');
+
+    // ホストが明示的に開始する
+    expect(session.startGame()).toBe(true);
     drain(50);
     const started = views.at(-1)!;
     expect(started.players).toHaveLength(4);
@@ -159,6 +170,44 @@ describe('HostSession の CPU 統合', () => {
 
     // 開局後は追加できない
     expect(session.addCpu()).toBe(false);
+
+    session.destroy();
+  });
+
+  it('オンライン参加者が定員に達しても自動開局せず、ホストの startGame() で開始する', () => {
+    peerInstances.length = 0;
+    const { session, views } = createSession(0, 3);
+    session.start();
+    const peer = peerInstances.at(-1)!;
+    peer.emit('open', peer.id);
+
+    for (const id of ['g1', 'g2']) {
+      const handlers: Record<string, Array<(...args: unknown[]) => void>> = {};
+      const conn = {
+        peer: id,
+        open: true,
+        on(ev: string, cb: (...args: unknown[]) => void) {
+          handlers[ev] = handlers[ev] ?? [];
+          handlers[ev]!.push(cb);
+        },
+        emit(ev: string, ...args: unknown[]) {
+          for (const cb of handlers[ev] ?? []) cb(...args);
+        },
+        send() {},
+        close() {
+          this.open = false;
+        },
+      };
+      peer.emit('connection', conn);
+      conn.emit('open');
+      conn.emit('data', { kind: 'JOIN', playerName: id });
+    }
+
+    expect(views.at(-1)!.players).toHaveLength(3);
+    expect(views.at(-1)!.phase).toBe('lobby');
+
+    expect(session.startGame()).toBe(true);
+    expect(['playing', 'awaiting_responses']).toContain(views.at(-1)!.phase);
 
     session.destroy();
   });
@@ -184,7 +233,7 @@ describe('HostSession の CPU 統合', () => {
   });
 
   it('追加した CPU は対局開始後も手番を打つ', () => {
-    const { session, drain, views } = createSession(3, 4);
+    const { session, drain, views } = createSession(3, 4, true);
     session.start();
     session.addCpu(); // 既に揃っていれば何も起きない
     drain(2000);

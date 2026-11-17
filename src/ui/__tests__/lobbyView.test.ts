@@ -201,12 +201,11 @@ describe('renderWaitingRoom（CPU の後入れ）', () => {
     expect(clickByText(root, '半荘戦')).toBe(true);
     expect(onUpdateRuleConfig).toHaveBeenCalledWith({ gameLength: 'hanchan' });
 
-    // ON/OFF トグル群（トビ終了・喰いタン・後付け・本場加算・ダブロン・喰い替え禁止・CPUやさしめ）
-    const offButtons = [...root.querySelectorAll('button')].filter((b) =>
-      b.textContent?.startsWith('OFF'),
-    );
-    expect(offButtons.length).toBeGreaterThanOrEqual(7);
-    offButtons[1]!.click(); // 喰いタン OFF
+    // ON/OFF トグルスイッチ群（トビ終了・喰いタン・後付け・本場加算・ダブロン・喰い替え禁止・CPUやさしめ）
+    const switches = [...root.querySelectorAll<HTMLButtonElement>('[role="switch"].toggle-switch')];
+    expect(switches.length).toBeGreaterThanOrEqual(7);
+    expect(switches[1]!.getAttribute('aria-checked')).toBe('true');
+    switches[1]!.click(); // 喰いタン ON -> OFF
     expect(onUpdateRuleConfig).toHaveBeenCalledWith({ allowKuitan: false });
 
     // ゲスト視点では設定パネルを出さない
@@ -226,5 +225,56 @@ describe('renderWaitingRoom（CPU の後入れ）', () => {
     expect(guestRoot.querySelector('.lobby-settings-panel')).toBeNull();
 
     session.destroy();
+  });
+
+  it('ホストの開始ボタンは人数不足で無効・人数充足で有効になり、ゲストには表示しない', () => {
+    const onStartGame = vi.fn();
+    const { session: sPartial, latest: latestPartial } = lobbySession(1);
+    sPartial.start();
+
+    const partialRoot = document.createElement('div');
+    renderWaitingRoom(partialRoot, latestPartial(), {
+      onCreateRoom: () => {},
+      onJoinRoom: () => {},
+      onStartLocalGame: () => {},
+      onLeaveLobby: () => {},
+      onStartGame,
+    });
+    const partialStart = partialRoot.querySelector<HTMLButtonElement>('.lobby-start-btn')!;
+    expect(partialStart).not.toBeNull();
+    expect(partialStart.disabled).toBe(true);
+
+    const { session: sFull, latest: latestFull } = lobbySession(3);
+    sFull.start();
+    const fullRoot = document.createElement('div');
+    renderWaitingRoom(fullRoot, latestFull(), {
+      onCreateRoom: () => {},
+      onJoinRoom: () => {},
+      onStartLocalGame: () => {},
+      onLeaveLobby: () => {},
+      onStartGame,
+    });
+    const fullStart = fullRoot.querySelector<HTMLButtonElement>('.lobby-start-btn')!;
+    expect(fullStart.disabled).toBe(false);
+    fullStart.click();
+    expect(onStartGame).toHaveBeenCalledTimes(1);
+
+    const guestRoot = document.createElement('div');
+    const view = latestFull();
+    renderWaitingRoom(
+      guestRoot,
+      { ...view, viewerPlayerId: view.players[1]!.playerId },
+      {
+        onCreateRoom: () => {},
+        onJoinRoom: () => {},
+        onStartLocalGame: () => {},
+        onLeaveLobby: () => {},
+        onStartGame,
+      },
+    );
+    expect(guestRoot.querySelector('.lobby-start-btn')).toBeNull();
+
+    sPartial.destroy();
+    sFull.destroy();
   });
 });

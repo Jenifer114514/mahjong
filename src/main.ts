@@ -116,6 +116,7 @@ class MahjongApp {
     ruleConfig: RuleConfig,
     cpuCount = 0,
     offline = false,
+    autoStart = false,
   ): void {
     this.cleanupSession();
     this.busy = true;
@@ -165,6 +166,7 @@ class MahjongApp {
       cpuCount,
       cpuDelayMs: 650,
       offline,
+      autoStart,
     });
 
     this.activeSession = { role: 'host', session: host };
@@ -177,7 +179,7 @@ class MahjongApp {
     ruleConfig: RuleConfig,
     cpuCount: number,
   ): void {
-    this.createRoom(playerName, ruleConfig, cpuCount, true);
+    this.createRoom(playerName, ruleConfig, cpuCount, true, true);
   }
 
   /** ロビーに CPU を後から追加する（ホストの HostSession のみ） */
@@ -934,30 +936,31 @@ class MahjongApp {
     label.innerHTML =
       '<strong>フル画面表示</strong><span class="hub-sub">画面全体を広く使って対局します</span>';
 
-    const controls = document.createElement('div');
-    controls.className = 'segmented setting-toggle-controls';
-
     const active = this.isFullscreenActive();
-    const onBtn = document.createElement('button');
-    onBtn.type = 'button';
-    onBtn.className = `seg-btn${active ? ' is-active' : ''}`;
-    onBtn.textContent = 'する';
-    onBtn.setAttribute('aria-pressed', active ? 'true' : 'false');
-    onBtn.addEventListener('click', () => {
-      void this.setFullscreen(true);
+    const toggleBtn = document.createElement('button');
+    toggleBtn.type = 'button';
+    toggleBtn.className = `toggle-switch setting-toggle-controls${active ? ' is-on' : ''}`;
+    toggleBtn.setAttribute('role', 'switch');
+    toggleBtn.setAttribute('aria-checked', active ? 'true' : 'false');
+    toggleBtn.setAttribute('aria-label', 'フル画面表示');
+
+    const track = document.createElement('span');
+    track.className = 'toggle-track';
+    track.setAttribute('aria-hidden', 'true');
+    const thumb = document.createElement('span');
+    thumb.className = 'toggle-thumb';
+    track.appendChild(thumb);
+
+    const stateText = document.createElement('span');
+    stateText.className = 'toggle-state-text';
+    stateText.textContent = active ? 'ON' : 'OFF';
+
+    toggleBtn.append(track, stateText);
+    toggleBtn.addEventListener('click', () => {
+      void this.setFullscreen(!active);
     });
 
-    const offBtn = document.createElement('button');
-    offBtn.type = 'button';
-    offBtn.className = `seg-btn${!active ? ' is-active' : ''}`;
-    offBtn.textContent = 'しない';
-    offBtn.setAttribute('aria-pressed', !active ? 'true' : 'false');
-    offBtn.addEventListener('click', () => {
-      void this.setFullscreen(false);
-    });
-
-    controls.append(onBtn, offBtn);
-    row.append(label, controls);
+    row.append(label, toggleBtn);
     panel.append(header, row);
 
     if (this.fullscreenError) {

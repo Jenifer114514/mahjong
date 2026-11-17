@@ -52,38 +52,44 @@ function createOnOffToggleField(params: {
   const field = document.createElement('div');
   field.className = 'field rule-toggle-field';
 
-  const lbl = document.createElement('label');
+  const meta = document.createElement('div');
+  meta.className = 'rule-toggle-meta';
+
+  const lbl = document.createElement('span');
+  lbl.className = 'rule-toggle-label';
   lbl.textContent = params.label;
 
-  const seg = document.createElement('div');
-  seg.className = 'segmented';
+  const subSpan = document.createElement('span');
+  subSpan.className = 'seg-sub rule-toggle-sub';
+  subSpan.textContent = params.value ? params.onSub : params.offSub;
 
-  const options = [
-    { val: true, title: 'ON', sub: params.onSub },
-    { val: false, title: 'OFF', sub: params.offSub },
-  ];
-  for (const opt of options) {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = `seg-btn seg-btn-sm${params.value === opt.val ? ' is-active' : ''}`;
-    btn.setAttribute('aria-pressed', params.value === opt.val ? 'true' : 'false');
-    btn.disabled = Boolean(params.disabled);
+  meta.append(lbl, subSpan);
 
-    const titleSpan = document.createElement('span');
-    titleSpan.textContent = opt.title;
-    const subSpan = document.createElement('span');
-    subSpan.className = 'seg-sub';
-    subSpan.textContent = opt.sub;
+  const toggleBtn = document.createElement('button');
+  toggleBtn.type = 'button';
+  toggleBtn.className = `toggle-switch${params.value ? ' is-on' : ''}`;
+  toggleBtn.setAttribute('role', 'switch');
+  toggleBtn.setAttribute('aria-checked', params.value ? 'true' : 'false');
+  toggleBtn.setAttribute('aria-label', params.label);
+  toggleBtn.disabled = Boolean(params.disabled);
 
-    btn.append(titleSpan, subSpan);
-    btn.addEventListener('click', () => {
-      if (params.value === opt.val) return;
-      params.onChange(opt.val);
-    });
-    seg.appendChild(btn);
-  }
+  const track = document.createElement('span');
+  track.className = 'toggle-track';
+  track.setAttribute('aria-hidden', 'true');
+  const thumb = document.createElement('span');
+  thumb.className = 'toggle-thumb';
+  track.appendChild(thumb);
 
-  field.append(lbl, seg);
+  const stateText = document.createElement('span');
+  stateText.className = 'toggle-state-text';
+  stateText.textContent = params.value ? 'ON' : 'OFF';
+
+  toggleBtn.append(track, stateText);
+  toggleBtn.addEventListener('click', () => {
+    params.onChange(!params.value);
+  });
+
+  field.append(meta, toggleBtn);
   return field;
 }
 
@@ -592,22 +598,25 @@ export function renderWaitingRoom(
   card.appendChild(slots);
 
   const cpuPlayers = view.players.filter((p) => p.playerId.startsWith(CPU_PLAYER_ID_PREFIX));
+  const isFull = view.players.length === rules.playerCount;
   const info = document.createElement('p');
   info.className = 'hub-sub';
-  info.textContent =
-    view.players.length === rules.playerCount
-      ? '参加人数が揃っています。ホストが「対局を開始する」を押すと対局が始まります。'
-      : cpuPlayers.length > 0
-        ? `参加人数（${view.players.length} / ${rules.playerCount}人・うち CPU ${cpuPlayers.length}体）が揃うと自動的に対局が始まります。`
-        : `参加人数（${view.players.length} / ${rules.playerCount}人）が揃うと自動的に対局が始まります。`;
+  info.textContent = isFull
+    ? isHost
+      ? '参加人数が揃っています。「対局を開始する」を押すと対局が始まります。'
+      : '参加人数が揃いました。ホストが「対局を開始する」を押すのをお待ちください。'
+    : cpuPlayers.length > 0
+      ? `参加人数（${view.players.length} / ${rules.playerCount}人・うち CPU ${cpuPlayers.length}体）が揃ったら、ホストが「対局を開始する」を押して対局を始めます。`
+      : `参加人数（${view.players.length} / ${rules.playerCount}人）が揃ったら、ホストが「対局を開始する」を押して対局を始めます。`;
   card.appendChild(info);
 
-  // 人数が揃っている待機ロビーからホストが開始できるボタン
-  if (isHost && view.players.length === rules.playerCount && handlers.onStartGame) {
+  // ホストは人数が揃った状態で開始ボタンを押して対局を開始する
+  if (isHost && handlers.onStartGame) {
     const startBtn = document.createElement('button');
     startBtn.type = 'button';
-    startBtn.className = 'btn btn-primary';
+    startBtn.className = 'btn btn-primary lobby-start-btn';
     startBtn.style.marginBottom = '10px';
+    startBtn.disabled = !isFull;
     startBtn.textContent = '対局を開始する';
     startBtn.addEventListener('click', () => handlers.onStartGame?.());
     card.appendChild(startBtn);
