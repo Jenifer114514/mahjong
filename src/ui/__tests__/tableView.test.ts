@@ -428,4 +428,66 @@ describe('renderGameTable（横画面レイアウト）', () => {
     expect(bar!.textContent).toContain('リーチ待機中:');
     expect(bar!.textContent).not.toContain('リーチ中:');
   });
+
+  it('中央コンソールの4方向点数・隅の自風・ドラパネル供託棒・左端クイック操作(理/和/鳴/切)と設定ポップオーバーを描画する', () => {
+    const baseView = toStateView(state4, 'p0', 0);
+    const onToggleAutoAgari = vi.fn();
+    const onToggleAutoNoCall = vi.fn();
+    const onToggleAutoTsumogiri = vi.fn();
+    const onToggleSettings = vi.fn();
+
+    const root = document.createElement('div');
+    renderGameTable(
+      root,
+      baseView,
+      {
+        ...noopHandlers,
+        canLeaveGame: true,
+        onLeaveGame: () => {},
+        onToggleAutoAgari,
+        onToggleAutoNoCall,
+        onToggleAutoTsumogiri,
+        onToggleSettings,
+      },
+      {
+        riichiSelectingMode: false,
+        autoTsumogiriEnabled: true,
+        autoAgariEnabled: false,
+        autoNoCallEnabled: false,
+        settingsOpen: true,
+      },
+    );
+
+    // 左上ドラパネルにドラ表示枠5枚と供託・本場棒がある
+    expect(root.querySelectorAll('.dora-panel-tiles .mj-tile')).toHaveLength(5);
+    expect(root.querySelector('.dora-panel-sticks .stick-riichi')).not.toBeNull();
+    expect(root.querySelector('.dora-panel-sticks .stick-honba')).not.toBeNull();
+
+    // 中央コンソールに4方向スコアと局名・残り枚数（余 XX）がある
+    expect(root.querySelectorAll('.console-scores .console-score')).toHaveLength(4);
+    expect(root.querySelector('.console-core .round-label')!.textContent).toContain('東1局');
+    expect(root.querySelector('.console-core .wall-counter')!.textContent).toMatch(/^余 \d+/);
+
+    // 4人全員にアバターカードがある
+    expect(root.querySelectorAll('.seat-header .seat-avatar')).toHaveLength(4);
+
+    // 左端バー 理/和/鳴/切 の操作が連動する
+    const tabs = Array.from(root.querySelectorAll<HTMLButtonElement>('.table-left-actions .left-action-tab'));
+    expect(tabs.map((t) => t.textContent)).toEqual(['理', '和', '鳴', '切']);
+    tabs[1]!.click();
+    tabs[2]!.click();
+    tabs[3]!.click();
+    expect(onToggleAutoAgari).toHaveBeenCalledWith(true);
+    expect(onToggleAutoNoCall).toHaveBeenCalledWith(true);
+    expect(onToggleAutoTsumogiri).toHaveBeenCalledWith(false);
+
+    // 右上に設定・退出ボタンと設定ポップオーバーが表示される
+    expect(root.querySelector('.table-chrome-settings')).not.toBeNull();
+    expect(root.querySelector('.table-chrome-leave')).not.toBeNull();
+    expect(root.querySelector('.table-settings-popover')).not.toBeNull();
+
+    // 自分の手牌と副露ドックが存在する
+    expect(root.querySelector('.self-hand-dock .self-melds-dock')).not.toBeNull();
+    expect(root.querySelector('.self-hand-dock .hand-area')).not.toBeNull();
+  });
 });
