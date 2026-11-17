@@ -31,8 +31,12 @@ const SEAT_CLASS: Record<SeatSide, string> = {
   right: 'seat-right',
 };
 
+export type RoundEndStep = 'details' | 'scores';
+
 export interface TableHandlers {
   onDiscardTile: (tileId: string) => void;
+  onSelectTile?: (tileId: string | null) => void;
+  onChangeRoundEndStep?: (step: RoundEndStep) => void;
   onCallResponse: (choice: CallResponseChoice) => void;
   onDeclareTsumo: () => void;
   onDeclareRiichi: (tileId: string) => void;
@@ -57,6 +61,8 @@ export interface TableUiState {
   autoTsumogiriEnabled: boolean;
   autoAgariEnabled?: boolean;
   autoNoCallEnabled?: boolean;
+  selectedTileId?: string | null;
+  roundEndStep?: RoundEndStep;
 }
 
 const DEFAULT_TABLE_UI_STATE: TableUiState = {
@@ -64,6 +70,8 @@ const DEFAULT_TABLE_UI_STATE: TableUiState = {
   autoTsumogiriEnabled: true,
   autoAgariEnabled: false,
   autoNoCallEnabled: false,
+  selectedTileId: null,
+  roundEndStep: 'details',
 };
 
 const MELD_TYPE_LABELS: Record<Meld['type'], string> = {
@@ -192,12 +200,37 @@ export function renderGameTable(
     felt.appendChild(doraPanel);
   }
 
+  felt.addEventListener('click', (event) => {
+    if (
+      event.target instanceof Element &&
+      event.target.closest('.hand-area, button')
+    ) {
+      return;
+    }
+    const selected = felt.querySelectorAll<HTMLElement>(
+      '.seat-self .hand-area .mj-tile-selected',
+    );
+    if (selected.length === 0) return;
+    for (const el of selected) {
+      el.classList.remove('mj-tile-selected');
+      el.setAttribute('aria-pressed', 'false');
+    }
+    handlers.onSelectTile?.(null);
+  });
+
   wrapper.appendChild(felt);
   container.appendChild(wrapper);
 
   // 局終了オーバーレイ（和了 / 流局）
   if (view.phase === 'round_end' && view.round) {
-    renderRoundEndOverlay(container, view, isHost, rules.initialPoints, handlers);
+    renderRoundEndOverlay(
+      container,
+      view,
+      isHost,
+      rules.initialPoints,
+      handlers,
+      uiState,
+    );
   }
 }
 
@@ -279,260 +312,300 @@ function renderRoundEndOverlay(
   isHost: boolean,
   initialPoints: number,
   handlers: TableHandlers,
+  uiState: TableUiState = DEFAULT_TABLE_UI_STATE,
 ): void {
   const round = view.round!;
   const overlay = document.createElement('div');
-  overlay.className = 'overlay-panel';
+  overlay.className = 'overlay-panel round-end-panel';
   applyOrientationClass(overlay);
 
-  const heading = document.createElement('h2');
-  heading.style.margin = '0';
-  heading.style.color = 'var(--accent-gold)';
-
   const roundTitle = formatRoundName(round.roundWind, round.kyokuNumber, round.honba);
-  const desc = document.createElement('div');
-  desc.className = 'progression-reason-note';
-
   const isGameClosing = round.nextRoundDecision
     ? round.nextRoundDecision.outcome === 'game_end'
     : round.isTobiEnded || round.roundIndex + 1 >= round.totalRounds;
 
+  let headingLabel = `${roundTitle} 流局（荒牌平局）`;
   if (round.agariResults.length > 0) {
     const first = round.agariResults[0]!;
     if (first.winType === 'tsumo') {
-      heading.textContent = `${roundTitle} ツモ和了`;
+      headingLabel = `${roundTitle} ツモ和了`;
     } else if (round.agariResults.length >= 2) {
-      heading.textContent = `${roundTitle} ダブロン和了`;
+      headingLabel = `${roundTitle} ダブロン和了`;
     } else {
-      heading.textContent = `${roundTitle} ロン和了`;
+      headingLabel = `${roundTitle} ロン和了`;
     }
-
-    if (round.isTobiEnded) {
-      const tobiTag = document.createElement('span');
-      tobiTag.className = 'tobi-badge';
-      tobiTag.textContent = 'トビ終了';
-      heading.appendChild(tobiTag);
-    }
-
-    const cardsWrap = document.createElement('div');
-    cardsWrap.className = 'agari-cards-list';
-    for (const agari of round.agariResults) {
-      cardsWrap.appendChild(renderAgariWinnerCard(agari, view.players, round.dealerIndex));
-    }
-
-    // 局と局の間は「何の役で和了ったか」を最上段で大きく見せる
-    const yakuSummary = renderRoundYakuSummary(round, view.players);
-    if (yakuSummary) {
-      overlay.appendChild(yakuSummary);
-    }
-
-    if (round.uraDoraIndicators.length > 0) {
-      const uraBox = document.createElement('div');
-      uraBox.className = 'ura-dora-box';
-      const uraLabel = document.createElement('span');
-      uraLabel.className = 'hub-sub';
-      uraLabel.textContent = '裏ドラ表示牌:';
-      const uraRow = document.createElement('div');
-      uraRow.className = 'dora-tiles-row';
-      for (const indicator of round.uraDoraIndicators) {
-        uraRow.appendChild(createTileElement(indicator, { small: true }));
-      }
-      uraBox.append(uraLabel, uraRow);
-      cardsWrap.appendChild(uraBox);
-    }
-
-    if (round.kyotakuPointsAwarded > 0 && round.kyotakuWinnerPlayerId) {
-      const kWinner = view.players.find(
-        (p) => p.playerId === round.kyotakuWinnerPlayerId,
-      );
-      const kyotakuNote = document.createElement('div');
-      kyotakuNote.className = 'kyotaku-award-note';
-      kyotakuNote.textContent = `供託リーチ棒受取: ${kWinner?.name ?? round.kyotakuWinnerPlayerId} (+${round.kyotakuPointsAwarded.toLocaleString()}点)`;
-      cardsWrap.appendChild(kyotakuNote);
-    }
-
-    desc.textContent = formatNextRoundDescription(view, round);
-    overlay.append(heading, cardsWrap, desc);
   } else if (round.ronWinners.length > 0) {
-    // テストフック用フォールバック表示
-    heading.textContent = `${roundTitle} ロン和了`;
-    const winnerList = document.createElement('div');
-    winnerList.className = 'ron-winners-list';
-
-    for (const winner of round.ronWinners) {
-      const winnerPlayer = view.players.find(
-        (p) => p.playerId === winner.playerId,
-      );
-      const loserPlayer = view.players.find(
-        (p) => p.seatIndex === winner.fromSeatIndex,
-      );
-      const item = document.createElement('div');
-      item.className = 'ron-winner-item';
-
-      const text = document.createElement('span');
-      text.textContent = `${winnerPlayer?.name ?? winner.playerId}（${loserPlayer?.name ?? ''} からロン）`;
-
-      item.append(text, createTileElement(winner.winningTile, { small: true }));
-      winnerList.appendChild(item);
-    }
-
-    desc.textContent = formatNextRoundDescription(view, round);
-    overlay.append(heading, winnerList, desc);
+    headingLabel = `${roundTitle} ロン和了`;
   } else if (round.abortiveDrawReason) {
     const meta = ABORTIVE_DRAW_META[round.abortiveDrawReason];
-    heading.textContent = `${roundTitle} 途中流局（${meta.title}）`;
-    overlay.appendChild(heading);
+    headingLabel = `${roundTitle} 途中流局（${meta.title}）`;
+  }
 
-    if (
-      round.abortiveDrawReason === 'kyuushu_kyuuhai' &&
-      round.abortiveDrawPlayerId &&
-      round.revealedHands[round.abortiveDrawPlayerId]
-    ) {
-      const declarer = view.players.find(
-        (p) => p.playerId === round.abortiveDrawPlayerId,
-      );
-      const revealCard = document.createElement('div');
-      revealCard.className = 'agari-result-card';
-      const who = document.createElement('div');
-      who.className = 'agari-who';
-      who.textContent = `${declarer?.name ?? round.abortiveDrawPlayerId} が九種九牌を宣言（開示手牌）`;
-      const tilesRow = document.createElement('div');
-      tilesRow.className = 'agari-tiles-row';
-      for (const tile of round.revealedHands[round.abortiveDrawPlayerId]!) {
-        tilesRow.appendChild(createTileElement(tile, { small: true }));
-      }
-      revealCard.append(who, tilesRow);
-      overlay.appendChild(revealCard);
-    }
+  let currentStep: RoundEndStep = uiState.roundEndStep ?? 'details';
 
-    if (view.kyotakuCount > 0) {
-      const rules = deriveRules(view.ruleConfig);
-      const kyotakuNote = document.createElement('div');
-      kyotakuNote.className = 'kyotaku-award-note';
-      kyotakuNote.textContent = `供託リーチ棒 ${view.kyotakuCount}本（${(view.kyotakuCount * rules.riichiStickPoints).toLocaleString()}点）は次局へ持ち越されます。`;
-      overlay.appendChild(kyotakuNote);
-    }
+  const setStep = (nextStep: RoundEndStep): void => {
+    currentStep = nextStep;
+    renderStepBody(nextStep);
+    handlers.onChangeRoundEndStep?.(nextStep);
+  };
 
-    desc.textContent = `${meta.description} ${formatNextRoundDescription(view, round)}`;
-    overlay.appendChild(desc);
-  } else {
-    heading.textContent = `${roundTitle} 流局（荒牌平局）`;
+  const renderStepBody = (step: RoundEndStep): void => {
+    overlay.innerHTML = '';
+    overlay.dataset.resultStep = step;
+
+    const headerRow = document.createElement('div');
+    headerRow.className = 'round-end-header-row';
+
+    const heading = document.createElement('h2');
+    heading.style.margin = '0';
+    heading.style.color = 'var(--accent-gold)';
+    heading.textContent = headingLabel;
+
     if (round.isTobiEnded) {
       const tobiTag = document.createElement('span');
       tobiTag.className = 'tobi-badge';
       tobiTag.textContent = 'トビ終了';
       heading.appendChild(tobiTag);
     }
-    overlay.appendChild(heading);
 
-    // テンパイ／ノーテン判定とテンパイ者の手牌開示
-    const tenpaiSet = new Set(round.tenpaiPlayerIds);
-    const tenpaiWrap = document.createElement('div');
-    tenpaiWrap.className = 'tenpai-cards-list';
+    const headerRight = document.createElement('div');
+    headerRight.className = 'round-end-step-controls';
 
-    for (const p of view.players) {
-      const isTenpai = tenpaiSet.has(p.playerId);
-      const isOya = p.seatIndex === round.dealerIndex;
-      const delta = round.roundScoreDeltas[p.playerId] ?? 0;
-      const deltaStr =
-        delta > 0
-          ? `+${delta.toLocaleString()}点`
-          : delta < 0
-            ? `${delta.toLocaleString()}点`
-            : '±0点';
+    const stepPill = document.createElement('span');
+    stepPill.className = 'round-step-pill';
+    stepPill.textContent =
+      step === 'details'
+        ? round.agariResults.length > 0
+          ? '1 / 2 役・裏ドラ'
+          : '1 / 2 結果詳細'
+        : '2 / 2 点数移動';
+    headerRight.appendChild(stepPill);
 
-      const card = document.createElement('div');
-      card.className = 'agari-result-card';
+    if (step === 'scores') {
+      const backBtn = document.createElement('button');
+      backBtn.type = 'button';
+      backBtn.className = 'btn btn-secondary round-step-back-btn';
+      backBtn.textContent =
+        round.agariResults.length > 0 ? '← 役・裏ドラ' : '← 結果詳細';
+      backBtn.addEventListener('click', () => setStep('details'));
+      headerRight.appendChild(backBtn);
+    }
 
-      const header = document.createElement('div');
-      header.className = 'agari-header';
+    headerRow.append(heading, headerRight);
+    overlay.appendChild(headerRow);
 
-      const who = document.createElement('div');
-      who.className = 'agari-who';
-      who.textContent = `${p.name}（${isOya ? '親' : '子'}）`;
-
-      const statusGroup = document.createElement('div');
-      statusGroup.style.display = 'flex';
-      statusGroup.style.alignItems = 'center';
-      statusGroup.style.gap = '8px';
-
-      const badge = document.createElement('span');
-      badge.className = isTenpai ? 'tenpai-badge' : 'noten-badge';
-      badge.textContent = isTenpai ? 'テンパイ' : 'ノーテン';
-
-      const deltaSpan = document.createElement('span');
-      deltaSpan.className =
-        delta > 0 ? 'delta-pos' : delta < 0 ? 'delta-neg' : 'hub-sub';
-      deltaSpan.textContent = deltaStr;
-
-      statusGroup.append(badge, deltaSpan);
-      header.append(who, statusGroup);
-      card.appendChild(header);
-
-      const revealed = round.revealedHands[p.playerId];
-      if (isTenpai && revealed) {
-        const tilesRow = document.createElement('div');
-        tilesRow.className = 'agari-tiles-row';
-        for (const tile of revealed) {
-          tilesRow.appendChild(createTileElement(tile, { small: true }));
-        }
-        for (const meld of p.melds) {
-          tilesRow.appendChild(
-            renderMeldGroup(meld, { ankanHidden: true, small: true }),
+    if (step === 'details') {
+      if (round.agariResults.length > 0) {
+        const cardsWrap = document.createElement('div');
+        cardsWrap.className = 'agari-cards-list';
+        for (const agari of round.agariResults) {
+          cardsWrap.appendChild(
+            renderAgariWinnerCard(agari, view.players, round.dealerIndex),
           );
         }
-        if (p.kitaTiles.length > 0) {
-          tilesRow.appendChild(renderKitaGroup(p.kitaTiles, true));
+        overlay.appendChild(cardsWrap);
+
+        if (round.uraDoraIndicators.length > 0) {
+          const uraBox = document.createElement('div');
+          uraBox.className = 'ura-dora-box';
+          const uraLabel = document.createElement('span');
+          uraLabel.className = 'hub-sub';
+          uraLabel.textContent = '裏ドラ表示牌:';
+          const uraRow = document.createElement('div');
+          uraRow.className = 'dora-tiles-row';
+          for (const indicator of round.uraDoraIndicators) {
+            uraRow.appendChild(createTileElement(indicator, { small: true }));
+          }
+          uraBox.append(uraLabel, uraRow);
+          overlay.appendChild(uraBox);
         }
-        card.appendChild(tilesRow);
+      } else if (round.ronWinners.length > 0) {
+        const winnerList = document.createElement('div');
+        winnerList.className = 'ron-winners-list';
+
+        for (const winner of round.ronWinners) {
+          const winnerPlayer = view.players.find(
+            (p) => p.playerId === winner.playerId,
+          );
+          const loserPlayer = view.players.find(
+            (p) => p.seatIndex === winner.fromSeatIndex,
+          );
+          const item = document.createElement('div');
+          item.className = 'ron-winner-item';
+
+          const text = document.createElement('span');
+          text.textContent = `${winnerPlayer?.name ?? winner.playerId}（${loserPlayer?.name ?? ''} からロン）`;
+
+          item.append(text, createTileElement(winner.winningTile, { small: true }));
+          winnerList.appendChild(item);
+        }
+        overlay.appendChild(winnerList);
+      } else if (round.abortiveDrawReason) {
+        const meta = ABORTIVE_DRAW_META[round.abortiveDrawReason];
+        const abortDesc = document.createElement('div');
+        abortDesc.className = 'progression-reason-note';
+        abortDesc.textContent = meta.description;
+        overlay.appendChild(abortDesc);
+
+        if (
+          round.abortiveDrawReason === 'kyuushu_kyuuhai' &&
+          round.abortiveDrawPlayerId &&
+          round.revealedHands[round.abortiveDrawPlayerId]
+        ) {
+          const declarer = view.players.find(
+            (p) => p.playerId === round.abortiveDrawPlayerId,
+          );
+          const revealCard = document.createElement('div');
+          revealCard.className = 'agari-result-card';
+          const who = document.createElement('div');
+          who.className = 'agari-who';
+          who.textContent = `${declarer?.name ?? round.abortiveDrawPlayerId} が九種九牌を宣言（開示手牌）`;
+          const tilesRow = document.createElement('div');
+          tilesRow.className = 'agari-tiles-row';
+          for (const tile of round.revealedHands[round.abortiveDrawPlayerId]!) {
+            tilesRow.appendChild(createTileElement(tile, { small: true }));
+          }
+          revealCard.append(who, tilesRow);
+          overlay.appendChild(revealCard);
+        }
       } else {
-        const hiddenNote = document.createElement('div');
-        hiddenNote.className = 'hub-sub';
-        hiddenNote.textContent = '手牌非公開';
-        card.appendChild(hiddenNote);
+        const tenpaiSet = new Set(round.tenpaiPlayerIds);
+        const tenpaiWrap = document.createElement('div');
+        tenpaiWrap.className = 'tenpai-cards-list';
+
+        for (const p of view.players) {
+          const isTenpai = tenpaiSet.has(p.playerId);
+          const isOya = p.seatIndex === round.dealerIndex;
+          const delta = round.roundScoreDeltas[p.playerId] ?? 0;
+          const deltaStr =
+            delta > 0
+              ? `+${delta.toLocaleString()}点`
+              : delta < 0
+                ? `${delta.toLocaleString()}点`
+                : '±0点';
+
+          const card = document.createElement('div');
+          card.className = 'agari-result-card';
+
+          const header = document.createElement('div');
+          header.className = 'agari-header';
+
+          const who = document.createElement('div');
+          who.className = 'agari-who';
+          who.textContent = `${p.name}（${isOya ? '親' : '子'}）`;
+
+          const statusGroup = document.createElement('div');
+          statusGroup.style.display = 'flex';
+          statusGroup.style.alignItems = 'center';
+          statusGroup.style.gap = '8px';
+
+          const badge = document.createElement('span');
+          badge.className = isTenpai ? 'tenpai-badge' : 'noten-badge';
+          badge.textContent = isTenpai ? 'テンパイ' : 'ノーテン';
+
+          const deltaSpan = document.createElement('span');
+          deltaSpan.className =
+            delta > 0 ? 'delta-pos' : delta < 0 ? 'delta-neg' : 'hub-sub';
+          deltaSpan.textContent = deltaStr;
+
+          statusGroup.append(badge, deltaSpan);
+          header.append(who, statusGroup);
+          card.appendChild(header);
+
+          const revealed = round.revealedHands[p.playerId];
+          if (isTenpai && revealed) {
+            const tilesRow = document.createElement('div');
+            tilesRow.className = 'agari-tiles-row';
+            for (const tile of revealed) {
+              tilesRow.appendChild(createTileElement(tile, { small: true }));
+            }
+            for (const meld of p.melds) {
+              tilesRow.appendChild(
+                renderMeldGroup(meld, { ankanHidden: true, small: true }),
+              );
+            }
+            if (p.kitaTiles.length > 0) {
+              tilesRow.appendChild(renderKitaGroup(p.kitaTiles, true));
+            }
+            card.appendChild(tilesRow);
+          } else {
+            const hiddenNote = document.createElement('div');
+            hiddenNote.className = 'hub-sub';
+            hiddenNote.textContent = '手牌非公開';
+            card.appendChild(hiddenNote);
+          }
+
+          tenpaiWrap.appendChild(card);
+        }
+        overlay.appendChild(tenpaiWrap);
       }
 
-      tenpaiWrap.appendChild(card);
+      const toScoresBtn = document.createElement('button');
+      toScoresBtn.type = 'button';
+      toScoresBtn.className = 'btn btn-primary round-result-next-btn';
+      toScoresBtn.textContent = '次へ';
+      toScoresBtn.addEventListener('click', () => setStep('scores'));
+      overlay.appendChild(toScoresBtn);
+      return;
     }
-    overlay.appendChild(tenpaiWrap);
 
-    if (view.kyotakuCount > 0) {
+    // Step 2: 点数の移行表示（供託・次局案内・スコア増減テーブル・次局へボタン）
+    const scoresWrap = document.createElement('div');
+    scoresWrap.className = 'round-score-transition';
+
+    if (round.agariResults.length > 0) {
+      if (round.kyotakuPointsAwarded > 0 && round.kyotakuWinnerPlayerId) {
+        const kWinner = view.players.find(
+          (p) => p.playerId === round.kyotakuWinnerPlayerId,
+        );
+        const kyotakuNote = document.createElement('div');
+        kyotakuNote.className = 'kyotaku-award-note';
+        kyotakuNote.textContent = `供託リーチ棒受取: ${kWinner?.name ?? round.kyotakuWinnerPlayerId} (+${round.kyotakuPointsAwarded.toLocaleString()}点)`;
+        scoresWrap.appendChild(kyotakuNote);
+      }
+    } else if (view.kyotakuCount > 0) {
       const rules = deriveRules(view.ruleConfig);
       const kyotakuNote = document.createElement('div');
       kyotakuNote.className = 'kyotaku-award-note';
-      kyotakuNote.textContent = isGameClosing
-        ? `供託リーチ棒 ${view.kyotakuCount}本（${(view.kyotakuCount * rules.riichiStickPoints).toLocaleString()}点）は終局時の最終トップに加算されます。`
-        : `供託リーチ棒 ${view.kyotakuCount}本（${(view.kyotakuCount * rules.riichiStickPoints).toLocaleString()}点）は次局へ持ち越されます。`;
-      overlay.appendChild(kyotakuNote);
+      kyotakuNote.textContent =
+        !round.abortiveDrawReason && isGameClosing
+          ? `供託リーチ棒 ${view.kyotakuCount}本（${(view.kyotakuCount * rules.riichiStickPoints).toLocaleString()}点）は終局時の最終トップに加算されます。`
+          : `供託リーチ棒 ${view.kyotakuCount}本（${(view.kyotakuCount * rules.riichiStickPoints).toLocaleString()}点）は次局へ持ち越されます。`;
+      scoresWrap.appendChild(kyotakuNote);
     }
 
+    const desc = document.createElement('div');
+    desc.className = 'progression-reason-note';
     desc.textContent = formatNextRoundDescription(view, round);
-    overlay.appendChild(desc);
-  }
+    scoresWrap.appendChild(desc);
 
-  overlay.appendChild(
-    buildScoreTable(
-      view.players,
-      initialPoints,
-      false,
-      round.roundScoreDeltas,
-      view.initialDealerIndex,
-    ),
-  );
+    scoresWrap.appendChild(
+      buildScoreTable(
+        view.players,
+        initialPoints,
+        false,
+        round.roundScoreDeltas,
+        view.initialDealerIndex,
+      ),
+    );
+    overlay.appendChild(scoresWrap);
 
-  if (isHost) {
-    const nextBtn = document.createElement('button');
-    nextBtn.type = 'button';
-    nextBtn.className = 'btn btn-primary';
-    nextBtn.textContent = isGameClosing ? '結果を見る' : '次の局へ';
-    nextBtn.addEventListener('click', handlers.onAdvanceRound);
-    overlay.appendChild(nextBtn);
-  } else {
-    const waitMsg = document.createElement('div');
-    waitMsg.className = 'hub-sub';
-    waitMsg.textContent = 'ホストが次へ進めるのを待っています...';
-    overlay.appendChild(waitMsg);
-  }
+    if (isHost) {
+      const nextBtn = document.createElement('button');
+      nextBtn.type = 'button';
+      nextBtn.className = 'btn btn-primary';
+      nextBtn.textContent = isGameClosing ? '結果を見る' : '次の局へ';
+      nextBtn.addEventListener('click', handlers.onAdvanceRound);
+      overlay.appendChild(nextBtn);
+    } else {
+      const waitMsg = document.createElement('div');
+      waitMsg.className = 'hub-sub';
+      waitMsg.textContent = 'ホストが次へ進めるのを待っています...';
+      overlay.appendChild(waitMsg);
+    }
+  };
+
+  renderStepBody(currentStep);
 
   const backdrop = document.createElement('div');
   backdrop.className = 'overlay-backdrop overlay-backdrop-modal';
@@ -591,81 +664,6 @@ function renderKitaGroup(kitaTiles: readonly { id: string; kind: TileKind }[], s
   }
   group.appendChild(tiles);
   return group;
-}
-
-/**
- * 局間（和了と次局のあいだ）に表示する役のまとめ。
- * どの役で和了ったかを一目で確認できるよう、和了者ごとに 1 行で並べる。
- */
-function renderRoundYakuSummary(
-  round: RoundView,
-  players: readonly PublicPlayerView[],
-): HTMLElement | null {
-  if (round.agariResults.length === 0) return null;
-
-  const box = document.createElement('div');
-  box.className = 'round-yaku-summary';
-
-  const title = document.createElement('div');
-  title.className = 'round-yaku-title';
-  title.textContent = '和了役';
-  box.appendChild(title);
-
-  for (const agari of round.agariResults) {
-    const winner = players.find((p) => p.playerId === agari.playerId);
-    const isOya = agari.seatIndex === round.dealerIndex;
-
-    const row = document.createElement('div');
-    row.className = 'round-yaku-row';
-
-    const who = document.createElement('div');
-    who.className = 'round-yaku-who';
-    who.textContent = `${winner?.name ?? agari.playerId}（${isOya ? '親' : '子'}）`;
-
-    const chips = document.createElement('div');
-    chips.className = 'yaku-list round-yaku-chips';
-
-    for (const y of agari.yaku) {
-      const chip = document.createElement('span');
-      chip.className = `yaku-chip round-yaku-chip${y.isYakuman ? ' is-yakuman' : ''}`;
-      chip.textContent = y.isYakuman
-        ? (y.yakumanMultiplier ?? 1) >= 2
-          ? `${y.name} ダブル役満`
-          : `${y.name} 役満`
-        : `${y.name} ${y.han}翻`;
-      chips.appendChild(chip);
-    }
-
-    if (!agari.isYakuman && agari.doraCount > 0) {
-      const chip = document.createElement('span');
-      chip.className = 'yaku-chip round-yaku-chip is-dora';
-      chip.textContent = `ドラ ${agari.doraCount}翻`;
-      chips.appendChild(chip);
-    }
-    if (!agari.isYakuman && agari.uraDoraCount > 0) {
-      const chip = document.createElement('span');
-      chip.className = 'yaku-chip round-yaku-chip is-dora';
-      chip.textContent = `裏ドラ ${agari.uraDoraCount}翻`;
-      chips.appendChild(chip);
-    }
-    if (!agari.isYakuman && agari.kitaCount > 0) {
-      const chip = document.createElement('span');
-      chip.className = 'yaku-chip round-yaku-chip is-dora';
-      chip.textContent = `抜北 ${agari.kitaCount}翻`;
-      chips.appendChild(chip);
-    }
-
-    const total = document.createElement('div');
-    total.className = 'round-yaku-total';
-    total.textContent = agari.isYakuman
-      ? `${agari.scoreLabel} / ${agari.pointsAwarded.toLocaleString()}点`
-      : `${agari.han}翻 ${agari.fu}符 ・ ${agari.scoreLabel} / ${agari.pointsAwarded.toLocaleString()}点`;
-
-    row.append(who, chips, total);
-    box.appendChild(row);
-  }
-
-  return box;
 }
 
 function renderAgariWinnerCard(
@@ -1619,6 +1617,29 @@ function renderSelfSeat(
   const forbiddenSet = new Set(canDiscardNow ? view.kuikaeForbiddenKinds : []);
   const handArea = document.createElement('div');
   handArea.className = 'hand-area';
+  const initialSelectedId = canDiscardNow ? (uiState.selectedTileId ?? null) : null;
+
+  const setSelectedTileInDom = (nextId: string | null): void => {
+    const buttons = handArea.querySelectorAll<HTMLElement>('.mj-tile-clickable');
+    for (const btn of buttons) {
+      const isSelected = nextId !== null && btn.dataset.tileId === nextId;
+      btn.classList.toggle('mj-tile-selected', isSelected);
+      btn.setAttribute('aria-pressed', isSelected ? 'true' : 'false');
+    }
+    handlers.onSelectTile?.(nextId);
+  };
+
+  const handleTileTap = (tileId: string, onConfirm: () => void): void => {
+    const currentSelected = handArea
+      .querySelector('.mj-tile-selected')
+      ?.getAttribute('data-tile-id');
+    if (currentSelected === tileId) {
+      setSelectedTileInDom(null);
+      onConfirm();
+      return;
+    }
+    setSelectedTileInDom(tileId);
+  };
 
   for (const tile of view.myHand) {
     if (inRiichiMode) {
@@ -1626,28 +1647,31 @@ function renderSelfSeat(
       handArea.appendChild(
         createTileElement(tile, {
           clickable: isCandidate,
+          selected: isCandidate && initialSelectedId === tile.id,
           disabled: !isCandidate,
           riichiCandidate: isCandidate,
           disabledReason: isCandidate
             ? undefined
             : 'この牌を切っても聴牌にならないためリーチできません',
-          onClick: () => handlers.onDeclareRiichi(tile.id),
+          onClick: () => handleTileTap(tile.id, () => handlers.onDeclareRiichi(tile.id)),
         }),
       );
     } else {
       const lockedByRiichi = canDiscardNow && player.isRiichi;
       const blockedByKuikae = forbiddenSet.has(tile.kind);
       const blocked = lockedByRiichi || blockedByKuikae;
+      const canTap = canDiscardNow && !blocked;
       handArea.appendChild(
         createTileElement(tile, {
-          clickable: canDiscardNow && !blocked,
+          clickable: canTap,
+          selected: canTap && initialSelectedId === tile.id,
           disabled: canDiscardNow && blocked,
           disabledReason: lockedByRiichi
             ? 'リーチ後は手牌を入れ替えられません'
             : blockedByKuikae
               ? '喰い替え禁止のため切れません'
               : undefined,
-          onClick: () => handlers.onDiscardTile(tile.id),
+          onClick: () => handleTileTap(tile.id, () => handlers.onDiscardTile(tile.id)),
         }),
       );
     }
@@ -1663,22 +1687,26 @@ function renderSelfSeat(
       handArea.appendChild(
         createTileElement(drawn, {
           clickable: isCandidate,
+          selected: isCandidate && initialSelectedId === drawn.id,
           disabled: !isCandidate,
           riichiCandidate: isCandidate,
           disabledReason: isCandidate
             ? undefined
             : 'この牌を切っても聴牌にならないためリーチできません',
-          onClick: () => handlers.onDeclareRiichi(drawn.id),
+          onClick: () =>
+            handleTileTap(drawn.id, () => handlers.onDeclareRiichi(drawn.id)),
         }),
       );
     } else {
       const blocked = forbiddenSet.has(drawn.kind);
+      const canTap = canDiscardNow && !blocked;
       handArea.appendChild(
         createTileElement(drawn, {
-          clickable: canDiscardNow && !blocked,
+          clickable: canTap,
+          selected: canTap && initialSelectedId === drawn.id,
           disabled: canDiscardNow && blocked,
           disabledReason: blocked ? '喰い替え禁止のため切れません' : undefined,
-          onClick: () => handlers.onDiscardTile(drawn.id),
+          onClick: () => handleTileTap(drawn.id, () => handlers.onDiscardTile(drawn.id)),
         }),
       );
     }

@@ -54,6 +54,7 @@ export function formatTileLabel(kind: TileKind): string {
 
 export interface TileElementOptions {
   clickable?: boolean;
+  selected?: boolean;
   disabled?: boolean;
   disabledReason?: string;
   tsumogiri?: boolean;
@@ -137,6 +138,10 @@ export function createTileElement(
   el.className = 'mj-tile';
   if (options.clickable && !options.disabled) {
     el.classList.add('mj-tile-clickable');
+    el.setAttribute('aria-pressed', options.selected ? 'true' : 'false');
+    if (options.selected) {
+      el.classList.add('mj-tile-selected');
+    }
   }
   if (options.disabled) {
     el.classList.add('mj-tile-disabled');

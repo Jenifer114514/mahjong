@@ -10,7 +10,7 @@ import {
   renderWaitingRoom,
   type LobbyFormState,
 } from './ui/lobbyView';
-import { renderGameTable } from './ui/tableView';
+import { renderGameTable, type RoundEndStep } from './ui/tableView';
 import { prewarmTileSpriteSheet, waitForTileFonts } from './ui/tileTexture';
 import {
   createRotateOverlay,
@@ -32,6 +32,8 @@ class MahjongApp {
   private busy = false;
   private actionInFlight = false;
   private riichiSelectingMode = false;
+  private selectedDiscardTileId: string | null = null;
+  private roundEndStep: RoundEndStep = 'details';
   private leaveConfirmPending = false;
   private autoTsumogiriEnabled = true;
   private autoAgariEnabled = false;
@@ -214,9 +216,18 @@ class MahjongApp {
   }
 
   private applyStateView(view: StateView): void {
+    const prevView = this.currentView;
     this.stopAutoTsumogiriTimer();
     this.stopAutoAssistTimer();
     this.riichiSelectingMode = false;
+    this.selectedDiscardTileId = null;
+    if (
+      view.phase !== 'round_end' ||
+      prevView?.phase !== 'round_end' ||
+      prevView.round?.roundIndex !== view.round?.roundIndex
+    ) {
+      this.roundEndStep = 'details';
+    }
     this.currentView = view;
     if (
       view.phase === 'awaiting_responses' &&
@@ -369,6 +380,7 @@ class MahjongApp {
     this.stopAutoTsumogiriTimer();
     this.stopAutoAssistTimer();
     this.riichiSelectingMode = false;
+    this.selectedDiscardTileId = null;
     this.actionInFlight = false;
     this.errorBanner = err.message;
     this.render();
@@ -380,6 +392,8 @@ class MahjongApp {
     this.busy = false;
     this.actionInFlight = false;
     this.riichiSelectingMode = false;
+    this.selectedDiscardTileId = null;
+    this.roundEndStep = 'details';
     this.leaveConfirmPending = false;
     this.errorBanner = null;
     this.statusText = '未接続';
@@ -596,38 +610,52 @@ class MahjongApp {
           // 対局中はトップバーを出さないので、離脱手段は卓上に置く
           canLeaveGame: Boolean(this.activeSession),
           onLeaveGame: () => this.confirmLeaveGame(),
+          onSelectTile: (tileId) => {
+            this.selectedDiscardTileId = tileId;
+          },
+          onChangeRoundEndStep: (step) => {
+            this.roundEndStep = step;
+          },
           onDiscardTile: (tileId) => {
+            this.selectedDiscardTileId = null;
             this.stopAutoTsumogiriTimer();
             this.dispatchAction((s) => s.discardTile(tileId));
           },
           onCallResponse: (choice) =>
             this.dispatchAction((s) => s.respondToCall(choice)),
           onDeclareTsumo: () => {
+            this.selectedDiscardTileId = null;
             this.stopAutoTsumogiriTimer();
             this.dispatchAction((s) => s.declareTsumo());
           },
           onDeclareRiichi: (tileId) => {
+            this.selectedDiscardTileId = null;
             this.stopAutoTsumogiriTimer();
             this.riichiSelectingMode = false;
             this.dispatchAction((s) => s.declareRiichi(tileId));
           },
           onDeclareAnkan: (kind) => {
+            this.selectedDiscardTileId = null;
             this.stopAutoTsumogiriTimer();
             this.dispatchAction((s) => s.declareAnkan(kind));
           },
           onDeclareKakan: (tileId) => {
+            this.selectedDiscardTileId = null;
             this.stopAutoTsumogiriTimer();
             this.dispatchAction((s) => s.declareKakan(tileId));
           },
           onDeclareKita: (tileId) => {
+            this.selectedDiscardTileId = null;
             this.stopAutoTsumogiriTimer();
             this.dispatchAction((s) => s.declareKita(tileId));
           },
           onDeclareKyuushuKyuuhai: () => {
+            this.selectedDiscardTileId = null;
             this.stopAutoTsumogiriTimer();
             this.dispatchAction((s) => s.declareKyuushuKyuuhai());
           },
           onToggleRiichiMode: (enabled) => {
+            this.selectedDiscardTileId = null;
             this.riichiSelectingMode = enabled;
             this.render();
           },
@@ -669,6 +697,8 @@ class MahjongApp {
           autoTsumogiriEnabled: this.autoTsumogiriEnabled,
           autoAgariEnabled: this.autoAgariEnabled,
           autoNoCallEnabled: this.autoNoCallEnabled,
+          selectedTileId: this.selectedDiscardTileId,
+          roundEndStep: this.roundEndStep,
         },
       );
     }
