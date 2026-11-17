@@ -72,7 +72,7 @@ class MahjongApp {
       allowAtozuke: true,
       honbaBonus: true,
       joinCode: normalizeRoomCode(roomFromUrl),
-      cpuCount: 3,
+      cpuCount: 0,
       cpuLevel: DEFAULT_CPU_LEVEL,
     };
 
@@ -167,6 +167,26 @@ class MahjongApp {
     if (this.activeSession?.role !== 'host') return;
     this.activeSession.session.removeCpu();
     this.render();
+  }
+
+  /** ルーム作成後にホストがルール設定を更新する */
+  private updateLobbyRules(patch: Partial<RuleConfig>): void {
+    if (this.activeSession?.role !== 'host') return;
+    if (patch.playerCount !== undefined) this.formState.playerCount = patch.playerCount;
+    if (patch.gameLength !== undefined) this.formState.gameLength = patch.gameLength;
+    if (patch.tobi !== undefined) this.formState.tobi = patch.tobi;
+    if (patch.tsumoLoss !== undefined) this.formState.tsumoLoss = patch.tsumoLoss;
+    if (patch.allowKuitan !== undefined) this.formState.allowKuitan = patch.allowKuitan;
+    if (patch.allowAtozuke !== undefined) this.formState.allowAtozuke = patch.allowAtozuke;
+    if (patch.honbaBonus !== undefined) this.formState.honbaBonus = patch.honbaBonus;
+    if (patch.cpuLevel !== undefined) this.formState.cpuLevel = patch.cpuLevel;
+    this.activeSession.session.updateRuleConfig(patch);
+  }
+
+  /** 人数が揃った待機ロビーから対局を開始する */
+  private startLobbyGame(): void {
+    if (this.activeSession?.role !== 'host') return;
+    this.activeSession.session.startGame();
   }
 
   private joinRoom(roomCode: string, playerName: string): void {
@@ -596,6 +616,9 @@ class MahjongApp {
       onLeaveLobby: () => this.returnToLobby(),
       onAddCpu: () => this.addCpuToLobby(),
       onRemoveCpu: () => this.removeCpuFromLobby(),
+      onUpdateRuleConfig: (patch: Partial<RuleConfig>) =>
+        this.updateLobbyRules(patch),
+      onStartGame: () => this.startLobbyGame(),
     };
 
     if (!view) {

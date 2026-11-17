@@ -1227,7 +1227,7 @@ input {
   --dora-tile-h: 53px;
   --dora-panel-w: 234px;
   --dora-panel-h: 126px;
-  --side-hand-inset: 104px;
+  --side-hand-inset: 20px;
   --left-side-hand-inset: 124px;
 
   position: relative;
@@ -1518,7 +1518,11 @@ input {
   line-height: 1.1;
 }
 
-/* 4人卓のバッジ位置 */
+.seat-identity:empty {
+  display: none;
+}
+
+/* 4人卓のバッジ位置（左右席は手牌と河の間へ配置） */
 .seat-orient-top > .seat-header {
   grid-column: 5;
   grid-row: 1 / 3;
@@ -1532,20 +1536,22 @@ input {
 
 .seat-orient-left > .seat-header {
   grid-column: 1;
-  grid-row: 2 / 4;
-  justify-self: start;
-  align-self: start;
-  margin-top: calc(var(--dora-panel-h) - 2px);
-  width: 92px;
+  grid-row: 3;
+  justify-self: end;
+  align-self: center;
+  margin-top: 0;
+  margin-right: clamp(6px, 2vw, 22px);
+  width: 84px;
 }
 
 .seat-orient-right > .seat-header {
   grid-column: 5;
-  grid-row: 2 / 4;
-  justify-self: end;
-  align-self: start;
-  margin-top: 38px;
-  width: 92px;
+  grid-row: 3;
+  justify-self: start;
+  align-self: center;
+  margin-top: 0;
+  margin-left: clamp(6px, 2vw, 22px);
+  width: 84px;
 }
 
 .seat-orient-self > .seat-header {
@@ -2350,12 +2356,29 @@ input {
   cursor: not-allowed;
 }
 
+.lobby-settings-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 12px 0;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.lobby-settings-title {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: var(--accent-gold);
+}
+
 /* ---------- オーバーレイ・和了役表示 ---------- */
 .overlay-backdrop {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 12px;
+  padding: 8px;
 }
 
 .overlay-backdrop-modal {
@@ -2374,9 +2397,57 @@ input {
 
 .overlay-backdrop > .overlay-panel {
   width: min(760px, 100%);
-  max-height: calc(100vh - 24px);
-  max-height: calc(100dvh - 24px);
+  max-height: calc(100vh - 16px);
+  max-height: calc(100dvh - 16px);
   overflow-y: auto;
+}
+
+.overlay-panel.round-end-panel,
+.overlay-panel.finished-panel {
+  padding: 14px 16px;
+  gap: 9px;
+}
+
+.overlay-panel.finished-panel {
+  width: min(640px, 100%);
+}
+
+.overlay-panel.round-end-panel h2,
+.overlay-panel.finished-panel h2 {
+  font-size: 1.15rem;
+  line-height: 1.25;
+}
+
+.overlay-panel .agari-cards-list {
+  gap: 8px;
+}
+
+.overlay-panel .agari-result-card {
+  padding: 9px 12px;
+  gap: 6px;
+}
+
+.overlay-panel .ura-dora-box {
+  padding: 6px 10px;
+}
+
+.overlay-panel .score-table th,
+.overlay-panel .score-table td {
+  padding: 6px 10px;
+}
+
+.overlay-panel .kyotaku-award-note,
+.overlay-panel .progression-reason-note {
+  padding: 5px 10px;
+  font-size: 0.84rem;
+}
+
+@media (min-width: 560px) {
+  .overlay-panel .tenpai-cards-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
 }
 
 .round-end-header-row {
@@ -2412,7 +2483,7 @@ input {
 .round-score-transition {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   animation: roundScoreReveal 0.24s ease-out;
 }
 
@@ -2428,7 +2499,7 @@ input {
 }
 
 .overlay-panel {
-  max-height: calc(100vh - 24px);
+  max-height: calc(100vh - 16px);
   overflow-y: auto;
   scrollbar-width: thin;
 }
@@ -2445,11 +2516,43 @@ input {
     --dora-tile-h: 48px;
     --dora-panel-w: 206px;
     --dora-panel-h: 114px;
-    --side-hand-inset: 88px;
+    --side-hand-inset: 16px;
     --left-side-hand-inset: 112px;
     padding: 6px 14px 8px;
     border-left-width: 10px;
     border-right-width: 10px;
+  }
+
+  .overlay-panel.round-end-panel,
+  .overlay-panel.finished-panel {
+    padding: 11px 14px;
+    gap: 7px;
+  }
+
+  .overlay-panel.round-end-panel h2,
+  .overlay-panel.finished-panel h2 {
+    font-size: 1.02rem;
+  }
+
+  .overlay-panel .mj-tile.mj-tile-sm {
+    width: 26px;
+    height: 36px;
+  }
+
+  .overlay-panel .mj-tile-back.mj-tile-back-meld {
+    width: 26px;
+    height: 36px;
+  }
+
+  .overlay-panel .agari-result-card {
+    padding: 7px 10px;
+    gap: 5px;
+  }
+
+  .overlay-panel .score-table th,
+  .overlay-panel .score-table td {
+    padding: 5px 8px;
+    font-size: 0.9rem;
   }
 
   .mj-tile-clickable.mj-tile-selected,
@@ -2485,7 +2588,7 @@ input {
 
   .seat-orient-left > .seat-header,
   .seat-orient-right > .seat-header {
-    width: 82px;
+    width: 76px;
   }
 
   .seat-orient-top > .seat-header {
@@ -2540,12 +2643,82 @@ input {
     --dora-tile-h: 38px;
     --dora-panel-w: 170px;
     --dora-panel-h: 96px;
-    --side-hand-inset: 76px;
+    --side-hand-inset: 14px;
     --left-side-hand-inset: 96px;
     padding: 4px 10px 6px;
     gap: 3px;
     border-left-width: 8px;
     border-right-width: 8px;
+  }
+
+  .overlay-backdrop {
+    padding: 6px;
+  }
+
+  .overlay-backdrop > .overlay-panel {
+    max-height: calc(100vh - 12px);
+    max-height: calc(100dvh - 12px);
+  }
+
+  .overlay-panel.round-end-panel,
+  .overlay-panel.finished-panel {
+    padding: 9px 12px;
+    gap: 6px;
+  }
+
+  .overlay-panel.round-end-panel h2,
+  .overlay-panel.finished-panel h2 {
+    font-size: 0.94rem;
+  }
+
+  .overlay-panel .mj-tile.mj-tile-sm,
+  .overlay-panel .mj-tile-back.mj-tile-back-meld {
+    width: 22px;
+    height: 30px;
+  }
+
+  .overlay-panel .agari-result-card {
+    padding: 6px 9px;
+    gap: 4px;
+  }
+
+  .overlay-panel .agari-who {
+    font-size: 0.84rem;
+  }
+
+  .overlay-panel .agari-score-badge {
+    font-size: 0.78rem;
+    padding: 2px 8px;
+  }
+
+  .overlay-panel .yaku-chip {
+    font-size: 0.72rem;
+    padding: 2px 7px;
+  }
+
+  .overlay-panel .ura-dora-box {
+    padding: 4px 8px;
+  }
+
+  .overlay-panel .score-table th,
+  .overlay-panel .score-table td {
+    padding: 4px 8px;
+    font-size: 0.84rem;
+  }
+
+  .overlay-panel .kyotaku-award-note,
+  .overlay-panel .progression-reason-note {
+    padding: 4px 8px;
+    font-size: 0.78rem;
+  }
+
+  .overlay-panel .round-score-transition {
+    gap: 5px;
+  }
+
+  .overlay-panel > .btn {
+    padding: 7px 14px;
+    font-size: 0.88rem;
   }
 
   .mj-tile-clickable.mj-tile-selected,
@@ -2594,12 +2767,8 @@ input {
 
   .seat-orient-left > .seat-header,
   .seat-orient-right > .seat-header {
-    width: 72px;
+    width: 68px;
     padding: 3px 4px;
-  }
-
-  .seat-orient-right > .seat-header {
-    margin-top: 46px;
   }
 
   .seat-orient-top > .seat-header,
@@ -2654,7 +2823,7 @@ input {
     --dora-tile-h: 31px;
     --dora-panel-w: 142px;
     --dora-panel-h: 82px;
-    --side-hand-inset: 62px;
+    --side-hand-inset: 10px;
     --left-side-hand-inset: 78px;
     padding: 3px 6px;
     gap: 2px;
@@ -2672,6 +2841,95 @@ input {
       var(--console-size)
       minmax(28px, 1fr)
       auto;
+  }
+
+  .overlay-backdrop {
+    padding: 5px;
+  }
+
+  .overlay-backdrop > .overlay-panel {
+    max-height: calc(100vh - 10px);
+    max-height: calc(100dvh - 10px);
+  }
+
+  .overlay-panel.round-end-panel,
+  .overlay-panel.finished-panel {
+    padding: 7px 11px;
+    gap: 5px;
+  }
+
+  .overlay-panel.round-end-panel h2,
+  .overlay-panel.finished-panel h2 {
+    font-size: 0.88rem;
+  }
+
+  .overlay-panel .mj-tile.mj-tile-sm,
+  .overlay-panel .mj-tile-back.mj-tile-back-meld {
+    width: 19px;
+    height: 26px;
+  }
+
+  .overlay-panel .agari-cards-list,
+  .overlay-panel .tenpai-cards-list {
+    gap: 5px;
+  }
+
+  .overlay-panel .agari-result-card {
+    padding: 5px 8px;
+    gap: 3px;
+  }
+
+  .overlay-panel .agari-who {
+    font-size: 0.78rem;
+  }
+
+  .overlay-panel .agari-score-badge {
+    font-size: 0.72rem;
+    padding: 2px 7px;
+  }
+
+  .overlay-panel .yaku-chip {
+    font-size: 0.68rem;
+    padding: 1.5px 6px;
+  }
+
+  .overlay-panel .hub-sub {
+    font-size: 0.72rem;
+  }
+
+  .overlay-panel .ura-dora-box {
+    padding: 4px 7px;
+  }
+
+  .overlay-panel .round-step-pill {
+    font-size: 0.68rem;
+    padding: 2px 7px;
+  }
+
+  .overlay-panel .round-step-back-btn {
+    padding: 2px 8px;
+    font-size: 0.72rem;
+  }
+
+  .overlay-panel .score-table th,
+  .overlay-panel .score-table td {
+    padding: 3.5px 7px;
+    font-size: 0.78rem;
+  }
+
+  .overlay-panel .kyotaku-award-note,
+  .overlay-panel .progression-reason-note {
+    padding: 3.5px 7px;
+    font-size: 0.74rem;
+  }
+
+  .overlay-panel .round-score-transition {
+    gap: 4px;
+  }
+
+  .overlay-panel > .btn {
+    padding: 6px 12px;
+    font-size: 0.82rem;
   }
 
   .mj-tile-clickable.mj-tile-selected,
@@ -2721,18 +2979,13 @@ input {
   }
 
   .seat-name,
-  .seat-identity,
-  .seat-score {
+  .seat-identity {
     font-size: 0.6rem;
   }
 
   .seat-orient-left > .seat-header,
   .seat-orient-right > .seat-header {
-    width: 62px;
-  }
-
-  .seat-orient-right > .seat-header {
-    margin-top: 52px;
+    width: 60px;
   }
 
   .seat-orient-top > .seat-header,
@@ -2785,6 +3038,19 @@ input {
   .self-action-bar .btn {
     padding: 3px 7px;
     font-size: 0.7rem;
+  }
+}
+
+@media (orientation: landscape) and (max-width: 640px) and (max-height: 430px) {
+  .table-felt.is-landscape {
+    --left-side-hand-inset: 72px;
+  }
+
+  .seat-orient-left > .seat-header,
+  .seat-orient-right > .seat-header {
+    width: 54px;
+    margin-left: 4px;
+    margin-right: 4px;
   }
 }
 

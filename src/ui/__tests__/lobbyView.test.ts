@@ -127,7 +127,8 @@ describe('renderWaitingRoom（CPU の後入れ）', () => {
     session.destroy();
   });
 
-  it('ロビー入口で CPU の強さ（標準 / やさしめ）を選んで開始できる', () => {
+  it('ロビー入口では4人麻雀/3人麻雀と東風戦/半荘戦の選択のみを表示し、部屋作成時はCPU0体で作成する', () => {
+    const onCreateRoom = vi.fn();
     const onStartLocalGame = vi.fn();
     const formState: LobbyFormState = {
       playerName: 'テスト',
@@ -139,7 +140,7 @@ describe('renderWaitingRoom（CPU の後入れ）', () => {
       allowAtozuke: true,
       honbaBonus: true,
       joinCode: '',
-      cpuCount: 3,
+      cpuCount: 0,
       cpuLevel: 'normal',
     };
 
@@ -148,7 +149,7 @@ describe('renderWaitingRoom（CPU の後入れ）', () => {
       root,
       formState,
       {
-        onCreateRoom: () => {},
+        onCreateRoom,
         onJoinRoom: () => {},
         onStartLocalGame,
         onLeaveLobby: () => {},
@@ -156,15 +157,74 @@ describe('renderWaitingRoom（CPU の後入れ）', () => {
       false,
     );
 
-    expect(clickByText(root, 'やさしめ')).toBe(true);
-    expect(formState.cpuLevel).toBe('easy');
+    // 入口に詳細トグルや CPU 強さ設定を出さない
+    expect(root.querySelector('.rule-toggle-field')).toBeNull();
+    expect(root.querySelectorAll('.seg-btn')).toHaveLength(4);
+    expect(root.textContent).not.toContain('CPU の強さ');
+    expect(root.textContent).not.toContain('CPU の人数');
+
+    expect(clickByText(root, '3人麻雀')).toBe(true);
+    expect(clickByText(root, '半荘戦')).toBe(true);
+    expect(clickByText(root, '部屋を作成')).toBe(true);
+    expect(onCreateRoom).toHaveBeenCalledWith(
+      'テスト',
+      expect.objectContaining({ playerCount: 3, gameLength: 'hanchan' }),
+      0,
+    );
+
     expect(clickByText(root, 'CPU対局をはじめる')).toBe(true);
     expect(onStartLocalGame).toHaveBeenCalledWith(
       'テスト',
-      expect.objectContaining({ cpuLevel: 'easy' }),
-      3,
+      expect.objectContaining({ playerCount: 3, gameLength: 'hanchan' }),
+      2,
     );
-    expect(root.textContent).not.toContain('人払い');
-    expect(root.textContent).toContain('対人戦と同じく');
+  });
+
+  it('ルーム作成後のロビーではホストが4人/3人・東風/半荘と各種ON/OFF設定を変更できる（ゲストには編集UIを出さない）', () => {
+    const { session, latest } = lobbySession(1);
+    session.start();
+
+    const onUpdateRuleConfig = vi.fn();
+    const root = document.createElement('div');
+    renderWaitingRoom(root, latest(), {
+      onCreateRoom: () => {},
+      onJoinRoom: () => {},
+      onStartLocalGame: () => {},
+      onLeaveLobby: () => {},
+      onUpdateRuleConfig,
+    });
+
+    expect(root.querySelector('.lobby-settings-panel')).not.toBeNull();
+    expect(clickByText(root, '3人麻雀')).toBe(true);
+    expect(onUpdateRuleConfig).toHaveBeenCalledWith({ playerCount: 3 });
+
+    expect(clickByText(root, '半荘戦')).toBe(true);
+    expect(onUpdateRuleConfig).toHaveBeenCalledWith({ gameLength: 'hanchan' });
+
+    // ON/OFF トグル群（トビ終了・喰いタン・後付け・本場加算・ダブロン・喰い替え禁止・CPUやさしめ）
+    const offButtons = [...root.querySelectorAll('button')].filter((b) =>
+      b.textContent?.startsWith('OFF'),
+    );
+    expect(offButtons.length).toBeGreaterThanOrEqual(7);
+    offButtons[1]!.click(); // 喰いタン OFF
+    expect(onUpdateRuleConfig).toHaveBeenCalledWith({ allowKuitan: false });
+
+    // ゲスト視点では設定パネルを出さない
+    const guestRoot = document.createElement('div');
+    const view = latest();
+    renderWaitingRoom(
+      guestRoot,
+      { ...view, viewerPlayerId: view.players[1]!.playerId },
+      {
+        onCreateRoom: () => {},
+        onJoinRoom: () => {},
+        onStartLocalGame: () => {},
+        onLeaveLobby: () => {},
+        onUpdateRuleConfig,
+      },
+    );
+    expect(guestRoot.querySelector('.lobby-settings-panel')).toBeNull();
+
+    session.destroy();
   });
 });

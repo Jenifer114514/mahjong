@@ -42,7 +42,7 @@ describe('アプリ起動とローカルCPU対局', () => {
     vi.useRealTimers();
   });
 
-  it('ロビーを描画し CPU 人数の選択肢を持つ', async () => {
+  it('ロビーを描画し4人/3人と東風/半荘の選択肢のみを持つ', async () => {
     bootApp();
     await loadMain();
 
@@ -51,13 +51,44 @@ describe('アプリ起動とローカルCPU対局', () => {
     expect(root.querySelector('.app-title')?.textContent).toBe('PeerJS 対戦リーチ麻雀');
     expect(root.textContent).toContain('部屋を作る（ホスト）');
     expect(root.textContent).toContain('いますぐCPUと対局');
-    // 4人麻雀の既定は CPU 3 体
     expect(
       Array.from(root.querySelectorAll('.seg-btn')).some(
-        (b) => (b.textContent ?? '').includes('3体') &&
+        (b) => (b.textContent ?? '').includes('4人麻雀') &&
           b.classList.contains('is-active'),
       ),
     ).toBe(true);
+    expect(
+      Array.from(root.querySelectorAll('.seg-btn')).some(
+        (b) => (b.textContent ?? '').includes('東風戦') &&
+          b.classList.contains('is-active'),
+      ),
+    ).toBe(true);
+    // 入口画面には詳細トグルを出さず、4択（4人/3人、東風/半荘）のみ
+    expect(root.querySelector('.rule-toggle-field')).toBeNull();
+    expect(root.querySelectorAll('.seg-btn')).toHaveLength(4);
+  });
+
+  it('「部屋を作成」でロビーへ入り、作成後に人数・長さ・ON/OFF設定を変更してCPU追加で対局開始できる', async () => {
+    bootApp();
+    await loadMain();
+
+    const root = document.getElementById('app') as HTMLElement;
+    expect(clickByText(root, 'button', '部屋を作成')).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(root.querySelector('.lobby-settings-panel')).not.toBeNull();
+    expect(clickByText(root, 'button', '3人麻雀')).toBe(true);
+    expect(clickByText(root, 'button', '半荘戦')).toBe(true);
+    // 3人麻雀にするとツモ損トグルも出る
+    expect(root.textContent).toContain('ツモ損');
+
+    // CPU を 2 体追加すると 3人麻雀が開局する
+    expect(clickByText(root, 'button', 'CPU を追加')).toBe(true);
+    expect(clickByText(root, 'button', 'CPU を追加')).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    expect(root.querySelector('.table-stage.is-landscape')).not.toBeNull();
+    expect(root.querySelector('.dora-panel-mode')?.textContent).toContain('3人半荘戦');
   });
 
   it('「CPU対局をはじめる」で対局画面（横画面レイアウト）に遷移する', async () => {

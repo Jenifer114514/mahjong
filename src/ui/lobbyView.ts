@@ -19,6 +19,10 @@ export interface LobbyHandlers {
   onAddCpu?: () => void;
   /** ロビーから CPU を 1 体減らす（ホストのみ） */
   onRemoveCpu?: () => void;
+  /** ルーム作成後にルール設定を変更する（ホストのみ） */
+  onUpdateRuleConfig?: (patch: Partial<RuleConfig>) => void;
+  /** 人数が揃っているロビーから対局を開始する（ホストのみ） */
+  onStartGame?: () => void;
 }
 
 export interface LobbyFormState {
@@ -31,19 +35,18 @@ export interface LobbyFormState {
   allowAtozuke: boolean;
   honbaBonus: boolean;
   joinCode: string;
-  /** 追加する CPU の人数（0 なら従来どおり人間のみ） */
+  /** 追加する CPU の人数（部屋作成時は 0 でロビーへ入る） */
   cpuCount: number;
   /** CPU の強さ（既定: 'normal'） */
   cpuLevel?: CpuLevel;
 }
 
-function createBooleanToggleField(params: {
+function createOnOffToggleField(params: {
   label: string;
   value: boolean;
-  trueLabel: string;
-  trueSub: string;
-  falseLabel: string;
-  falseSub: string;
+  onSub: string;
+  offSub: string;
+  disabled?: boolean;
   onChange: (next: boolean) => void;
 }): HTMLElement {
   const field = document.createElement('div');
@@ -55,34 +58,31 @@ function createBooleanToggleField(params: {
   const seg = document.createElement('div');
   seg.className = 'segmented';
 
-  const renderBtns = () => {
-    seg.innerHTML = '';
-    const options = [
-      { val: true, title: params.trueLabel, sub: params.trueSub },
-      { val: false, title: params.falseLabel, sub: params.falseSub },
-    ];
-    for (const opt of options) {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = `seg-btn seg-btn-sm${params.value === opt.val ? ' is-active' : ''}`;
+  const options = [
+    { val: true, title: 'ON', sub: params.onSub },
+    { val: false, title: 'OFF', sub: params.offSub },
+  ];
+  for (const opt of options) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = `seg-btn seg-btn-sm${params.value === opt.val ? ' is-active' : ''}`;
+    btn.setAttribute('aria-pressed', params.value === opt.val ? 'true' : 'false');
+    btn.disabled = Boolean(params.disabled);
 
-      const titleSpan = document.createElement('span');
-      titleSpan.textContent = opt.title;
-      const subSpan = document.createElement('span');
-      subSpan.className = 'seg-sub';
-      subSpan.textContent = opt.sub;
+    const titleSpan = document.createElement('span');
+    titleSpan.textContent = opt.title;
+    const subSpan = document.createElement('span');
+    subSpan.className = 'seg-sub';
+    subSpan.textContent = opt.sub;
 
-      btn.append(titleSpan, subSpan);
-      btn.addEventListener('click', () => {
-        params.value = opt.val;
-        params.onChange(opt.val);
-        renderBtns();
-      });
-      seg.appendChild(btn);
-    }
-  };
+    btn.append(titleSpan, subSpan);
+    btn.addEventListener('click', () => {
+      if (params.value === opt.val) return;
+      params.onChange(opt.val);
+    });
+    seg.appendChild(btn);
+  }
 
-  renderBtns();
   field.append(lbl, seg);
   return field;
 }
@@ -127,7 +127,7 @@ export function renderLobbyEntry(
   const grid = document.createElement('div');
   grid.className = 'lobby-grid';
 
-  // Create room card
+  // Create room card: 4人/3人 と 東風/半荘 の選択のみ
   const createCard = document.createElement('div');
   createCard.className = 'card';
   const createTitle = document.createElement('h2');
@@ -153,154 +153,6 @@ export function renderLobbyEntry(
   const lengthSeg = document.createElement('div');
   lengthSeg.className = 'segmented';
 
-  const cpuField = document.createElement('div');
-  cpuField.className = 'field';
-  const cpuLabel = document.createElement('label');
-  cpuLabel.textContent = 'CPU の人数（ひとりでも対局できます・あとからロビーで増減可）';
-  const cpuSeg = document.createElement('div');
-  cpuSeg.className = 'segmented segmented-4';
-  cpuField.append(cpuLabel, cpuSeg);
-
-  const cpuLevelField = document.createElement('div');
-  cpuLevelField.className = 'field';
-  const cpuLevelLabel = document.createElement('label');
-  cpuLevelLabel.textContent = 'CPU の強さ';
-  const cpuLevelSeg = document.createElement('div');
-  cpuLevelSeg.className = 'segmented';
-  cpuLevelField.append(cpuLevelLabel, cpuLevelSeg);
-
-  const renderCpuLevelButtons = () => {
-    cpuLevelSeg.innerHTML = '';
-    const currentLevel = formState.cpuLevel ?? DEFAULT_CPU_LEVEL;
-    const levels: Array<{ value: CpuLevel; title: string; sub: string }> = [
-      { value: 'normal', title: '標準', sub: '受け入れ重視・積極的に鳴く/リーチ' },
-      { value: 'easy', title: 'やさしめ', sub: '鳴き・リーチ控えめ' },
-    ];
-    for (const opt of levels) {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = `seg-btn seg-btn-sm${currentLevel === opt.value ? ' is-active' : ''}`;
-      const titleSpan = document.createElement('span');
-      titleSpan.textContent = opt.title;
-      const subSpan = document.createElement('span');
-      subSpan.className = 'seg-sub';
-      subSpan.textContent = opt.sub;
-      btn.append(titleSpan, subSpan);
-      btn.addEventListener('click', () => {
-        formState.cpuLevel = opt.value;
-        renderCpuLevelButtons();
-      });
-      cpuLevelSeg.appendChild(btn);
-    }
-  };
-
-  const renderCpuButtons = () => {
-    cpuSeg.innerHTML = '';
-    const max = maxCpuCount(formState.playerCount);
-    if (formState.cpuCount > max) formState.cpuCount = max;
-    for (let count = 0; count <= max; count++) {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = `seg-btn seg-btn-sm${formState.cpuCount === count ? ' is-active' : ''}`;
-      const titleSpan = document.createElement('span');
-      titleSpan.textContent = count === 0 ? 'なし' : `${count}体`;
-      const subSpan = document.createElement('span');
-      subSpan.className = 'seg-sub';
-      subSpan.textContent =
-        count === 0
-          ? '人間のみ'
-          : count === max
-            ? 'CPU のみ'
-            : `人間 ${formState.playerCount - count}人`;
-      btn.append(titleSpan, subSpan);
-      btn.addEventListener('click', () => {
-        formState.cpuCount = count;
-        renderCpuButtons();
-        renderLocalRuleToggles();
-      });
-      cpuSeg.appendChild(btn);
-    }
-  };
-
-  const localRuleWrap = document.createElement('div');
-  localRuleWrap.className = 'rule-toggle-grid';
-
-  const renderLocalRuleToggles = () => {
-    localRuleWrap.innerHTML = '';
-
-    localRuleWrap.appendChild(
-      createBooleanToggleField({
-        label: 'トビ終了（0点未満で終局）',
-        value: formState.tobi,
-        trueLabel: 'あり',
-        trueSub: '標準（0点は続行）',
-        falseLabel: 'なし',
-        falseSub: '飛び無し',
-        onChange: (v) => {
-          formState.tobi = v;
-        },
-      }),
-    );
-
-    localRuleWrap.appendChild(
-      createBooleanToggleField({
-        label: '喰いタン（鳴いた断幺九）',
-        value: formState.allowKuitan,
-        trueLabel: 'あり',
-        trueSub: '鳴きタンヤオ有効',
-        falseLabel: 'なし',
-        falseSub: '門前のみ',
-        onChange: (v) => {
-          formState.allowKuitan = v;
-        },
-      }),
-    );
-
-    localRuleWrap.appendChild(
-      createBooleanToggleField({
-        label: '後付け（片上がり・役後確定）',
-        value: formState.allowAtozuke,
-        trueLabel: 'あり',
-        trueSub: '全待ち役不要',
-        falseLabel: 'なし',
-        falseSub: '先付けのみ',
-        onChange: (v) => {
-          formState.allowAtozuke = v;
-        },
-      }),
-    );
-
-    localRuleWrap.appendChild(
-      createBooleanToggleField({
-        label: '本場加算（積み棒ボーナス）',
-        value: formState.honbaBonus,
-        trueLabel: 'あり',
-        trueSub: formState.playerCount === 3 ? '1本場 1,000点' : '1本場 300点',
-        falseLabel: 'なし',
-        falseSub: '本場表示のみ',
-        onChange: (v) => {
-          formState.honbaBonus = v;
-        },
-      }),
-    );
-
-    if (formState.playerCount === 3) {
-      localRuleWrap.appendChild(
-        createBooleanToggleField({
-          label: 'ツモ損（3人麻雀専用）',
-          value: formState.tsumoLoss,
-          trueLabel: 'あり',
-          trueSub: '4麻と同額支払い',
-          falseLabel: 'なし',
-          falseSub: '北の分を2人で折半',
-          onChange: (v) => {
-            formState.tsumoLoss = v;
-          },
-        }),
-      );
-    }
-  };
-
   const renderRuleButtons = () => {
     countSeg.innerHTML = '';
     for (const opt of countOptions) {
@@ -311,8 +163,6 @@ export function renderLobbyEntry(
       btn.addEventListener('click', () => {
         formState.playerCount = opt.value;
         renderRuleButtons();
-        renderCpuButtons();
-        renderLocalRuleToggles();
       });
       countSeg.appendChild(btn);
     }
@@ -346,13 +196,16 @@ export function renderLobbyEntry(
   };
 
   renderRuleButtons();
-  renderCpuButtons();
-  renderCpuLevelButtons();
-  renderLocalRuleToggles();
   countField.append(countLabel, countSeg);
   lengthField.append(lengthLabel, lengthSeg);
 
-  const buildRuleConfig = (): RuleConfig => ({
+  const createNote = document.createElement('p');
+  createNote.className = 'hub-sub';
+  createNote.style.margin = '0 0 12px';
+  createNote.textContent =
+    '詳細ルールの ON / OFF や CPU の追加は、部屋を作成したあとのロビーで変更できます。';
+
+  const buildBaseRuleConfig = (): RuleConfig => ({
     playerCount: formState.playerCount,
     gameLength: formState.gameLength,
     tobi: formState.tobi,
@@ -370,10 +223,10 @@ export function renderLobbyEntry(
   createBtn.disabled = busy;
   createBtn.textContent = busy ? '接続中...' : '部屋を作成';
   createBtn.addEventListener('click', () => {
-    handlers.onCreateRoom(formState.playerName, buildRuleConfig(), formState.cpuCount);
+    handlers.onCreateRoom(formState.playerName, buildBaseRuleConfig(), 0);
   });
 
-  createCard.append(countField, cpuField, cpuLevelField, lengthField, localRuleWrap, createBtn);
+  createCard.append(countField, lengthField, createNote, createBtn);
 
   // Local (CPU only) game card
   const localCard = document.createElement('div');
@@ -386,7 +239,7 @@ export function renderLobbyEntry(
   localNote.className = 'hub-sub';
   localNote.style.margin = '0 0 10px';
   localNote.textContent =
-    '部屋コードの共有なしで、選んだ人数・ルールのまま CPU を相手に対局します。対人戦と同じく横画面に最適化されます。';
+    '部屋コードの共有なしで、選んだ人数・長さのまま CPU を相手に対局します。対人戦と同じく横画面に最適化されます。';
 
   const localBtn = document.createElement('button');
   localBtn.type = 'button';
@@ -397,8 +250,8 @@ export function renderLobbyEntry(
   localBtn.addEventListener('click', () => {
     handlers.onStartLocalGame(
       formState.playerName,
-      buildRuleConfig(),
-      formState.cpuCount > 0 ? formState.cpuCount : maxCpuCount(formState.playerCount),
+      buildBaseRuleConfig(),
+      maxCpuCount(formState.playerCount),
     );
   });
 
@@ -530,17 +383,193 @@ export function renderWaitingRoom(
   ruleSummary.className = 'hub-sub';
   const lengthLabel = view.ruleConfig.gameLength === 'tonpuu' ? '東風戦' : '半荘戦';
   const localDetails = [
-    `トビ:${rules.tobi ? 'あり' : 'なし'}`,
-    `喰いタン:${rules.allowKuitan ? 'あり' : 'なし'}`,
-    `後付け:${rules.allowAtozuke ? 'あり' : 'なし'}`,
-    `本場加算:${rules.honbaBonus ? `あり(${rules.honbaPointsPerStick}点)` : 'なし(表示のみ)'}`,
-    `CPU強さ:${rules.cpuLevel === 'easy' ? 'やさしめ' : '標準'}`,
+    `トビ:${rules.tobi ? 'ON' : 'OFF'}`,
+    `喰いタン:${rules.allowKuitan ? 'ON' : 'OFF'}`,
+    `後付け:${rules.allowAtozuke ? 'ON' : 'OFF'}`,
+    `本場加算:${rules.honbaBonus ? `ON(${rules.honbaPointsPerStick}点)` : 'OFF'}`,
+    `ダブロン:${rules.doubleRon ? 'ON' : 'OFF(頭ハネ)'}`,
+    `喰い替え禁止:${rules.forbidKuikae ? 'ON' : 'OFF'}`,
+    `CPUやさしめ:${rules.cpuLevel === 'easy' ? 'ON' : 'OFF'}`,
     ...(rules.playerCount === 3
-      ? [`ツモ損:${rules.tsumoLoss ? 'あり' : 'なし'}`]
+      ? [`ツモ損:${rules.tsumoLoss ? 'ON' : 'OFF'}`]
       : []),
   ].join(' / ');
   ruleSummary.textContent = `ルール: ${rules.playerCount}人麻雀 / ${lengthLabel}（全${rules.totalRounds}局・${rules.totalTiles}枚・初期持ち点 ${rules.initialPoints.toLocaleString()}点・赤ドラなし・${localDetails}）`;
   card.appendChild(ruleSummary);
+
+  // ルーム作成後の設定編集（ホストのみ操作可）
+  if (isHost && handlers.onUpdateRuleConfig) {
+    const settingsPanel = document.createElement('div');
+    settingsPanel.className = 'lobby-settings-panel';
+
+    const settingsTitle = document.createElement('div');
+    settingsTitle.className = 'lobby-settings-title';
+    settingsTitle.textContent = 'ルーム設定（作成後も変更できます）';
+    settingsPanel.appendChild(settingsTitle);
+
+    const basicGrid = document.createElement('div');
+    basicGrid.className = 'rule-toggle-grid';
+
+    // 人数（4人麻雀 / 3人麻雀）
+    const countField = document.createElement('div');
+    countField.className = 'field rule-toggle-field';
+    const countLbl = document.createElement('label');
+    countLbl.textContent = '人数';
+    const countSeg = document.createElement('div');
+    countSeg.className = 'segmented';
+
+    const countOpts: Array<{ value: PlayerCount; title: string; sub: string }> = [
+      { value: 4, title: '4人麻雀', sub: '136枚 / 25,000点' },
+      { value: 3, title: '3人麻雀', sub: '108枚 / 35,000点' },
+    ];
+    for (const opt of countOpts) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = `seg-btn seg-btn-sm${rules.playerCount === opt.value ? ' is-active' : ''}`;
+      btn.disabled = opt.value === 3 && view.players.length > 3;
+      btn.innerHTML = `${opt.title}<span class="seg-sub">${opt.sub}</span>`;
+      btn.addEventListener('click', () => {
+        if (rules.playerCount === opt.value) return;
+        handlers.onUpdateRuleConfig?.({ playerCount: opt.value });
+      });
+      countSeg.appendChild(btn);
+    }
+    countField.append(countLbl, countSeg);
+    if (view.players.length > 3) {
+      const note = document.createElement('div');
+      note.className = 'hub-sub';
+      note.textContent = '※ 参加者が4人のため3人麻雀へ変更できません（人数を減らすと変更できます）';
+      countField.appendChild(note);
+    }
+
+    // 長さ（東風戦 / 半荘戦）
+    const lengthField = document.createElement('div');
+    lengthField.className = 'field rule-toggle-field';
+    const lengthLbl = document.createElement('label');
+    lengthLbl.textContent = '長さ';
+    const lengthSeg = document.createElement('div');
+    lengthSeg.className = 'segmented';
+
+    const tonpuuRounds = deriveRules({
+      playerCount: rules.playerCount,
+      gameLength: 'tonpuu',
+    }).totalRounds;
+    const hanchanRounds = deriveRules({
+      playerCount: rules.playerCount,
+      gameLength: 'hanchan',
+    }).totalRounds;
+
+    const lengthOpts: Array<{ value: GameLength; title: string; sub: string }> = [
+      { value: 'tonpuu', title: '東風戦', sub: `全${tonpuuRounds}局（東場のみ）` },
+      { value: 'hanchan', title: '半荘戦', sub: `全${hanchanRounds}局（東・南場）` },
+    ];
+    for (const opt of lengthOpts) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = `seg-btn seg-btn-sm${rules.gameLength === opt.value ? ' is-active' : ''}`;
+      btn.innerHTML = `${opt.title}<span class="seg-sub">${opt.sub}</span>`;
+      btn.addEventListener('click', () => {
+        if (rules.gameLength === opt.value) return;
+        handlers.onUpdateRuleConfig?.({ gameLength: opt.value });
+      });
+      lengthSeg.appendChild(btn);
+    }
+    lengthField.append(lengthLbl, lengthSeg);
+
+    basicGrid.append(countField, lengthField);
+    settingsPanel.appendChild(basicGrid);
+
+    // それ以外の設定（すべて ON / OFF）
+    const togglesGrid = document.createElement('div');
+    togglesGrid.className = 'rule-toggle-grid';
+    togglesGrid.style.marginBottom = '0';
+
+    togglesGrid.appendChild(
+      createOnOffToggleField({
+        label: 'トビ終了（0点未満で終局）',
+        value: rules.tobi,
+        onSub: 'あり（0点は続行）',
+        offSub: 'なし（飛び無し）',
+        onChange: (next) => handlers.onUpdateRuleConfig?.({ tobi: next }),
+      }),
+    );
+
+    togglesGrid.appendChild(
+      createOnOffToggleField({
+        label: '喰いタン（鳴いた断幺九）',
+        value: rules.allowKuitan,
+        onSub: '鳴きタンヤオ有効',
+        offSub: '門前のみ',
+        onChange: (next) => handlers.onUpdateRuleConfig?.({ allowKuitan: next }),
+      }),
+    );
+
+    togglesGrid.appendChild(
+      createOnOffToggleField({
+        label: '後付け（片上がり・役後確定）',
+        value: rules.allowAtozuke,
+        onSub: '後付けあり',
+        offSub: '先付けのみ',
+        onChange: (next) => handlers.onUpdateRuleConfig?.({ allowAtozuke: next }),
+      }),
+    );
+
+    togglesGrid.appendChild(
+      createOnOffToggleField({
+        label: '本場加算（積み棒ボーナス）',
+        value: rules.honbaBonus,
+        onSub: rules.playerCount === 3 ? '1本場 1,000点' : '1本場 300点',
+        offSub: '本場表示のみ',
+        onChange: (next) => handlers.onUpdateRuleConfig?.({ honbaBonus: next }),
+      }),
+    );
+
+    togglesGrid.appendChild(
+      createOnOffToggleField({
+        label: 'ダブロン（複数人同時ロン）',
+        value: rules.doubleRon,
+        onSub: '複数人同時和了あり',
+        offSub: '頭ハネ（上家優先）',
+        onChange: (next) => handlers.onUpdateRuleConfig?.({ doubleRon: next }),
+      }),
+    );
+
+    togglesGrid.appendChild(
+      createOnOffToggleField({
+        label: '喰い替え禁止',
+        value: rules.forbidKuikae,
+        onSub: '喰い替え禁止',
+        offSub: '喰い替えあり',
+        onChange: (next) => handlers.onUpdateRuleConfig?.({ forbidKuikae: next }),
+      }),
+    );
+
+    togglesGrid.appendChild(
+      createOnOffToggleField({
+        label: 'CPUやさしめ（手加減モード）',
+        value: rules.cpuLevel === 'easy',
+        onSub: '鳴き・リーチ控えめ',
+        offSub: '標準（積極的）',
+        onChange: (next) =>
+          handlers.onUpdateRuleConfig?.({ cpuLevel: next ? 'easy' : 'normal' }),
+      }),
+    );
+
+    if (rules.playerCount === 3) {
+      togglesGrid.appendChild(
+        createOnOffToggleField({
+          label: 'ツモ損（3人麻雀専用）',
+          value: rules.tsumoLoss,
+          onSub: '4麻と同額支払い',
+          offSub: '北の分を2人で折半',
+          onChange: (next) => handlers.onUpdateRuleConfig?.({ tsumoLoss: next }),
+        }),
+      );
+    }
+
+    settingsPanel.appendChild(togglesGrid);
+    card.appendChild(settingsPanel);
+  }
 
   // Slots
   const slots = document.createElement('div');
@@ -566,10 +595,23 @@ export function renderWaitingRoom(
   const info = document.createElement('p');
   info.className = 'hub-sub';
   info.textContent =
-    cpuPlayers.length > 0
-      ? `参加人数（${view.players.length} / ${rules.playerCount}人・うち CPU ${cpuPlayers.length}体）が揃うと自動的に対局が始まります。`
-      : `参加人数（${view.players.length} / ${rules.playerCount}人）が揃うと自動的に対局が始まります。`;
+    view.players.length === rules.playerCount
+      ? '参加人数が揃っています。ホストが「対局を開始する」を押すと対局が始まります。'
+      : cpuPlayers.length > 0
+        ? `参加人数（${view.players.length} / ${rules.playerCount}人・うち CPU ${cpuPlayers.length}体）が揃うと自動的に対局が始まります。`
+        : `参加人数（${view.players.length} / ${rules.playerCount}人）が揃うと自動的に対局が始まります。`;
   card.appendChild(info);
+
+  // 人数が揃っている待機ロビーからホストが開始できるボタン
+  if (isHost && view.players.length === rules.playerCount && handlers.onStartGame) {
+    const startBtn = document.createElement('button');
+    startBtn.type = 'button';
+    startBtn.className = 'btn btn-primary';
+    startBtn.style.marginBottom = '10px';
+    startBtn.textContent = '対局を開始する';
+    startBtn.addEventListener('click', () => handlers.onStartGame?.());
+    card.appendChild(startBtn);
+  }
 
   // ホストはロビーにいる間、CPU を後から足し引きできる
   if (isHost && (handlers.onAddCpu || handlers.onRemoveCpu)) {

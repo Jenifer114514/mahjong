@@ -175,6 +175,28 @@ function getNextRoundDecisionForRound(
   );
 }
 
+function mergeRuleConfig(
+  current: RuleConfig,
+  patch: Partial<RuleConfig>,
+): RuleConfig {
+  const next: RuleConfig = {
+    ...current,
+    ...patch,
+  };
+  if (
+    patch.playerCount !== undefined &&
+    patch.playerCount !== current.playerCount
+  ) {
+    delete next.tileSetId;
+    delete next.allowChi;
+    delete next.allowKita;
+    if (next.playerCount === 4) {
+      next.tsumoLoss = false;
+    }
+  }
+  return next;
+}
+
 export function createInitialGameState(params: CreateInitialGameParams): GameState {
   const rules = deriveRules(params.ruleConfig);
   const hostPlayer: PlayerState = {
@@ -830,6 +852,29 @@ export function validateAction(
         return {
           code: 'PLAYER_NOT_FOUND',
           message: 'プレイヤーが見つかりません。',
+        };
+      }
+      return null;
+    }
+
+    case 'UPDATE_RULE_CONFIG': {
+      if (state.phase !== 'lobby') {
+        return {
+          code: 'INVALID_PHASE',
+          message: '対局開始後はルールを変更できません。',
+        };
+      }
+      if (action.playerId !== state.hostPlayerId) {
+        return {
+          code: 'UNAUTHORIZED_ACTION',
+          message: 'ルールを変更できるのはホストだけです。',
+        };
+      }
+      const nextRules = deriveRules(mergeRuleConfig(state.ruleConfig, action.patch));
+      if (state.players.length > nextRules.playerCount) {
+        return {
+          code: 'ROOM_FULL',
+          message: `現在の参加人数（${state.players.length}人）が${nextRules.playerCount}人を超えているため変更できません。先に人数を減らしてください。`,
         };
       }
       return null;
@@ -2227,6 +2272,19 @@ export function reduce(
             ? { ...p, connected: action.connected }
             : p,
         ),
+      };
+    }
+
+    case 'UPDATE_RULE_CONFIG': {
+      const nextRuleConfig = mergeRuleConfig(state.ruleConfig, action.patch);
+      const nextRules = deriveRules(nextRuleConfig);
+      return {
+        ...state,
+        ruleConfig: nextRuleConfig,
+        players: state.players.map((p) => ({
+          ...p,
+          score: nextRules.initialPoints,
+        })),
       };
     }
   }
