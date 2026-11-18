@@ -98,7 +98,7 @@
 }
 
 /* 最新の捨て牌・鳴き牌は輪郭線ではなく発光で示す（立体感を壊さない） */
-.mj-tile-latest {
+.mj-tile-latest:not(.mj-tile-discard-anim) {
   outline: none;
   box-shadow:
     0 0 0 1.5px #63b3ff,
@@ -697,5 +697,20 @@
   .mj-tile-clickable,
   .btn {
     transition: none;
+  }
+
+  .discard-river .mj-tile.mj-tile-discard-anim,
+  .discard-river .mj-tile.mj-tile-discard-anim::before,
+  .mj-tile-draw-anim,
+  .meld-group.is-meld-anim,
+  .dora-panel-tiles .mj-tile.dora-tile-flip,
+  .console-riichi-stick.is-riichi-stick-placed,
+  .console-score-delta,
+  .seat-header.is-turn.is-self-turn,
+  .round-start-banner,
+  .round-start-banner.is-leaving,
+  .overlay-backdrop-modal.is-agari-flash,
+  .overlay-backdrop-modal.is-agari-flash > .round-end-panel {
+    animation: none;
   }
 }

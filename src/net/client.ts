@@ -383,12 +383,17 @@ export class ClientSession {
         return;
       }
 
-      // ERROR
-      this.clearTimeout();
-      this.callbacks.onError(msg.payload);
-      if (!this.hasJoined) {
-        this.callbacks.onStatusChange('error', msg.payload.message);
-        this.destroy();
+      if (msg.kind === 'ROOM_STATUS') {
+        return;
+      }
+
+      if (msg.kind === 'ERROR') {
+        this.clearTimeout();
+        this.callbacks.onError(msg.payload);
+        if (!this.hasJoined) {
+          this.callbacks.onStatusChange('error', msg.payload.message);
+          this.destroy();
+        }
       }
     });
 

@@ -9,6 +9,10 @@ import {
 import { HostSession, type HostSessionCallbacks } from './net/host';
 import { normalizeRoomCode } from './net/protocol';
 import {
+  PermanentRoomWatcher,
+  type PermanentRoomProbeState,
+} from './net/roomProbe';
+import {
   formatRoomDisplayName,
   getPermanentRoom,
   type PermanentRoomId,
@@ -28,15 +32,29 @@ import type {
 import { DEFAULT_CPU_LEVEL, type RuleConfig } from './types/rule';
 import {
   renderLobbyEntry,
+  renderPermanentRoomOccupancy,
   renderWaitingRoom,
+  type LandscapeLockUiState,
   type LobbyFormState,
 } from './ui/lobbyView';
-import { renderGameTable, type RoundEndStep } from './ui/tableView';
+import {
+  captureDiscardOriginSnapshot,
+  renderGameTable,
+  type DiscardOriginSnapshot,
+  type RoundEndStep,
+} from './ui/tableView';
+import { soundEngine } from './ui/sound';
 import { prewarmTileSpriteSheet, waitForTileFonts } from './ui/tileTexture';
 import {
   createRotateOverlay,
+  enterLandscapeFullscreen,
+  exitLandscapeFullscreen,
+  isFullscreenActive,
+  loadLandscapeLockPreference,
+  saveLandscapeLockPreference,
   shouldBlockForOrientation,
   watchOrientation,
+  type LandscapeFullscreenResult,
 } from './ui/orientation';
 
 type Session =
@@ -55,6 +73,8 @@ class MahjongApp {
   private readonly floatingLayer: HTMLElement;
   private activeSession: Session | null = null;
   private currentView: StateView | null = null;
+  private lastRenderedGameView: StateView | null = null;
+  private lastRenderedPerspectiveSeatIndex = 0;
   private statusText = '未接続';
   private statusKind: 'normal' | 'ok' | 'err' = 'normal';
   private errorBanner: string | null = null;
@@ -83,6 +103,17 @@ class MahjongApp {
   private wakeLockSyncSeq = 0;
   private hostTabWarning = false;
   private hostAway = false;
+  private landscapeLockEnabled = loadLandscapeLockPreference();
+  private landscapeLockMessage: string | null = null;
+  private landscapeLockMessageKind: 'info' | 'err' = 'info';
+  private landscapeLockInFlight = false;
+  private roomWatcher: PermanentRoomWatcher | null = null;
+  private roomStatuses: Record<PermanentRoomId, PermanentRoomProbeState> = {
+    BRONZE: { status: 'checking' },
+    SILVER: { status: 'checking' },
+    GOLD: { status: 'checking' },
+  };
+  private roomProbeRefreshing = false;
   private readonly handleFullscreenChange = () => {
     if (!this.root.isConnected) {
       document.removeEventListener('fullscreenchange', this.handleFullscreenChange);
@@ -92,8 +123,16 @@ class MahjongApp {
       );
       return;
     }
+    this.syncOrientationOverlay();
     if (this.settingsOpen) {
       this.renderFloating();
+    }
+    if (
+      !this.landscapeLockInFlight &&
+      (!this.currentView || this.currentView.phase === 'lobby') &&
+      document.activeElement?.tagName !== 'INPUT'
+    ) {
+      this.render();
     }
   };
   private readonly handleVisibilityChange = () => {
@@ -111,6 +150,8 @@ class MahjongApp {
       this.hostTabWarning = hidden && activeRoom;
       this.activeSession.session.setHostAway(hidden);
       this.render();
+    } else if (!hidden && !this.currentView && !this.busy) {
+      this.roomWatcher?.refreshNow();
     }
     void this.syncWakeLock();
   };
@@ -156,6 +197,7 @@ class MahjongApp {
     };
 
     window.addEventListener('beforeunload', () => {
+      this.stopRoomWatcher();
       this.cleanupSession();
     });
     document.addEventListener('fullscreenchange', this.handleFullscreenChange);
@@ -164,6 +206,20 @@ class MahjongApp {
       this.handleFullscreenChange,
     );
     document.addEventListener('visibilitychange', this.handleVisibilityChange);
+
+    const unlockAudioOnInteract = () => {
+      soundEngine.unlock();
+      if (!this.root.isConnected) {
+        document.removeEventListener('pointerdown', unlockAudioOnInteract);
+        document.removeEventListener('keydown', unlockAudioOnInteract);
+      }
+    };
+    document.addEventListener('pointerdown', unlockAudioOnInteract, {
+      passive: true,
+    });
+    document.addEventListener('keydown', unlockAudioOnInteract, {
+      passive: true,
+    });
 
     // 対局画面では横画面を必須にする（縦持ち時はローテーション案内で覆う）
     watchOrientation(() => this.syncOrientationOverlay());
@@ -332,6 +388,7 @@ class MahjongApp {
     fixedRoomCode?: string,
   ): void {
     this.cleanupSession();
+    this.maybeApplyLandscapeLockOnAction();
     this.busy = true;
     this.errorBanner = null;
     this.statusText = fixedRoomCode
@@ -369,6 +426,7 @@ class MahjongApp {
         : null;
 
     this.cleanupSession();
+    this.maybeApplyLandscapeLockOnAction();
     this.busy = true;
     this.errorBanner = null;
     this.statusText = `${def.name} に接続確認中...`;
@@ -560,6 +618,7 @@ class MahjongApp {
   /** 人数が揃った待機ロビーから対局を開始する */
   private startLobbyGame(): void {
     if (this.activeSession?.role !== 'host') return;
+    this.maybeApplyLandscapeLockOnAction();
     this.activeSession.session.startGame();
   }
 
@@ -604,6 +663,7 @@ class MahjongApp {
         : null;
 
     this.cleanupSession();
+    this.maybeApplyLandscapeLockOnAction();
     this.busy = true;
     this.errorBanner = null;
     this.statusText = `${formatRoomDisplayName(normalized)} に接続中...`;
@@ -900,7 +960,54 @@ class MahjongApp {
     return null;
   }
 
+  private stopRoomWatcher(): void {
+    if (this.roomWatcher) {
+      this.roomWatcher.stop();
+      this.roomWatcher = null;
+    }
+    this.roomProbeRefreshing = false;
+  }
+
+  private syncRoomWatcher(): void {
+    const shouldWatch =
+      this.root.isConnected && !this.currentView && !this.busy;
+    if (!shouldWatch) {
+      this.stopRoomWatcher();
+      return;
+    }
+    if (this.roomWatcher) return;
+    this.roomWatcher = new PermanentRoomWatcher({
+      shouldContinue: () =>
+        this.root.isConnected && !this.currentView && !this.busy,
+      onRoomUpdate: (roomId, state) => {
+        this.roomStatuses[roomId] = state;
+        if (!this.currentView) {
+          const slot = this.mainLayer.querySelector<HTMLElement>(
+            `[data-room-occupancy="${roomId}"]`,
+          );
+          if (slot) {
+            renderPermanentRoomOccupancy(slot, state);
+          }
+        }
+      },
+      onScanningChange: (scanning) => {
+        this.roomProbeRefreshing = scanning;
+        const refreshBtn = this.mainLayer.querySelector<HTMLButtonElement>(
+          '.permanent-rooms-refresh-btn',
+        );
+        if (refreshBtn) {
+          refreshBtn.disabled = scanning;
+          refreshBtn.textContent = scanning ? '確認中...' : '状況を更新';
+        }
+      },
+    });
+    this.roomWatcher.start();
+  }
+
   private cleanupSession(): void {
+    this.stopRoomWatcher();
+    this.lastRenderedGameView = null;
+    this.lastRenderedPerspectiveSeatIndex = 0;
     this.stopAutoTsumogiriTimer();
     this.stopAutoAssistTimer();
     this.stopCountdownTicker();
@@ -910,6 +1017,7 @@ class MahjongApp {
     this.unreadChatCount = 0;
     this.chatDraft = '';
     this.fullscreenError = null;
+    this.landscapeLockMessage = null;
     this.hostAway = false;
     this.hostTabWarning = false;
     void this.releaseWakeLock();
@@ -965,46 +1073,92 @@ class MahjongApp {
     return ok;
   }
 
-  private isFullscreenActive(): boolean {
-    const doc = document as Document & { webkitFullscreenElement?: Element | null };
-    return Boolean(doc.fullscreenElement ?? doc.webkitFullscreenElement);
-  }
-
-  private async setFullscreen(enabled: boolean): Promise<void> {
+  private async setLandscapeLock(
+    enabled: boolean,
+  ): Promise<LandscapeFullscreenResult | void> {
     this.fullscreenError = null;
-    const doc = document as Document & {
-      webkitFullscreenElement?: Element | null;
-      webkitExitFullscreen?: () => Promise<void> | void;
-    };
-    const rootEl = document.documentElement as HTMLElement & {
-      webkitRequestFullscreen?: () => Promise<void> | void;
-    };
-
+    this.landscapeLockMessage = null;
+    this.landscapeLockInFlight = true;
     try {
       if (enabled) {
-        if (!this.isFullscreenActive()) {
-          if (typeof rootEl.requestFullscreen === 'function') {
-            await rootEl.requestFullscreen();
-          } else if (typeof rootEl.webkitRequestFullscreen === 'function') {
-            await rootEl.webkitRequestFullscreen();
-          } else {
-            this.fullscreenError =
-              'お使いのブラウザではフル画面表示に対応していません。';
-          }
+        this.landscapeLockEnabled = true;
+        saveLandscapeLockPreference(true);
+        const res = await enterLandscapeFullscreen();
+        if (!res.fullscreen) {
+          this.landscapeLockEnabled = false;
+          saveLandscapeLockPreference(false);
+          const msg =
+            res.error ?? 'フル画面表示に切り替えられませんでした。';
+          this.fullscreenError = msg;
+          this.landscapeLockMessage = msg;
+          this.landscapeLockMessageKind = 'err';
+        } else if (res.error) {
+          this.fullscreenError = res.error;
+          this.landscapeLockMessage = res.error;
+          this.landscapeLockMessageKind = 'err';
         }
-      } else if (this.isFullscreenActive()) {
-        if (typeof doc.exitFullscreen === 'function') {
-          await doc.exitFullscreen();
-        } else if (typeof doc.webkitExitFullscreen === 'function') {
-          await doc.webkitExitFullscreen();
-        }
+        return res;
       }
-    } catch {
-      this.fullscreenError = enabled
-        ? 'フル画面表示に切り替えられませんでした。ブラウザの設定をご確認ください。'
-        : 'フル画面表示の解除に失敗しました。';
+
+      this.landscapeLockEnabled = false;
+      saveLandscapeLockPreference(false);
+      const res = await exitLandscapeFullscreen();
+      if (res.error) {
+        this.fullscreenError = res.error;
+        this.landscapeLockMessage = res.error;
+        this.landscapeLockMessageKind = 'err';
+      }
+      return undefined;
+    } finally {
+      this.landscapeLockInFlight = false;
+      this.syncOrientationOverlay();
+      this.render();
+      if (this.settingsOpen) {
+        this.renderFloating();
+      }
     }
-    this.renderFloating();
+  }
+
+  private maybeApplyLandscapeLockOnAction(): void {
+    if (!this.landscapeLockEnabled || isFullscreenActive()) return;
+    this.landscapeLockInFlight = true;
+    void enterLandscapeFullscreen()
+      .then((res) => {
+        if (!res.fullscreen) {
+          this.landscapeLockEnabled = false;
+          saveLandscapeLockPreference(false);
+        }
+        if (res.error) {
+          this.fullscreenError = res.error;
+          this.landscapeLockMessage = res.error;
+          this.landscapeLockMessageKind = 'err';
+        }
+      })
+      .finally(() => {
+        this.landscapeLockInFlight = false;
+        this.syncOrientationOverlay();
+        if (!this.currentView || this.currentView.phase === 'lobby') {
+          this.render();
+        }
+        if (this.settingsOpen) {
+          this.renderFloating();
+        }
+      });
+  }
+
+  private buildLandscapeLockUiState(): LandscapeLockUiState {
+    return {
+      enabled: this.landscapeLockEnabled,
+      fullscreenActive: isFullscreenActive(),
+      message: this.landscapeLockMessage,
+      messageKind: this.landscapeLockMessageKind,
+      onToggle: (next) => {
+        void this.setLandscapeLock(next);
+      },
+      onApplyNow: () => {
+        void this.setLandscapeLock(true);
+      },
+    };
   }
 
   private dispatchAction(fn: (session: HostSession | ClientSession) => void): void {
@@ -1093,7 +1247,11 @@ class MahjongApp {
       shouldBlockForOrientation();
 
     if (needsOverlay && !existing) {
-      document.body.appendChild(createRotateOverlay());
+      document.body.appendChild(
+        createRotateOverlay({
+          onRequestLandscapeLock: () => this.setLandscapeLock(true),
+        }),
+      );
       document.body.classList.add('is-orientation-blocked');
       return;
     }
@@ -1104,6 +1262,15 @@ class MahjongApp {
   }
 
   private render(): void {
+    const discardOriginSnapshot: DiscardOriginSnapshot | null =
+      this.currentView !== null &&
+      this.currentView.phase !== 'lobby' &&
+      this.currentView.phase !== 'finished' &&
+      this.lastRenderedGameView !== null &&
+      this.lastRenderedGameView !== this.currentView
+        ? captureDiscardOriginSnapshot(this.mainLayer)
+        : null;
+
     this.mainLayer.innerHTML = '';
 
     // 対局中は「雀卓だけ」を表示する（トップバーやサイドパネルを出さない）
@@ -1205,6 +1372,7 @@ class MahjongApp {
     const content = document.createElement('main');
     if (inGame) content.className = 'table-only-main';
     shell.appendChild(content);
+    this.mainLayer.appendChild(shell);
 
     const view = this.currentView;
     const lobbyHandlers = {
@@ -1226,14 +1394,24 @@ class MahjongApp {
       onTransferHost: (targetPlayerId: string) =>
         this.transferHostAndStay(targetPlayerId),
       onTransferHostAndLeave: () => this.transferHostAndLeave(),
+      onRefreshRoomStatuses: () => {
+        this.roomWatcher?.refreshNow();
+      },
     };
 
     if (!view) {
+      this.lastRenderedGameView = null;
       renderLobbyEntry(content, this.formState, lobbyHandlers, this.busy, {
         savedSession: this.savedSession,
+        landscapeLock: this.buildLandscapeLockUiState(),
+        roomStatuses: this.roomStatuses,
+        roomRefreshing: this.roomProbeRefreshing,
       });
     } else if (view.phase === 'lobby') {
-      renderWaitingRoom(content, view, lobbyHandlers);
+      this.lastRenderedGameView = null;
+      renderWaitingRoom(content, view, lobbyHandlers, {
+        landscapeLock: this.buildLandscapeLockUiState(),
+      });
     } else {
       renderGameTable(
         content,
@@ -1358,15 +1536,20 @@ class MahjongApp {
           unreadChatCount: this.unreadChatCount,
           perspectiveSeatIndex: this.perspectiveSeatIndex,
           hostStatusBanner: hostStatusBannerText,
+          prevView: this.lastRenderedGameView,
+          prevPerspectiveSeatIndex: this.lastRenderedPerspectiveSeatIndex,
+          discardOriginSnapshot,
         },
       );
+      this.lastRenderedGameView = view;
+      this.lastRenderedPerspectiveSeatIndex = this.perspectiveSeatIndex;
     }
 
-    this.mainLayer.appendChild(shell);
     if (this.leaveConfirmPending && inGame) {
       this.mainLayer.appendChild(this.renderLeaveConfirmModal());
     }
     this.syncOrientationOverlay();
+    this.syncRoomWatcher();
   }
 
   private renderFloating(): void {
@@ -1420,9 +1603,9 @@ class MahjongApp {
     const label = document.createElement('div');
     label.className = 'setting-toggle-label';
     label.innerHTML =
-      '<strong>フル画面表示</strong><span class="hub-sub">画面全体を広く使って対局します</span>';
+      '<strong>フル画面表示（横画面固定）</strong><span class="hub-sub">画面全体を広く使い、対応端末では横向きに固定します</span>';
 
-    const active = this.isFullscreenActive();
+    const active = isFullscreenActive();
     const toggleBtn = document.createElement('button');
     toggleBtn.type = 'button';
     toggleBtn.className = `toggle-switch setting-toggle-controls${active ? ' is-on' : ''}`;
@@ -1443,11 +1626,49 @@ class MahjongApp {
 
     toggleBtn.append(track, stateText);
     toggleBtn.addEventListener('click', () => {
-      void this.setFullscreen(!active);
+      void this.setLandscapeLock(!active);
     });
 
     row.append(label, toggleBtn);
-    panel.append(header, row);
+
+    const soundRow = document.createElement('div');
+    soundRow.className = 'setting-toggle-row';
+
+    const soundLabel = document.createElement('div');
+    soundLabel.className = 'setting-toggle-label';
+    soundLabel.innerHTML =
+      '<strong>効果音</strong><span class="hub-sub">打牌・ツモ・リーチ・鳴き・和了などの音を再生します</span>';
+
+    const soundActive = soundEngine.isEnabled();
+    const soundToggleBtn = document.createElement('button');
+    soundToggleBtn.type = 'button';
+    soundToggleBtn.className = `toggle-switch setting-toggle-controls${soundActive ? ' is-on' : ''}`;
+    soundToggleBtn.setAttribute('role', 'switch');
+    soundToggleBtn.setAttribute('aria-checked', soundActive ? 'true' : 'false');
+    soundToggleBtn.setAttribute('aria-label', '効果音');
+
+    const soundTrack = document.createElement('span');
+    soundTrack.className = 'toggle-track';
+    soundTrack.setAttribute('aria-hidden', 'true');
+    const soundThumb = document.createElement('span');
+    soundThumb.className = 'toggle-thumb';
+    soundTrack.appendChild(soundThumb);
+
+    const soundStateText = document.createElement('span');
+    soundStateText.className = 'toggle-state-text';
+    soundStateText.textContent = soundActive ? 'ON' : 'OFF';
+
+    soundToggleBtn.append(soundTrack, soundStateText);
+    soundToggleBtn.addEventListener('click', () => {
+      soundEngine.setEnabled(!soundActive);
+      if (!soundActive) {
+        soundEngine.playSelect();
+      }
+      this.renderFloating();
+    });
+
+    soundRow.append(soundLabel, soundToggleBtn);
+    panel.append(header, row, soundRow);
 
     if (
       this.activeSession?.role === 'host' &&

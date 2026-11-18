@@ -7,71 +7,43 @@ export interface PermanentRoomDefinition {
   name: string;
   tierLabel: string;
   badgeClass: string;
-  description: string;
-  rulesSummary: string;
   defaultRuleConfig: RuleConfig;
 }
+
+export const PERMANENT_ROOM_DEFAULT_RULE_CONFIG: Readonly<RuleConfig> = {
+  playerCount: 4,
+  gameLength: 'hanchan',
+  tobi: true,
+  tsumoLoss: false,
+  allowKuitan: true,
+  allowAtozuke: true,
+  honbaBonus: true,
+  doubleRon: true,
+  forbidKuikae: true,
+  cpuLevel: DEFAULT_CPU_LEVEL,
+};
 
 export const PERMANENT_ROOMS: readonly PermanentRoomDefinition[] = [
   {
     id: 'BRONZE',
     name: '銅の間',
-    tierLabel: '入門・東風戦',
+    tierLabel: '標準ルール',
     badgeClass: 'is-bronze',
-    description: '気軽に参加できる4人東風戦の卓です。空きがあればホストとして自動で部屋が開きます。',
-    rulesSummary: '4人麻雀 / 東風戦 / トビあり / 喰いタン・後付けあり / CPUやさしめ',
-    defaultRuleConfig: {
-      playerCount: 4,
-      gameLength: 'tonpuu',
-      tobi: true,
-      tsumoLoss: false,
-      allowKuitan: true,
-      allowAtozuke: true,
-      honbaBonus: true,
-      doubleRon: true,
-      forbidKuikae: true,
-      cpuLevel: 'easy',
-    },
+    defaultRuleConfig: { ...PERMANENT_ROOM_DEFAULT_RULE_CONFIG },
   },
   {
     id: 'SILVER',
     name: '銀の間',
-    tierLabel: '標準・半荘戦',
+    tierLabel: '標準ルール',
     badgeClass: 'is-silver',
-    description: '標準ルールの4人半荘戦の卓です。対局中に参加した場合は観戦として入室します。',
-    rulesSummary: '4人麻雀 / 半荘戦 / トビあり / ダブロンあり / 標準CPU',
-    defaultRuleConfig: {
-      playerCount: 4,
-      gameLength: 'hanchan',
-      tobi: true,
-      tsumoLoss: false,
-      allowKuitan: true,
-      allowAtozuke: true,
-      honbaBonus: true,
-      doubleRon: true,
-      forbidKuikae: true,
-      cpuLevel: DEFAULT_CPU_LEVEL,
-    },
+    defaultRuleConfig: { ...PERMANENT_ROOM_DEFAULT_RULE_CONFIG },
   },
   {
     id: 'GOLD',
     name: '金の間',
-    tierLabel: '上級・頭ハネ',
+    tierLabel: '標準ルール',
     badgeClass: 'is-gold',
-    description: '頭ハネ（ダブロンなし）を採用した真剣勝負の半荘戦卓です。',
-    rulesSummary: '4人麻雀 / 半荘戦 / 頭ハネ（ダブロンなし） / 喰い替え禁止 / 標準CPU',
-    defaultRuleConfig: {
-      playerCount: 4,
-      gameLength: 'hanchan',
-      tobi: true,
-      tsumoLoss: false,
-      allowKuitan: true,
-      allowAtozuke: true,
-      honbaBonus: true,
-      doubleRon: false,
-      forbidKuikae: true,
-      cpuLevel: DEFAULT_CPU_LEVEL,
-    },
+    defaultRuleConfig: { ...PERMANENT_ROOM_DEFAULT_RULE_CONFIG },
   },
 ] as const;
 

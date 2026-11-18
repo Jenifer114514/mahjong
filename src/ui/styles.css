@@ -134,6 +134,91 @@ input {
   gap: 16px;
 }
 
+.lobby-entry-top-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+  align-items: stretch;
+}
+
+.landscape-lock-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 10px;
+}
+
+.landscape-lock-box {
+  margin: 12px 0;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(79, 157, 255, 0.08);
+  border: 1px solid rgba(125, 175, 250, 0.24);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.landscape-lock-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 12px;
+}
+
+.landscape-lock-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1 1 190px;
+  min-width: 0;
+}
+
+.landscape-lock-label {
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.landscape-lock-sub {
+  margin-top: 0;
+  line-height: 1.4;
+}
+
+.landscape-lock-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.lobby-wrap .landscape-lock-apply-btn,
+.landscape-lock-apply-btn {
+  min-height: 34px;
+  padding: 6px 10px;
+  font-size: 0.78rem;
+}
+
+.landscape-lock-message {
+  font-size: 0.78rem;
+  padding: 6px 10px;
+  border-radius: 6px;
+  line-height: 1.45;
+}
+
+.landscape-lock-message.is-err {
+  color: #ffb8b8;
+  background: rgba(229, 83, 83, 0.14);
+  border: 1px solid rgba(229, 83, 83, 0.4);
+}
+
+.landscape-lock-message.is-info {
+  color: #b7d7ff;
+  background: rgba(79, 157, 255, 0.12);
+  border: 1px solid rgba(125, 175, 250, 0.35);
+}
+
 .field {
   display: flex;
   flex-direction: column;
@@ -1179,11 +1264,9 @@ input {
 .table-felt.is-landscape .hand-area {
   gap: 2px;
   flex-wrap: nowrap;
-  overflow-x: auto;
-  overflow-y: visible;
+  overflow: visible;
   justify-content: center;
-  padding: 8px 4px 2px;
-  scrollbar-width: thin;
+  padding: 14px 6px 3px;
 }
 
 .table-felt.is-landscape .hand-area > .mj-tile {
@@ -1272,6 +1355,21 @@ input {
   max-width: 320px;
   font-size: 0.72rem;
   color: var(--text-muted);
+}
+
+.rotate-overlay-lock-btn {
+  margin-top: 4px;
+}
+
+.rotate-overlay-error {
+  max-width: 340px;
+  font-size: 0.78rem;
+  color: #ffb8b8;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgba(229, 83, 83, 0.16);
+  border: 1px solid rgba(229, 83, 83, 0.45);
+  line-height: 1.45;
 }
 
 /* 横画面推奨ヒント（縦向きのみ表示） */
@@ -1754,6 +1852,10 @@ input {
   gap: 2px;
 }
 
+.river-zone.is-discard-animating {
+  z-index: 22;
+}
+
 .river-top {
   grid-column: 3;
   grid-row: 2;
@@ -1802,6 +1904,106 @@ input {
 /* リーチ宣言牌（横向き）は席の向きにさらに -90 度 */
 .discard-river .mj-tile.mj-tile-riichi {
   transform: rotate(calc(var(--river-rot) - 90deg));
+}
+
+/* リアル打牌アニメーション（手牌位置から浮かせて河へ着地） */
+.discard-river .mj-tile.mj-tile-discard-anim {
+  position: relative;
+  z-index: 25;
+  pointer-events: none;
+  will-change: transform, box-shadow;
+  transform-origin: center center;
+  animation: tileDiscardThrow 0.28s linear both;
+}
+
+.discard-river .mj-tile.mj-tile-discard-anim.mj-tile-discard-riichi-anim {
+  animation-duration: 0.34s;
+}
+
+.discard-river .mj-tile.mj-tile-discard-anim::before {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 5px;
+  border: 1.5px solid rgba(130, 200, 255, 0.78);
+  pointer-events: none;
+  opacity: 0;
+  animation: tileDiscardImpact 0.28s ease-out both;
+}
+
+.discard-river .mj-tile.mj-tile-discard-riichi-anim::before {
+  border-color: rgba(246, 206, 98, 0.9);
+  animation-duration: 0.34s;
+}
+
+@keyframes tileDiscardThrow {
+  0% {
+    opacity: 0.94;
+    transform:
+      translate3d(var(--discard-dx, 0px), var(--discard-dy, 92px), 0)
+      rotate(var(--discard-start-rot, var(--river-rot, 0deg)))
+      scale(var(--discard-start-scale, 1.32));
+    box-shadow:
+      0 6px 12px rgba(0, 0, 0, 0.45),
+      0 12px 20px rgba(0, 0, 0, 0.28);
+    animation-timing-function: cubic-bezier(0.24, 0.52, 0.4, 0.96);
+  }
+  42% {
+    opacity: 1;
+    transform:
+      translate3d(var(--discard-mid-x, 0px), var(--discard-mid-y, 32px), 0)
+      rotate(var(--discard-mid-rot, var(--river-rot, 0deg)))
+      scale(var(--discard-peak-scale, 1.28));
+    box-shadow:
+      0 14px 20px rgba(0, 0, 0, 0.52),
+      0 22px 28px -4px rgba(0, 0, 0, 0.36);
+    animation-timing-function: cubic-bezier(0.55, 0.08, 0.68, 0.54);
+  }
+  80% {
+    opacity: 1;
+    transform:
+      translate3d(var(--discard-settle-x, 0px), var(--discard-settle-y, -2px), 0)
+      rotate(var(--discard-settle-rot, var(--river-rot, 0deg)))
+      scale(0.95);
+    box-shadow:
+      0 0 0 2px rgba(99, 179, 255, 0.92),
+      0 0 14px rgba(99, 179, 255, 0.8),
+      0 1px 0 var(--tile-back-a, #f2b24c),
+      0 2px 0 var(--tile-back-c, #bb7116),
+      0 3px 0 var(--tile-back-d, #8c510b),
+      0 3px 4px rgba(0, 0, 0, 0.6);
+    animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  100% {
+    opacity: 1;
+    transform:
+      translate3d(0, 0, 0)
+      rotate(var(--discard-end-rot, var(--river-rot, 0deg)))
+      scale(1);
+    box-shadow:
+      0 0 0 1.5px #63b3ff,
+      0 0 10px rgba(99, 179, 255, 0.75),
+      0 1px 0 var(--tile-back-a, #f2b24c),
+      0 2px 0 var(--tile-back-c, #bb7116),
+      0 3px 0 var(--tile-back-d, #8c510b),
+      0 4px 4px -1px rgba(0, 0, 0, 0.55);
+  }
+}
+
+@keyframes tileDiscardImpact {
+  0%,
+  74% {
+    opacity: 0;
+    transform: scale(0.86);
+  }
+  84% {
+    opacity: 0.72;
+    transform: scale(1.03);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.34);
+  }
 }
 
 .river-empty {
@@ -1926,8 +2128,8 @@ input {
 .console-core {
   position: relative;
   z-index: 2;
-  width: 56%;
-  height: 44%;
+  width: 60%;
+  height: 51%;
   border-radius: 7px;
   background: linear-gradient(180deg, #1b2230 0%, #111620 100%);
   border: 1px solid rgba(138, 152, 180, 0.35);
@@ -1937,7 +2139,7 @@ input {
   align-items: center;
   justify-content: center;
   gap: 2px;
-  padding: 2px;
+  padding: 2px 4px;
 }
 
 .round-label {
@@ -1955,11 +2157,58 @@ input {
   line-height: 1.05;
 }
 
-.console-honba {
-  font-size: 0.62rem;
+.console-meta-row {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  max-width: 100%;
+  margin-top: 1px;
+}
+
+.console-oya-pill {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.56rem;
+  font-weight: 700;
+  color: #ffd9a0;
+  background: rgba(217, 56, 56, 0.24);
+  border: 1px solid rgba(255, 130, 120, 0.4);
+  padding: 0 5px;
+  border-radius: 999px;
+  line-height: 1.3;
+}
+
+.console-sticks-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.58rem;
   font-weight: 700;
   color: #a8b7d4;
-  line-height: 1;
+  line-height: 1.1;
+}
+
+.console-honba.is-active {
+  color: #f6d57a;
+}
+
+.console-kyotaku {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: #9cb0d1;
+}
+
+.console-kyotaku.is-active {
+  color: #ffe394;
+}
+
+.console-kyotaku .stick-icon {
+  width: 14px;
+  height: 3.5px;
 }
 
 .console-scores {
@@ -2002,15 +2251,87 @@ input {
   background: linear-gradient(90deg, transparent, #f3c95b, transparent);
 }
 
-.console-score.is-riichi::before {
-  content: '';
+.console-riichi-stick {
   position: absolute;
-  top: -3px;
-  width: 24px;
-  height: 4px;
+  top: -5px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 26px;
+  height: 4.5px;
   border-radius: 2px;
-  background: radial-gradient(circle at center, #d92c2c 2px, #f5f3ec 2.4px);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.75);
+  border: 0.5px solid rgba(25, 18, 8, 0.55);
+  background: radial-gradient(circle at center, #d92c2c 2px, #f6f4ec 2.4px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    0 2px 4px rgba(0, 0, 0, 0.78);
+}
+
+.console-riichi-stick.is-riichi-stick-placed {
+  animation: riichiStickPlace 0.42s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes riichiStickPlace {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, 24px) scale(1.22);
+    box-shadow: 0 12px 16px rgba(0, 0, 0, 0.7);
+  }
+  70% {
+    opacity: 1;
+    transform: translate(-50%, -2px) scale(0.98);
+  }
+  100% {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.8),
+      0 2px 4px rgba(0, 0, 0, 0.78);
+  }
+}
+
+.console-score-delta {
+  position: absolute;
+  top: -16px;
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-size: 0.72rem;
+  font-weight: 900;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(6, 11, 22, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.55);
+  animation: scoreDeltaFloat 1.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.console-score-delta.is-pos {
+  color: #6df5b2;
+  border-color: rgba(89, 217, 153, 0.55);
+}
+
+.console-score-delta.is-neg {
+  color: #ff8e8e;
+  border-color: rgba(255, 110, 110, 0.55);
+}
+
+@keyframes scoreDeltaFloat {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, 8px) scale(0.86);
+  }
+  18% {
+    opacity: 1;
+    transform: translate(-50%, -2px) scale(1.06);
+  }
+  72% {
+    opacity: 1;
+    transform: translate(-50%, -8px) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -18px) scale(0.96);
+  }
 }
 
 .console-score-self {
@@ -2197,7 +2518,7 @@ input {
   justify-content: center;
   flex-wrap: nowrap;
   gap: 2px;
-  padding: 8px 4px 2px;
+  padding: 14px 6px 3px;
 }
 
 .table-felt.is-landscape .call-action-bar,
@@ -3392,7 +3713,22 @@ input {
 .permanent-rooms-card {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 12px;
+}
+
+.permanent-rooms-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.lobby-wrap .permanent-rooms-refresh-btn,
+.permanent-rooms-refresh-btn {
+  min-height: 32px;
+  padding: 5px 10px;
+  font-size: 0.78rem;
 }
 
 .permanent-rooms-grid {
@@ -3473,18 +3809,84 @@ input {
   color: #f2f6ff;
 }
 
-.permanent-room-desc {
-  margin: 0;
-  font-size: 0.78rem;
-  line-height: 1.4;
+.permanent-room-occupancy {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(6, 14, 30, 0.62);
+  border: 1px solid rgba(125, 175, 250, 0.18);
+  min-height: 44px;
+  justify-content: center;
 }
 
-.permanent-room-rules {
+.permanent-room-status-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: var(--text-main);
+}
+
+.permanent-room-status-line.is-checking,
+.permanent-room-status-line.is-empty {
+  color: var(--text-muted);
+}
+
+.permanent-room-status-line.is-err {
+  color: #ffb8b8;
+}
+
+.permanent-room-phase-badge {
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: 999px;
+}
+
+.permanent-room-phase-badge.is-lobby {
+  background: rgba(66, 185, 131, 0.2);
+  color: #9af0c4;
+  border: 1px solid rgba(66, 185, 131, 0.45);
+}
+
+.permanent-room-phase-badge.is-playing {
+  background: rgba(240, 201, 92, 0.2);
+  color: #ffe494;
+  border: 1px solid rgba(240, 201, 92, 0.45);
+}
+
+.permanent-room-members {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.permanent-room-member {
+  font-size: 0.74rem;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: rgba(79, 157, 255, 0.16);
+  border: 1px solid rgba(125, 175, 250, 0.28);
+  color: #e4effe;
+}
+
+.permanent-room-member.is-cpu {
+  background: rgba(140, 155, 180, 0.16);
+  border-color: rgba(160, 175, 200, 0.28);
+  color: #c7d4ea;
+}
+
+.permanent-room-member.is-disconnected {
+  opacity: 0.65;
+  border-style: dashed;
+}
+
+.permanent-room-spectators {
   font-size: 0.72rem;
   color: #9fc2f5;
-  padding: 6px 8px;
-  border-radius: 6px;
-  background: rgba(6, 14, 30, 0.55);
 }
 
 .permanent-room-enter-btn {
@@ -3621,4 +4023,606 @@ input {
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
   pointer-events: none;
 }
+
+/* ===================================================================
+   演出・視認性・アニメーション強化層
+   =================================================================== */
+
+/* 1. ツモ牌の間隔と山からのスライドアニメーション */
+.table-felt.is-landscape .hand-area > .drawn-gap {
+  width: 12px;
+  flex: 0 0 auto;
+}
+
+.table-felt.is-landscape .hand-orient-top .opp-tile-drawn {
+  margin-left: 7px;
+}
+
+.table-felt.is-landscape .hand-orient-left .opp-tile-drawn,
+.table-felt.is-landscape .hand-orient-right .opp-tile-drawn {
+  margin-top: 6px;
+}
+
+.mj-tile-draw-anim {
+  position: relative;
+  z-index: 18;
+  will-change: transform, opacity;
+  animation: tileDrawSlide 0.24s cubic-bezier(0.22, 1, 0.36, 1)
+    var(--draw-delay, 0ms) both;
+}
+
+@keyframes tileDrawSlide {
+  0% {
+    opacity: 0.25;
+    transform: translate3d(var(--draw-dx, 0px), var(--draw-dy, -96px), 0)
+      scale(0.68);
+  }
+  70% {
+    opacity: 1;
+    transform: translate3d(0, -4px, 0) scale(1.04);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+/* 2. 選択中牌の上向きゴールドポインターと明快な浮き上がり */
+.hand-area > .mj-tile-clickable.mj-tile-selected {
+  transform: translateY(-16px);
+  z-index: 8;
+}
+
+.hand-area > .mj-tile-clickable.mj-tile-selected::before {
+  content: '';
+  position: absolute;
+  top: -10px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 6px solid #ffe07d;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.85));
+  pointer-events: none;
+}
+
+/* 3. 自分の手番時の手牌＆プレイヤー枠の温かい発光 */
+.hand-area.is-my-turn-hand {
+  border-radius: 10px;
+  box-shadow:
+    inset 0 -8px 18px -10px rgba(246, 206, 98, 0.45),
+    0 6px 20px -10px rgba(246, 206, 98, 0.42);
+}
+
+.seat-header.is-turn.is-self-turn {
+  animation: selfTurnFrameGlow 1.8s ease-in-out infinite;
+}
+
+@keyframes selfTurnFrameGlow {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 1px rgba(246, 206, 98, 0.48),
+      0 0 16px rgba(246, 206, 98, 0.34),
+      0 6px 18px rgba(0, 0, 0, 0.45);
+  }
+  50% {
+    box-shadow:
+      0 0 0 2px rgba(255, 224, 130, 0.85),
+      0 0 24px rgba(246, 206, 98, 0.58),
+      0 6px 18px rgba(0, 0, 0, 0.45);
+  }
+}
+
+/* 4. ポン・チー・カンの鳴き移動アニメーション＆鳴き牌の横向き表現 */
+.meld-group.is-meld-anim {
+  animation: meldRevealSlide 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes meldRevealSlide {
+  0% {
+    opacity: 0.35;
+    transform: translate3d(
+        var(--meld-slide-x, -60px),
+        var(--meld-slide-y, 20px),
+        0
+      )
+      scale(1.12);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+.meld-orient-self .meld-tiles > .mj-tile.mj-tile-called,
+.meld-orient-top .meld-tiles > .mj-tile.mj-tile-called {
+  transform: rotate(-90deg);
+  margin: 0 calc((var(--river-tile-h) - var(--river-tile-w)) / 2 + 1px);
+}
+
+.meld-orient-left .meld-tiles > .mj-tile.mj-tile-called {
+  transform: rotate(0deg);
+  margin: 1px calc((var(--river-tile-h) - var(--river-tile-w)) / 2);
+}
+
+.meld-orient-right .meld-tiles > .mj-tile.mj-tile-called {
+  transform: rotate(-180deg);
+  margin: 1px calc((var(--river-tile-h) - var(--river-tile-w)) / 2);
+}
+
+/* 河におけるリーチ牌と鳴かれた牌・ツモ切りの明確区別 */
+.discard-river .mj-tile.mj-tile-riichi::after {
+  box-shadow: inset 0 0 0 1px rgba(255, 198, 86, 0.72);
+}
+
+/* 5. ドラ表示牌めくりフリップアニメーション */
+.dora-panel-tiles .mj-tile.dora-tile-flip {
+  transform-style: preserve-3d;
+  animation: doraTileFlip 0.44s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes doraTileFlip {
+  0% {
+    transform: perspective(240px) rotateY(92deg) scale(1.12);
+    filter: brightness(1.3);
+    background-color: #f39a22;
+  }
+  48% {
+    transform: perspective(240px) rotateY(14deg) scale(1.06);
+    filter: brightness(1.15);
+  }
+  100% {
+    transform: perspective(240px) rotateY(0deg) scale(1);
+    filter: brightness(1);
+  }
+}
+
+/* 6. プレイヤーカードの順位バッジ */
+.seat-rank-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 0.62rem;
+  font-weight: 800;
+  line-height: 1.35;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.seat-rank-badge.rank-1 {
+  background: linear-gradient(180deg, rgba(247, 206, 92, 0.34), rgba(190, 140, 35, 0.25));
+  border-color: rgba(250, 214, 110, 0.72);
+  color: #ffe89e;
+}
+
+.seat-rank-badge.rank-2 {
+  background: rgba(190, 210, 238, 0.22);
+  border-color: rgba(205, 220, 245, 0.5);
+  color: #e4eefc;
+}
+
+.seat-rank-badge.rank-3 {
+  background: rgba(205, 138, 88, 0.22);
+  border-color: rgba(215, 152, 102, 0.48);
+  color: #f4cbb0;
+}
+
+.seat-rank-badge.rank-4 {
+  background: rgba(120, 135, 160, 0.2);
+  border-color: rgba(140, 155, 180, 0.35);
+  color: #b7c5dc;
+}
+
+/* 7. 局開始中央ショートテロップ（例: 東一局・南三局） */
+.round-start-banner {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 42;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 12px 34px;
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(20, 29, 48, 0.94) 0%, rgba(8, 13, 24, 0.96) 100%);
+  border: 1.5px solid rgba(246, 206, 98, 0.82);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    0 0 28px rgba(246, 206, 98, 0.3),
+    0 14px 32px rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(6px);
+  animation: roundBannerIn 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.round-start-banner.is-leaving {
+  animation: roundBannerOut 0.24s ease-in forwards;
+}
+
+.round-start-banner-title {
+  font-size: clamp(1.35rem, 3vw, 2.05rem);
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  color: #ffe89e;
+  text-shadow:
+    0 2px 10px rgba(246, 206, 98, 0.45),
+    0 2px 4px rgba(0, 0, 0, 0.9);
+  white-space: nowrap;
+}
+
+.round-start-banner-sub {
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: #dbe6fa;
+  white-space: nowrap;
+}
+
+@keyframes roundBannerIn {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.86);
+  }
+  100% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
+@keyframes roundBannerOut {
+  0% {
+    opacity: 1;
+    transform: translate(-50%, -52%) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -58%) scale(0.95);
+  }
+}
+
+/* 8. ロン・ツモ時の暗転フラッシュ＋目立つ和了コールアウト */
+.overlay-backdrop-modal.is-agari-backdrop {
+  background: rgba(3, 6, 16, 0.82);
+}
+
+.overlay-backdrop-modal.is-agari-flash {
+  animation: agariBackdropFlash 0.6s ease-out both;
+}
+
+@keyframes agariBackdropFlash {
+  0% {
+    background: rgba(1, 2, 8, 0.96);
+  }
+  30% {
+    background: rgba(14, 18, 34, 0.88);
+  }
+  100% {
+    background: rgba(3, 6, 16, 0.82);
+  }
+}
+
+.overlay-backdrop-modal.is-agari-flash > .round-end-panel {
+  animation: agariPanelPop 0.36s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes agariPanelPop {
+  0% {
+    opacity: 0;
+    transform: scale(0.9) translateY(8px);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.agari-callout-hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background:
+    linear-gradient(120deg, rgba(246, 206, 98, 0.2) 0%, rgba(180, 48, 42, 0.24) 100%);
+  border: 1.5px solid rgba(246, 206, 98, 0.72);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    0 6px 20px rgba(0, 0, 0, 0.4);
+}
+
+.agari-callout-type {
+  font-size: 1.35rem;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  color: #ffe68c;
+  text-shadow:
+    0 0 14px rgba(246, 206, 98, 0.65),
+    0 2px 4px rgba(0, 0, 0, 0.85);
+}
+
+.agari-callout-main {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.agari-callout-winner {
+  font-size: 0.96rem;
+  font-weight: 800;
+  color: #ffffff;
+}
+
+.agari-callout-points {
+  font-size: 1.12rem;
+  font-weight: 900;
+  color: #ffd96a;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 9. 鳴き・手番アクションボタン内の牌画像プレビュー */
+.btn.btn-with-tiles {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 36px;
+}
+
+.btn-tile-preview {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  pointer-events: none;
+}
+
+.btn-tile-preview > .mj-tile,
+.btn-tile-preview > .mj-tile.mj-tile-sm {
+  width: 19px;
+  height: 26px;
+  box-shadow: 0 2px 3px rgba(0, 0, 0, 0.5);
+}
+
+/* 10. 設定・チャットポップアップ（卓全体は背後に見えたまま） */
+.overlay-backdrop-modal.table-settings-modal,
+.overlay-backdrop-modal.table-chat-modal {
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding: 46px 16px 12px;
+  background: rgba(4, 9, 20, 0.34);
+  backdrop-filter: blur(2px);
+}
+
+.overlay-backdrop-modal.table-settings-modal > .table-settings-panel,
+.overlay-backdrop-modal.table-chat-modal > .table-chat-panel {
+  width: min(390px, 100%);
+  max-height: calc(100vh - 58px);
+  max-height: calc(100dvh - 58px);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.72);
+}
+
+/* 11. 専用終局リザルト画面（順位・最終点数・点数変動） */
+.finished-podium-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 8px;
+}
+
+.finished-podium-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px;
+  border-radius: 10px;
+  background: rgba(11, 19, 38, 0.76);
+  border: 1px solid rgba(155, 190, 245, 0.22);
+}
+
+.finished-podium-card.rank-1 {
+  background: linear-gradient(
+    135deg,
+    rgba(246, 206, 98, 0.2) 0%,
+    rgba(28, 38, 62, 0.85) 100%
+  );
+  border-color: rgba(246, 206, 98, 0.72);
+  box-shadow: 0 4px 16px rgba(246, 206, 98, 0.16);
+}
+
+.finished-podium-card.is-self {
+  box-shadow: inset 0 0 0 1px rgba(124, 196, 255, 0.55);
+}
+
+.finished-rank-badge {
+  flex: 0 0 auto;
+  min-width: 38px;
+  text-align: center;
+  padding: 4px 6px;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  font-weight: 900;
+  background: rgba(140, 160, 195, 0.18);
+  color: #dbe6fa;
+}
+
+.finished-rank-badge.rank-1 {
+  background: linear-gradient(180deg, #ffe27a 0%, #d49c24 100%);
+  color: #1e1404;
+}
+
+.finished-rank-badge.rank-2 {
+  background: linear-gradient(180deg, #eef4ff 0%, #9db2cf 100%);
+  color: #131c2c;
+}
+
+.finished-rank-badge.rank-3 {
+  background: linear-gradient(180deg, #f2be96 0%, #b47344 100%);
+  color: #1d1007;
+}
+
+.finished-podium-info {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.finished-podium-name {
+  font-size: 0.9rem;
+  font-weight: 800;
+  color: #f3f7ff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.finished-podium-delta {
+  font-size: 0.76rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.finished-podium-delta.delta-even {
+  color: #a9bbd6;
+}
+
+.finished-podium-score {
+  flex: 0 0 auto;
+  font-size: 1rem;
+  font-weight: 900;
+  color: #ffe694;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 12. スマホ横持ちでの最小サイズと操作ボタン配慮 */
+@media (orientation: landscape) and (max-height: 560px) {
+  .console-meta-row {
+    gap: 1px;
+  }
+
+  .console-oya-pill {
+    font-size: 0.5rem;
+    padding: 0 4px;
+  }
+
+  .console-sticks-meta {
+    font-size: 0.52rem;
+    gap: 4px;
+  }
+
+  .call-action-bar .btn,
+  .self-action-bar .btn {
+    min-height: 32px;
+    padding: 4px 9px;
+  }
+
+  .btn-tile-preview > .mj-tile,
+  .btn-tile-preview > .mj-tile.mj-tile-sm {
+    width: 17px;
+    height: 23px;
+  }
+
+  .agari-callout-hero {
+    padding: 6px 10px;
+  }
+
+  .agari-callout-type {
+    font-size: 1.05rem;
+  }
+
+  .agari-callout-points {
+    font-size: 0.94rem;
+  }
+}
+
+@media (orientation: landscape) and (max-height: 430px) {
+  .console-core {
+    width: 62%;
+    height: 52%;
+    gap: 1px;
+    padding: 1px 2px;
+  }
+
+  .console-oya-pill {
+    font-size: 0.45rem;
+    padding: 0 3px;
+  }
+
+  .console-sticks-meta {
+    font-size: 0.46rem;
+    gap: 3px;
+  }
+
+  .console-kyotaku .stick-icon {
+    width: 11px;
+    height: 3px;
+  }
+
+  .seat-orient-self .hand-area,
+  .table-felt.is-landscape .hand-area {
+    padding: 11px 4px 2px;
+  }
+
+  .table-felt.is-landscape .hand-area > .drawn-gap {
+    width: 8px;
+  }
+
+  .call-action-bar .btn,
+  .self-action-bar .btn {
+    min-height: 30px;
+    padding: 3px 7px;
+    font-size: 0.72rem;
+  }
+
+  .btn-tile-preview > .mj-tile,
+  .btn-tile-preview > .mj-tile.mj-tile-sm {
+    width: 15px;
+    height: 21px;
+  }
+
+  .overlay-backdrop-modal.table-settings-modal,
+  .overlay-backdrop-modal.table-chat-modal {
+    padding: 36px 10px 8px;
+  }
+
+  .round-start-banner {
+    padding: 8px 22px;
+  }
+
+  .round-start-banner-title {
+    font-size: 1.25rem;
+  }
+
+  .finished-podium-list {
+    gap: 5px;
+  }
+
+  .finished-podium-card {
+    padding: 6px 8px;
+    gap: 7px;
+  }
+
+  .finished-podium-name {
+    font-size: 0.78rem;
+  }
+
+  .finished-podium-delta {
+    font-size: 0.66rem;
+  }
+
+  .finished-podium-score {
+    font-size: 0.84rem;
+  }
+}
+
 

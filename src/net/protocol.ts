@@ -9,9 +9,12 @@ import type {
   HostMigratingPayload,
   HostRedirectPayload,
   HostSnapshotPayload,
+  RoomOccupancyPlayer,
+  RoomStatusPayload,
   SessionWelcomePayload,
   StateView,
 } from '../types/message';
+import type { GamePhase } from '../types/state';
 import type { CallResponseChoice } from '../types/state';
 import { ALL_TILE_KINDS, type TileKind } from '../types/tile';
 
@@ -164,6 +167,10 @@ function parseCallResponseChoice(raw: unknown): CallResponseChoice | null {
 export function parseClientMessage(raw: unknown): ClientMessage | null {
   if (!isRecord(raw) || typeof raw.kind !== 'string') {
     return null;
+  }
+
+  if (raw.kind === 'PROBE_ROOM') {
+    return { kind: 'PROBE_ROOM' };
   }
 
   if (raw.kind === 'JOIN') {
@@ -517,6 +524,63 @@ export function parseHostMessage(raw: unknown): HostMessage | null {
     return {
       kind: 'HOST_STATUS',
       payload: { away: raw.payload.away },
+    };
+  }
+
+  if (raw.kind === 'ROOM_STATUS') {
+    if (!isRecord(raw.payload)) return null;
+    const rs = raw.payload;
+    const validPhases: readonly GamePhase[] = [
+      'lobby',
+      'playing',
+      'awaiting_responses',
+      'round_end',
+      'finished',
+    ];
+    if (
+      !isNonEmptyString(rs.roomCode) ||
+      typeof rs.phase !== 'string' ||
+      !validPhases.includes(rs.phase as GamePhase) ||
+      typeof rs.maxPlayers !== 'number' ||
+      !Number.isFinite(rs.maxPlayers) ||
+      !Array.isArray(rs.players) ||
+      !Array.isArray(rs.spectatorNames)
+    ) {
+      return null;
+    }
+    const players: RoomOccupancyPlayer[] = [];
+    for (const item of rs.players) {
+      if (
+        !isRecord(item) ||
+        typeof item.name !== 'string' ||
+        typeof item.isCpu !== 'boolean' ||
+        typeof item.connected !== 'boolean' ||
+        typeof item.isHost !== 'boolean'
+      ) {
+        return null;
+      }
+      players.push({
+        name: item.name,
+        isCpu: item.isCpu,
+        connected: item.connected,
+        isHost: item.isHost,
+      });
+    }
+    const spectatorNames: string[] = [];
+    for (const name of rs.spectatorNames) {
+      if (typeof name !== 'string') return null;
+      spectatorNames.push(name);
+    }
+    const payload: RoomStatusPayload = {
+      roomCode: rs.roomCode,
+      phase: rs.phase as GamePhase,
+      maxPlayers: rs.maxPlayers,
+      players,
+      spectatorNames,
+    };
+    return {
+      kind: 'ROOM_STATUS',
+      payload,
     };
   }
 
