@@ -73,6 +73,8 @@ export interface HostSessionOptions {
   cpuCount?: number;
   /** CPU の思考時間(ms)。0 にすると即座に打牌する（テスト用） */
   cpuDelayMs?: number;
+  /** CPU 遅延の揺らぎ生成用乱数（決定論テスト用に差し替え可能） */
+  cpuRandom?: () => number;
   /** CPU 操作の遅延スケジュール（テスト用に差し替え可能） */
   cpuScheduler?: (fn: () => void, delayMs: number) => void;
   /**
@@ -126,8 +128,16 @@ export class HostSession {
   /** 設定された CPU 数（ロビーで後から増やせるため可変） */
   private cpuCount: number;
   private readonly cpuDelayMs: number;
+  private readonly cpuRandom: () => number;
   private readonly cpuScheduler: (fn: () => void, delayMs: number) => void;
   private cpuToken = 0;
+  private cpuDeadlineMs: number | null = null;
+  private postDiscardHoldActive = false;
+  private postDiscardHoldToken = 0;
+  private postDiscardHoldDeadlineMs: number | null = null;
+  private disconnectTargetTurnCount: number | null = null;
+  private disconnectDeadlineMs: number | null = null;
+  private hostAway = false;
   private chatMessages: ChatMessage[] = [];
   private chatSeq = 0;
   private hostEpoch = 0;
@@ -154,6 +164,7 @@ export class HostSession {
     this.disconnectGraceMs = options.disconnectGraceMs ?? 15000;
     this.cpuCount = options.cpuCount ?? 0;
     this.cpuDelayMs = options.cpuDelayMs ?? 700;
+    this.cpuRandom = options.cpuRandom ?? (() => Math.random());
     this.cpuScheduler =
       options.cpuScheduler ??
       ((fn, delay) => {
@@ -1113,7 +1124,11 @@ export class HostSession {
       return;
     }
 
-    this.commitState(result.state);
+    this.commitState(result.state, {
+      fromDiscard:
+        engineAction.type === 'DISCARD_TILE' ||
+        engineAction.type === 'DECLARE_RIICHI',
+    });
   }
 
   private bindParticipantConn(
@@ -1130,6 +1145,12 @@ export class HostSession {
     }
     this.participantConns.set(participantId, conn);
     this.peerToParticipant.set(conn.peer, { kind, id: participantId });
+    if (this.hostAway) {
+      this.sendToConn(conn, {
+        kind: 'HOST_STATUS',
+        payload: { away: true },
+      });
+    }
   }
 
   private processJoinMessage(
@@ -1441,7 +1462,47 @@ export class HostSession {
       this.callbacks.onError(result.error);
       return;
     }
-    this.commitState(result.state);
+    this.commitState(result.state, {
+      fromDiscard:
+        action.type === 'DISCARD_TILE' || action.type === 'DECLARE_RIICHI',
+    });
+  }
+
+  setHostAway(away: boolean): void {
+    if (this.destroyed) return;
+    this.hostAway = away;
+    for (const conn of this.participantConns.values()) {
+      this.sendToConn(conn, {
+        kind: 'HOST_STATUS',
+        payload: { away },
+      });
+    }
+    if (!away) {
+      this.resumeAfterVisibilityRestore();
+    }
+  }
+
+  private resumeAfterVisibilityRestore(): void {
+    if (this.destroyed || this.pendingTakeover) return;
+    this.syncResponseTimer();
+    this.syncDisconnectTurnTimer(true);
+
+    if (this.postDiscardHoldActive && this.postDiscardHoldDeadlineMs !== null) {
+      const remaining = Math.max(0, this.postDiscardHoldDeadlineMs - Date.now());
+      const token = ++this.postDiscardHoldToken;
+      this.cpuScheduler(() => {
+        this.finishPostDiscardHold(token);
+      }, remaining);
+      return;
+    }
+
+    if (this.hasAnyCpu() && this.needsCpuProgress()) {
+      const remaining =
+        this.cpuDeadlineMs !== null
+          ? Math.max(0, this.cpuDeadlineMs - Date.now())
+          : this.sampleCpuDelayMs();
+      this.scheduleCpuTickWithDelay(remaining);
+    }
   }
 
   discardTile(tileId: string): void {
@@ -1519,12 +1580,55 @@ export class HostSession {
     });
   }
 
-  private commitState(nextState: GameState): void {
+  private commitState(
+    nextState: GameState,
+    options: { fromDiscard?: boolean } = {},
+  ): void {
     this.state = nextState;
+    this.postDiscardHoldToken++;
+    this.postDiscardHoldActive = false;
+    this.postDiscardHoldDeadlineMs = null;
+    this.cpuDeadlineMs = null;
+
+    if (
+      options.fromDiscard &&
+      nextState.phase === 'playing' &&
+      this.cpuDelayMs > 0 &&
+      this.hasAnyCpu()
+    ) {
+      const holdDelayMs = this.sampleCpuDelayMs();
+      const token = ++this.postDiscardHoldToken;
+      this.postDiscardHoldActive = true;
+      this.postDiscardHoldDeadlineMs = Date.now() + holdDelayMs;
+      this.syncResponseTimer();
+      this.clearDisconnectTurnTimer();
+      this.broadcastViews();
+      this.broadcastCheckpoint();
+      this.cpuScheduler(() => {
+        this.finishPostDiscardHold(token);
+      }, holdDelayMs);
+      return;
+    }
+
     this.syncResponseTimer();
     this.syncDisconnectTurnTimer();
     this.broadcastViews();
     this.broadcastCheckpoint();
+    this.scheduleCpuTick();
+  }
+
+  private finishPostDiscardHold(token: number): void {
+    if (
+      this.destroyed ||
+      !this.postDiscardHoldActive ||
+      token !== this.postDiscardHoldToken
+    ) {
+      return;
+    }
+    this.postDiscardHoldActive = false;
+    this.postDiscardHoldDeadlineMs = null;
+    this.syncDisconnectTurnTimer();
+    this.broadcastViews();
     this.scheduleCpuTick();
   }
 
@@ -1535,24 +1639,66 @@ export class HostSession {
     );
   }
 
+  private sampleCpuDelayMs(): number {
+    if (this.cpuDelayMs <= 0) return 0;
+    const min = Math.round(this.cpuDelayMs * 0.45);
+    const max = Math.round(this.cpuDelayMs * 0.85);
+    const r = Math.min(0.999999, Math.max(0, this.cpuRandom()));
+    return Math.round(min + (max - min) * r);
+  }
+
+  private needsCpuProgress(): boolean {
+    const phase = this.state.phase;
+    if (phase === 'finished') return false;
+    if (phase === 'lobby') {
+      return this.missingCpuIds().length > 0;
+    }
+    if (phase === 'awaiting_responses') {
+      const pending = this.state.round?.pendingResponse;
+      if (!pending) return false;
+      return Object.keys(pending.optionsByPlayerId).some(
+        (pid) => !(pid in pending.responses) && this.isCpuPlayer(pid),
+      );
+    }
+    if (phase === 'playing') {
+      const current = this.state.players.find(
+        (p) => p.seatIndex === this.state.round?.currentTurnIndex,
+      );
+      return Boolean(
+        current &&
+          this.isCpuPlayer(current.playerId) &&
+          !this.state.round?.pendingResponse,
+      );
+    }
+    return false;
+  }
+
   /** CPU の手番・応答待ちが残っていれば次の一手を予約する */
   private scheduleCpuTick(): void {
-    if (this.destroyed || this.pendingTakeover || !this.hasAnyCpu()) return;
+    if (
+      this.destroyed ||
+      this.pendingTakeover ||
+      this.postDiscardHoldActive ||
+      !this.hasAnyCpu()
+    ) {
+      return;
+    }
     const phase = this.state.phase;
     if (phase === 'finished') return;
     if (phase === 'lobby' && this.missingCpuIds().length === 0) return;
+    if (!this.needsCpuProgress()) return;
 
+    const delayMs = this.sampleCpuDelayMs();
+    this.scheduleCpuTickWithDelay(delayMs);
+  }
+
+  private scheduleCpuTickWithDelay(delayMs: number): void {
     const token = ++this.cpuToken;
-    const delayMs =
-      phase === 'awaiting_responses'
-        ? Math.round(this.cpuDelayMs * 0.45)
-        : this.cpuDelayMs;
+    this.cpuDeadlineMs = Date.now() + delayMs;
     this.cpuScheduler(() => {
       if (this.destroyed || token !== this.cpuToken) return;
-      const progressed = this.runCpuStepOnce();
-      if (progressed) {
-        this.scheduleCpuTick();
-      }
+      this.cpuDeadlineMs = null;
+      this.runCpuStepOnce();
     }, delayMs);
   }
 
@@ -1590,21 +1736,43 @@ export class HostSession {
     }
 
     if (phase === 'awaiting_responses') {
-      const pending = this.state.round?.pendingResponse;
-      if (!pending) return false;
-      for (const pid of Object.keys(pending.optionsByPlayerId)) {
-        if (pid in pending.responses) continue;
-        if (!this.isCpuPlayer(pid)) continue;
-        const view = toStateView(this.state, pid, Date.now());
-        if (!view.myCallOptions) continue;
+      const rules = deriveRules(this.state.ruleConfig);
+      let curState = this.state;
+      let progressed = false;
+      while (curState.phase === 'awaiting_responses') {
+        const pending = curState.round?.pendingResponse;
+        if (!pending) break;
+        const nextCpuPid = Object.keys(pending.optionsByPlayerId).find(
+          (pid) => !(pid in pending.responses) && this.isCpuPlayer(pid),
+        );
+        if (!nextCpuPid) break;
+        const view = toStateView(curState, nextCpuPid, Date.now());
+        if (!view.myCallOptions) break;
         const decision =
           decideCpuAction(view) ?? {
             type: 'CALL_RESPONSE' as const,
             choice: { type: 'pass' as const },
           };
-        return this.applyCpuDecision(pid, decision);
+        const engineAction = toEngineAction(nextCpuPid, decision, {
+          now: Date.now(),
+          shuffledDeck: shuffleWithCrypto(buildTileDeck(rules)),
+        });
+        if (!engineAction) break;
+        let res = applyAction(curState, engineAction);
+        if (res.error) {
+          res = applyAction(curState, {
+            type: 'CALL_RESPONSE',
+            playerId: nextCpuPid,
+            choice: { type: 'pass' },
+          });
+        }
+        if (res.error) break;
+        curState = res.state;
+        progressed = true;
       }
-      return false;
+      if (!progressed) return false;
+      this.commitState(curState);
+      return true;
     }
 
     if (phase !== 'playing') return false;
@@ -1632,6 +1800,9 @@ export class HostSession {
       shuffledDeck: shuffleWithCrypto(buildTileDeck(rules)),
     });
     if (!engineAction) return false;
+    const isDiscard =
+      engineAction.type === 'DISCARD_TILE' ||
+      engineAction.type === 'DECLARE_RIICHI';
     const result = applyAction(this.state, engineAction);
     if (result.error) {
       if (decision.type !== 'DISCARD_TILE') {
@@ -1644,14 +1815,14 @@ export class HostSession {
             now: Date.now(),
           });
           if (!fallback.error) {
-            this.commitState(fallback.state);
+            this.commitState(fallback.state, { fromDiscard: true });
             return true;
           }
         }
       }
       return false;
     }
-    this.commitState(result.state);
+    this.commitState(result.state, { fromDiscard: isDiscard });
     return true;
   }
 
@@ -1730,16 +1901,21 @@ export class HostSession {
   }
 
   /** 切断中の人間プレイヤーの手番が止まらないよう猶予後にツモ切り代打ちする */
-  private syncDisconnectTurnTimer(): void {
+  private syncDisconnectTurnTimer(preserveDeadline = false): void {
     this.clearDisconnectTurnTimer();
     if (
       this.destroyed ||
       this.offline ||
       this.pendingTakeover ||
+      this.postDiscardHoldActive ||
       this.disconnectGraceMs < 0 ||
       this.state.phase !== 'playing' ||
       !this.state.round
     ) {
+      if (!this.postDiscardHoldActive) {
+        this.disconnectTargetTurnCount = null;
+        this.disconnectDeadlineMs = null;
+      }
       return;
     }
 
@@ -1753,14 +1929,27 @@ export class HostSession {
       currentPlayer.connected ||
       currentPlayer.playerId === this.state.hostPlayerId
     ) {
+      this.disconnectTargetTurnCount = null;
+      this.disconnectDeadlineMs = null;
       return;
     }
 
     const scheduledTurnCount = round.turnCount;
     const targetPlayerId = currentPlayer.playerId;
+    if (
+      !preserveDeadline ||
+      this.disconnectTargetTurnCount !== scheduledTurnCount ||
+      this.disconnectDeadlineMs === null
+    ) {
+      this.disconnectTargetTurnCount = scheduledTurnCount;
+      this.disconnectDeadlineMs = Date.now() + this.disconnectGraceMs;
+    }
+    const delayMs = Math.max(0, this.disconnectDeadlineMs - Date.now());
 
     this.disconnectTurnTimerId = setTimeout(() => {
       this.disconnectTurnTimerId = null;
+      this.disconnectTargetTurnCount = null;
+      this.disconnectDeadlineMs = null;
       if (this.destroyed || this.state.phase !== 'playing' || !this.state.round) {
         return;
       }
@@ -1786,9 +1975,9 @@ export class HostSession {
         now: Date.now(),
       });
       if (!res.error) {
-        this.commitState(res.state);
+        this.commitState(res.state, { fromDiscard: true });
       }
-    }, this.disconnectGraceMs);
+    }, delayMs);
   }
 
   private broadcastCheckpoint(): void {
@@ -1866,21 +2055,41 @@ export class HostSession {
     });
   }
 
+  private buildViewForViewer(viewerId: string, now: number): StateView {
+    const view = toStateView(this.state, viewerId, now, {
+      hostEpoch: this.hostEpoch,
+    });
+    if (
+      this.postDiscardHoldActive &&
+      this.state.phase === 'playing' &&
+      this.state.round &&
+      !view.isSpectator
+    ) {
+      const current = this.state.players.find(
+        (p) => p.seatIndex === this.state.round?.currentTurnIndex,
+      );
+      if (current && current.playerId === viewerId) {
+        return {
+          ...view,
+          myDrawnTile: null,
+          mySelfActions: null,
+        };
+      }
+    }
+    return view;
+  }
+
   private emitHostView(): void {
     const now = Date.now();
     this.callbacks.onViewChange(
-      toStateView(this.state, this.state.hostPlayerId, now, {
-        hostEpoch: this.hostEpoch,
-      }),
+      this.buildViewForViewer(this.state.hostPlayerId, now),
     );
   }
 
   private broadcastViews(): void {
     const now = Date.now();
     this.callbacks.onViewChange(
-      toStateView(this.state, this.state.hostPlayerId, now, {
-        hostEpoch: this.hostEpoch,
-      }),
+      this.buildViewForViewer(this.state.hostPlayerId, now),
     );
     for (const player of this.state.players) {
       if (player.playerId === this.state.hostPlayerId) continue;
@@ -1888,9 +2097,7 @@ export class HostSession {
       if (conn && conn.open) {
         this.sendToConn(conn, {
           kind: 'STATE_VIEW',
-          payload: toStateView(this.state, player.playerId, now, {
-            hostEpoch: this.hostEpoch,
-          }),
+          payload: this.buildViewForViewer(player.playerId, now),
         });
       }
     }
@@ -1899,9 +2106,7 @@ export class HostSession {
       if (conn && conn.open) {
         this.sendToConn(conn, {
           kind: 'STATE_VIEW',
-          payload: toStateView(this.state, spectator.spectatorId, now, {
-            hostEpoch: this.hostEpoch,
-          }),
+          payload: this.buildViewForViewer(spectator.spectatorId, now),
         });
       }
     }
@@ -1920,6 +2125,12 @@ export class HostSession {
     if (this.destroyed) return;
     this.destroyed = true;
     this.cpuToken++;
+    this.postDiscardHoldToken++;
+    this.postDiscardHoldActive = false;
+    this.postDiscardHoldDeadlineMs = null;
+    this.cpuDeadlineMs = null;
+    this.disconnectTargetTurnCount = null;
+    this.disconnectDeadlineMs = null;
     this.clearResponseTimer();
     this.clearDisconnectTurnTimer();
     if (this.beaconRetryTimerId !== null) {

@@ -323,4 +323,131 @@ describe('アプリ起動とローカルCPU対局', () => {
     expect(enteredLobby).toBe(true);
     expect(root.querySelector('.lobby-start-btn')).not.toBeNull();
   });
+
+  it('対局中は Wake Lock を取得し、visibilitychange でホスト警告表示・復帰で解除、離脱時に Wake Lock を解放する', async () => {
+    localStorage.clear();
+    let visState: 'visible' | 'hidden' = 'visible';
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => visState,
+    });
+
+    const releaseMock = vi.fn(async () => {});
+    const requestMock = vi.fn(async () => ({
+      released: false,
+      release: releaseMock,
+      addEventListener: () => {},
+    }));
+    Object.defineProperty(navigator, 'wakeLock', {
+      configurable: true,
+      value: { request: requestMock },
+    });
+
+    bootApp();
+    await loadMain();
+
+    const root = document.getElementById('app') as HTMLElement;
+    expect(clickByText(root, 'button', 'CPU対局をはじめる')).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    expect(requestMock).toHaveBeenCalledWith('screen');
+
+    // タブ背面化でホスト自身に警告バナーが出る
+    visState = 'hidden';
+    document.dispatchEvent(new Event('visibilitychange'));
+    const warnBanner = root.querySelector('.table-host-away-banner');
+    expect(warnBanner).not.toBeNull();
+    expect(warnBanner!.textContent).toContain('背面');
+
+    // タブ復帰で警告が消え、Wake Lock を再取得する
+    visState = 'visible';
+    document.dispatchEvent(new Event('visibilitychange'));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(root.querySelector('.table-host-away-banner')).toBeNull();
+    expect(requestMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+
+    // 対局から退出すると Wake Lock が解放される
+    root.querySelector<HTMLButtonElement>('.table-chrome-leave')!.click();
+    expect(clickByText(root, '.leave-confirm-modal button', 'ロビーに戻る')).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(releaseMock).toHaveBeenCalled();
+  });
+
+  it('クライアント側で HOST_STATUS(away) に応じて「ホストが画面を離れています」バナーを表示・解除できる', async () => {
+    const { renderGameTable } = await import('../tableView');
+    const { ClientSession } = await import('../../net/client');
+
+    // 1. ClientSession が HOST_STATUS を受けて onHostAwayChange を発火すること
+    let receivedAway: boolean | null = null;
+    const client = new ClientSession(
+      'ROOM01',
+      'ゲスト',
+      {
+        onViewChange: () => {},
+        onStatusChange: () => {},
+        onError: () => {},
+        onHostAwayChange: (away) => {
+          receivedAway = away;
+        },
+      },
+      { turnConfigured: false },
+    );
+    client.connect();
+    // openDataConnection を呼び出して fake conn に HOST_STATUS を流すため peer open を発火
+    const fakePeer = (client as unknown as {
+      peer: { emit: (ev: string, ...args: unknown[]) => void };
+    }).peer;
+    let dataHandler: ((msg: unknown) => void) | undefined;
+    (client as unknown as {
+      peer: {
+        connect: () => {
+          open: boolean;
+          on: (ev: string, cb: (...args: unknown[]) => void) => void;
+          send: () => void;
+          close: () => void;
+        };
+      };
+    }).peer.connect = () => ({
+      open: true,
+      on(ev: string, cb: (...args: unknown[]) => void) {
+        if (ev === 'data') dataHandler = cb;
+      },
+      send() {},
+      close() {},
+    });
+    fakePeer.emit('open', 'client-peer-1');
+    dataHandler?.({ kind: 'HOST_STATUS', payload: { away: true } });
+    expect(receivedAway).toBe(true);
+    dataHandler?.({ kind: 'HOST_STATUS', payload: { away: false } });
+    expect(receivedAway).toBe(false);
+    client.destroy();
+
+    // 2. tableView が hostStatusBanner に「ホストが画面を離れています」を描画すること
+    const { createStartedCustomGame } = await import(
+      '../../engine/__tests__/testHelpers'
+    );
+    const { toStateView } = await import('../../engine/projection');
+    const state = createStartedCustomGame(4, { hands: {} });
+    const view = toStateView(state, 'p1', 1000);
+    const container = document.createElement('div');
+    const noopHandlers = {
+      onDiscardTile: () => {},
+      onCallResponse: () => {},
+      onDeclareTsumo: () => {},
+      onDeclareRiichi: () => {},
+      onDeclareAnkan: () => {},
+      onDeclareKakan: () => {},
+      onDeclareKita: () => {},
+      onDeclareKyuushuKyuuhai: () => {},
+      onAdvanceRound: () => {},
+      onReturnToLobby: () => {},
+    };
+    renderGameTable(container, view, noopHandlers, {
+      riichiSelectingMode: false,
+      autoTsumogiriEnabled: true,
+      hostStatusBanner: 'ホストが画面を離れています',
+    });
+    const banner = container.querySelector('.table-host-away-banner');
+    expect(banner?.textContent).toBe('ホストが画面を離れています');
+  });
 });

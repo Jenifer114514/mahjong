@@ -3591,3 +3591,34 @@ input {
   gap: 8px;
 }
 
+/* ---------- ホスト画面離脱・背面警告バナー ---------- */
+.host-away-banner {
+  margin: 8px 0;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: rgba(240, 173, 78, 0.18);
+  border: 1px solid rgba(255, 200, 92, 0.6);
+  color: #ffe7b3;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.table-host-away-banner {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 35;
+  max-width: min(90%, 540px);
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: rgba(54, 34, 6, 0.92);
+  border: 1px solid rgba(255, 200, 92, 0.72);
+  color: #ffe8b0;
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-align: center;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+}
+

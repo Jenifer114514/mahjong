@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { formatConnectionFailureMessage } from '../client';
 import {
+  buildPeerOptions,
   generateRoomCode,
+  hasTurnConfig,
   normalizeRoomCode,
   parseClientMessage,
   parseHostMessage,
@@ -258,5 +261,45 @@ describe('net/protocol', () => {
       },
     });
     expect(parseHostMessage({ kind: 'CHAT_MESSAGE', payload: { id: '' } })).toBeNull();
+
+    expect(
+      parseHostMessage({ kind: 'HOST_STATUS', payload: { away: true } }),
+    ).toEqual({ kind: 'HOST_STATUS', payload: { away: true } });
+    expect(
+      parseHostMessage({ kind: 'HOST_STATUS', payload: { away: 'yes' } }),
+    ).toBeNull();
+  });
+
+  it('TURN 環境変数の有無に応じて iceServers と接続失敗案内メッセージを切り替える', () => {
+    expect(hasTurnConfig({})).toBe(false);
+    const stunOnly = buildPeerOptions({});
+    expect(stunOnly.config?.iceServers).toEqual([
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
+    ]);
+
+    const envWithTurn = {
+      VITE_TURN_URL: 'turn:turn.example.com:3478, turns:turn.example.com:5349',
+      VITE_TURN_USERNAME: 'u1',
+      VITE_TURN_CREDENTIAL: 'p1',
+    };
+    expect(hasTurnConfig(envWithTurn)).toBe(true);
+    const withTurn = buildPeerOptions(envWithTurn);
+    expect(withTurn.config?.iceServers).toEqual([
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
+      {
+        urls: ['turn:turn.example.com:3478', 'turns:turn.example.com:5349'],
+        username: 'u1',
+        credential: 'p1',
+      },
+    ]);
+
+    expect(formatConnectionFailureMessage('タイムアウトしました。', false)).toContain(
+      'TURN',
+    );
+    expect(formatConnectionFailureMessage('タイムアウトしました。', true)).toBe(
+      'タイムアウトしました。',
+    );
   });
 });

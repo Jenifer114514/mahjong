@@ -794,3 +794,276 @@ describe('第2段階: 三麻の抜北・タイムアウト・海底/河底制限
     }
   });
 });
+
+describe('修正4: ポン・チー・大明槓・ロンの優先順位と席順（表形式テスト）', () => {
+  type SeatChoiceSpec =
+    | { seat: 1 | 2 | 3; kind: 'pass' | 'chi' | 'pon' | 'daiminkan' | 'ron' };
+
+  interface PriorityCase {
+    label: string;
+    doubleRon: boolean;
+    specs: SeatChoiceSpec[];
+    expectedPhase: 'playing' | 'round_end';
+    expectedWinnerSeat: number | null;
+    expectedMeldType?: 'chi' | 'pon' | 'daiminkan';
+    expectedRonSeats?: number[];
+    expectedAbortiveReason?: 'sancha_hou';
+  }
+
+  // p0 が 5m を打牌:
+  //   p1(下家): 4m6m(チー可) / 5m5m(ポン可) / 5m5m5m(大明槓可) / 4m6mで平和ロン可
+  //   p2(対面): 5m5m(ポン可) / 5m5m5m(大明槓可) / ロン可
+  //   p3(上家): 5m5m(ポン可) / 5m5m5m(大明槓可) / ロン可
+  // 注: 5m は合計4枚しかないため、同時宣言シナリオでは各ケースの必要手牌を専用構成にする
+  const PRIORITY_CASES: PriorityCase[] = [
+    {
+      label: 'p1(下家)チー vs p2(対面)ポン → ポン優先',
+      doubleRon: true,
+      specs: [
+        { seat: 1, kind: 'chi' },
+        { seat: 2, kind: 'pon' },
+      ],
+      expectedPhase: 'playing',
+      expectedWinnerSeat: 2,
+      expectedMeldType: 'pon',
+    },
+    {
+      label: 'p1(下家)チー vs p3(上家)ポン → ポン優先',
+      doubleRon: true,
+      specs: [
+        { seat: 1, kind: 'chi' },
+        { seat: 3, kind: 'pon' },
+      ],
+      expectedPhase: 'playing',
+      expectedWinnerSeat: 3,
+      expectedMeldType: 'pon',
+    },
+    {
+      label: 'p1(下家)チー vs p2(対面)大明槓 → 大明槓優先',
+      doubleRon: true,
+      specs: [
+        { seat: 1, kind: 'chi' },
+        { seat: 2, kind: 'daiminkan' },
+      ],
+      expectedPhase: 'playing',
+      expectedWinnerSeat: 2,
+      expectedMeldType: 'daiminkan',
+    },
+    {
+      label: 'p1(下家)チー vs p3(上家)大明槓 → 大明槓優先',
+      doubleRon: true,
+      specs: [
+        { seat: 1, kind: 'chi' },
+        { seat: 3, kind: 'daiminkan' },
+      ],
+      expectedPhase: 'playing',
+      expectedWinnerSeat: 3,
+      expectedMeldType: 'daiminkan',
+    },
+    {
+      label: 'p1(下家)チー vs p2(対面)ロン → ロン最優先',
+      doubleRon: true,
+      specs: [
+        { seat: 1, kind: 'chi' },
+        { seat: 2, kind: 'ron' },
+      ],
+      expectedPhase: 'round_end',
+      expectedWinnerSeat: 2,
+      expectedRonSeats: [2],
+    },
+    {
+      label: 'p1(下家)チー vs p3(上家)ロン → ロン最優先',
+      doubleRon: true,
+      specs: [
+        { seat: 1, kind: 'chi' },
+        { seat: 3, kind: 'ron' },
+      ],
+      expectedPhase: 'round_end',
+      expectedWinnerSeat: 3,
+      expectedRonSeats: [3],
+    },
+    {
+      label: 'p1(下家)ポン vs p2(対面)ロン → ロン最優先',
+      doubleRon: true,
+      specs: [
+        { seat: 1, kind: 'pon' },
+        { seat: 2, kind: 'ron' },
+      ],
+      expectedPhase: 'round_end',
+      expectedWinnerSeat: 2,
+      expectedRonSeats: [2],
+    },
+    {
+      label: 'p1(下家)大明槓 vs p3(上家)ロン → ロン最優先',
+      doubleRon: true,
+      specs: [
+        { seat: 1, kind: 'daiminkan' },
+        { seat: 3, kind: 'ron' },
+      ],
+      expectedPhase: 'round_end',
+      expectedWinnerSeat: 3,
+      expectedRonSeats: [3],
+    },
+    {
+      label: 'p1(下家)チー vs p2(対面)パス → チー成立',
+      doubleRon: true,
+      specs: [
+        { seat: 1, kind: 'chi' },
+        { seat: 2, kind: 'pass' },
+      ],
+      expectedPhase: 'playing',
+      expectedWinnerSeat: 1,
+      expectedMeldType: 'chi',
+    },
+    {
+      label: 'p2(対面)ロン vs p3(上家)ロン (ダブロンあり) → 両者ロン・上家より対面が先頭',
+      doubleRon: true,
+      specs: [
+        { seat: 3, kind: 'ron' },
+        { seat: 2, kind: 'ron' },
+      ],
+      expectedPhase: 'round_end',
+      expectedWinnerSeat: 2,
+      expectedRonSeats: [2, 3],
+    },
+    {
+      label: 'p2(対面)ロン vs p3(上家)ロン (ダブロンなし) → 頭ハネで近い席(p2)のみロン',
+      doubleRon: false,
+      specs: [
+        { seat: 3, kind: 'ron' },
+        { seat: 2, kind: 'ron' },
+      ],
+      expectedPhase: 'round_end',
+      expectedWinnerSeat: 2,
+      expectedRonSeats: [2],
+    },
+    {
+      label: 'p1・p2・p3 の3人同時ロン (4人ダブロンあり) → 三家和流局',
+      doubleRon: true,
+      specs: [
+        { seat: 1, kind: 'ron' },
+        { seat: 2, kind: 'ron' },
+        { seat: 3, kind: 'ron' },
+      ],
+      expectedPhase: 'round_end',
+      expectedWinnerSeat: null,
+      expectedAbortiveReason: 'sancha_hou',
+    },
+  ];
+
+  function handForSpec(
+    kind: SeatChoiceSpec['kind'] | undefined,
+    seat: 1 | 2 | 3,
+  ): import('../../types/tile').TileKind[] {
+    if (seat === 1) {
+      switch (kind) {
+        case 'chi':
+          return ['4m', '6m', '1p', '1p', '1p', '2p', '2p', '2p', '3p', '3p', '3p', '4p', '4p'];
+        case 'pon':
+          return ['5m', '5m', '1p', '1p', '1p', '2p', '2p', '2p', '3p', '3p', '3p', '4p', '4p'];
+        case 'daiminkan':
+          return ['5m', '5m', '5m', '1p', '1p', '1p', '2p', '2p', '2p', '3p', '3p', '3p', '4p'];
+        case 'ron':
+          // 断么九: 456m 234p 567p 234s 22s
+          return ['4m', '6m', '2p', '3p', '4p', '5p', '6p', '7p', '2s', '3s', '4s', '2s', '2s'];
+        case 'pass':
+          return ['5m', '5m', '1p', '1p', '1p', '2p', '2p', '2p', '3p', '3p', '3p', '4p', '4p'];
+        default:
+          return ['1p', '1p', '1p', '2p', '2p', '2p', '3p', '3p', '3p', '4p', '4p', '4p', '1z'];
+      }
+    }
+    if (seat === 2) {
+      switch (kind) {
+        case 'pon':
+        case 'pass':
+          return ['5m', '5m', '5s', '5s', '5s', '6s', '6s', '6s', '7s', '7s', '7s', '8s', '8s'];
+        case 'daiminkan':
+          return ['5m', '5m', '5m', '5s', '5s', '5s', '6s', '6s', '6s', '7s', '7s', '7s', '8s'];
+        case 'ron':
+          // 断么九: 456m 234m 345p 678s 88s
+          return ['4m', '6m', '2m', '3m', '4m', '3p', '4p', '5p', '6s', '7s', '8s', '8s', '8s'];
+        default:
+          return ['5s', '5s', '5s', '6s', '6s', '6s', '7s', '7s', '7s', '8s', '8s', '8s', '2z'];
+      }
+    }
+    // seat === 3
+    switch (kind) {
+      case 'pon':
+      case 'pass':
+        return ['5m', '5m', '7m', '7m', '7m', '8m', '8m', '8m', '9m', '9m', '9m', '9p', '9p'];
+      case 'daiminkan':
+        return ['5m', '5m', '5m', '7m', '7m', '7m', '8m', '8m', '8m', '9m', '9m', '9m', '9p'];
+      case 'ron':
+        // 役牌(白): 456m 555z 789m 789m 99p
+        return ['4m', '6m', '5z', '5z', '5z', '7m', '8m', '9m', '7m', '8m', '9m', '9p', '9p'];
+      default:
+        return ['7m', '7m', '7m', '8m', '8m', '8m', '9m', '9m', '9m', '9p', '9p', '9p', '3z'];
+    }
+  }
+
+  it.each(PRIORITY_CASES)('$label', (tc) => {
+    const specBySeat = new Map<number, SeatChoiceSpec['kind']>();
+    for (const s of tc.specs) {
+      specBySeat.set(s.seat, s.kind);
+    }
+
+    let state = createStartedCustomGame(
+      4,
+      {
+        hands: {
+          0: ['1z', '1z', '2z', '2z', '3z', '3z', '4z', '4z', '6z', '6z', '7z', '7z', '9s'],
+          1: handForSpec(specBySeat.get(1), 1),
+          2: handForSpec(specBySeat.get(2), 2),
+          3: handForSpec(specBySeat.get(3), 3),
+        },
+        dealerDrawnKind: '5m',
+      },
+      { doubleRon: tc.doubleRon },
+    );
+
+    state = reduce(state, {
+      type: 'DISCARD_TILE',
+      playerId: 'p0',
+      tileId: state.players[0]!.drawnTile!.id,
+      now: 1000,
+    });
+    expect(state.phase).toBe('awaiting_responses');
+
+    for (const spec of tc.specs) {
+      const pid = `p${spec.seat}`;
+      const view = toStateView(state, pid, 1500);
+      expect(view.myCallOptions).not.toBeNull();
+      if (spec.kind === 'chi') {
+        const opt = view.myCallOptions!.chiOptions[0]!;
+        state = reduce(state, {
+          type: 'CALL_RESPONSE',
+          playerId: pid,
+          choice: { type: 'chi', tileIds: [opt.tiles[0].id, opt.tiles[1].id] },
+        });
+      } else {
+        state = reduce(state, {
+          type: 'CALL_RESPONSE',
+          playerId: pid,
+          choice: { type: spec.kind },
+        });
+      }
+    }
+
+    expect(state.phase).toBe(tc.expectedPhase);
+    assertTileConservation(state, 136);
+
+    if (tc.expectedAbortiveReason) {
+      expect(state.round?.abortiveDrawReason).toBe(tc.expectedAbortiveReason);
+    } else if (tc.expectedPhase === 'playing') {
+      expect(state.round?.currentTurnIndex).toBe(tc.expectedWinnerSeat);
+      const winner = state.players.find(
+        (p) => p.seatIndex === tc.expectedWinnerSeat,
+      )!;
+      expect(winner.melds[0]?.type).toBe(tc.expectedMeldType);
+    } else {
+      expect(state.round?.ronWinners.map((w) => w.seatIndex)).toEqual(
+        tc.expectedRonSeats,
+      );
+    }
+  });
+});

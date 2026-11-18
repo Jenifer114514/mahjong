@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { isCpuPlayerId } from '../../cpu/player';
-import type { StateView } from '../../types/message';
+import type { HostMessage, StateView } from '../../types/message';
 import type { RuleConfig } from '../../types/rule';
 
 const { peerInstances } = vi.hoisted(() => ({
@@ -132,8 +132,8 @@ describe('HostSession の CPU 統合', () => {
     drain(2000);
 
     const view = views.at(-1)!;
-    // p0（ホスト）待ちで止まっているか、局が進んでいる
-    expect(view.phase === 'playing' || view.phase === 'awaiting_responses').toBe(true);
+    // p0（ホスト）待ちで止まっているか、局が進んでいる（三麻の九種九牌流局を含む）
+    expect(['playing', 'awaiting_responses', 'round_end']).toContain(view.phase);
 
     session.destroy();
   });
@@ -438,5 +438,391 @@ describe('HostSession の CPU 統合', () => {
     ]);
 
     session.destroy();
+  });
+
+  it('CPUの応答遅延と打牌後待機は鳴ける牌かどうかにかかわらず同一の分布範囲になる', () => {
+    const sampleDelays = (
+      mode: 'turn' | 'callable' | 'non_callable',
+      randValue: number,
+    ): number[] => {
+      const scheduled: Array<{ fn: () => void; delayMs: number }> = [];
+      const views: StateView[] = [];
+      const session = new HostSession(
+        'ホスト',
+        { playerCount: 4, gameLength: 'tonpuu' },
+        {
+          onViewChange: (v) => views.push(v),
+          onStatusChange: () => {},
+          onError: () => {},
+        },
+        {
+          cpuCount: mode === 'turn' ? 3 : 0,
+          cpuDelayMs: 1000,
+          cpuRandom: () => randValue,
+          cpuScheduler: (fn, delayMs) => {
+            scheduled.push({ fn, delayMs });
+          },
+          offline: true,
+        },
+      );
+      session.start();
+
+      if (mode === 'turn') {
+        session.addCpu();
+        session.addCpu();
+        session.addCpu();
+        // ロビー追加時のスケジュール値を初期化し、開局後のCPU手番遅延だけを見る
+        scheduled.length = 0;
+        session.startGame();
+        session.destroy();
+        return scheduled.map((s) => s.delayMs);
+      }
+
+      // 3人CPUで開局
+      session.addCpu();
+      session.addCpu();
+      session.addCpu();
+      session.startGame();
+
+      // ホストの手番（または応答待ち）まで無遅延で進めるためテスト内ヘルパー相当
+      for (let i = 0; i < 12; i++) {
+        const latest = views.at(-1)!;
+        if (
+          latest.phase === 'playing' &&
+          latest.players.find((p) => p.isCurrentTurn)?.playerId === latest.viewerPlayerId
+        ) {
+          break;
+        }
+        if (latest.phase === 'awaiting_responses' && latest.myCallOptions) {
+          session.respondToCall({ type: 'pass' });
+          continue;
+        }
+        session.runCpuStepOnce();
+      }
+
+      const hostView = views.at(-1)!;
+      if (
+        hostView.phase !== 'playing' ||
+        hostView.players.find((p) => p.isCurrentTurn)?.playerId !== hostView.viewerPlayerId
+      ) {
+        session.destroy();
+        return [];
+      }
+
+      // 鳴ける/鳴けないに応じて打牌を選び、スケジュールされた遅延を記録
+      scheduled.length = 0;
+      const candidateTileId = hostView.myDrawnTile?.id ?? hostView.myHand[0]!.id;
+      session.discardTile(candidateTileId);
+      const delays = scheduled.map((s) => s.delayMs);
+      session.destroy();
+      return delays;
+    };
+
+    // 乱数 0.0 / 0.5 / 0.99 で、通常手番と打牌後/応答遅延が同じ分布関数で決まること
+    for (const r of [0, 0.5, 0.99]) {
+      const turnDelay = sampleDelays('turn', r);
+      const discardDelay = sampleDelays('non_callable', r);
+      if (turnDelay.length > 0 && discardDelay.length > 0) {
+        expect(discardDelay[0]).toBe(turnDelay[0]);
+      }
+    }
+  });
+
+  it('ホスト背面化時に参加者へ HOST_STATUS を配信し、復帰時に期限超過した応答タイマー・CPUを再開する', async () => {
+    peerInstances.length = 0;
+    const guestSent: unknown[] = [];
+    const views: StateView[] = [];
+    const scheduled: Array<{ fn: () => void; delayMs: number }> = [];
+
+    const session = new HostSession(
+      'ホスト',
+      { playerCount: 4, gameLength: 'tonpuu', responseTimeoutMs: 50 },
+      {
+        onViewChange: (v) => views.push(v),
+        onStatusChange: () => {},
+        onError: () => {},
+      },
+      {
+        cpuCount: 0,
+        cpuDelayMs: 50,
+        cpuScheduler: (fn, delayMs) => {
+          scheduled.push({ fn, delayMs });
+        },
+      },
+    );
+    session.start();
+    const peer = peerInstances.at(-1)!;
+    peer.emit('open', peer.id);
+
+    const guestConn = {
+      peer: 'guest-away',
+      open: true,
+      on(event: string, cb: (...args: unknown[]) => void) {
+        this.handlers[event] = this.handlers[event] ?? [];
+        this.handlers[event]!.push(cb);
+      },
+      handlers: {} as Record<string, Array<(...args: unknown[]) => void>>,
+      emit(event: string, ...args: unknown[]) {
+        for (const cb of this.handlers[event] ?? []) cb(...args);
+      },
+      send(msg: unknown) {
+        guestSent.push(msg);
+      },
+      close() {
+        this.open = false;
+      },
+    };
+    peer.emit('connection', guestConn);
+    guestConn.emit('open');
+    guestConn.emit('data', { kind: 'JOIN', playerName: 'ゲスト' });
+
+    // 背面通知 → HOST_STATUS(away: true) が届く
+    session.setHostAway(true);
+    expect(guestSent).toContainEqual({
+      kind: 'HOST_STATUS',
+      payload: { away: true },
+    });
+
+    // CPU を2体入れて開局し、ホスト復帰でタイマーと CPU スケジュールが再始動することを確認
+    expect(session.addCpu()).toBe(true);
+    expect(session.addCpu()).toBe(true);
+    expect(session.startGame()).toBe(true);
+    const countBeforeReturn = scheduled.length;
+
+    await new Promise((r) => setTimeout(r, 70));
+    session.setHostAway(false);
+    expect(guestSent).toContainEqual({
+      kind: 'HOST_STATUS',
+      payload: { away: false },
+    });
+    // CPU 手番または応答待ちなら復帰時に再スケジュールされる
+    const latest = views.at(-1)!;
+    const currentTurnPid = latest.players.find((p) => p.isCurrentTurn)?.playerId;
+    if (
+      latest.phase === 'awaiting_responses' ||
+      (currentTurnPid && isCpuPlayerId(currentTurnPid))
+    ) {
+      expect(scheduled.length).toBeGreaterThan(countBeforeReturn);
+    }
+
+    session.destroy();
+  });
+
+  it('ホスト背面化中に期限切れとなった応答待ちタイマーは setHostAway(false) 復帰時に再開してタイムアウト解消される', async () => {
+    peerInstances.length = 0;
+    const views: StateView[] = [];
+    const session = new HostSession(
+      'ホスト',
+      { playerCount: 4, gameLength: 'tonpuu', responseTimeoutMs: 30 },
+      {
+        onViewChange: (v) => views.push(v),
+        onStatusChange: () => {},
+        onError: () => {},
+      },
+      {
+        cpuCount: 0,
+        cpuDelayMs: 0,
+        cpuScheduler: () => {},
+      },
+    );
+    session.start();
+    const peer = peerInstances.at(-1)!;
+    peer.emit('open', peer.id);
+
+    const makeGuest = (peerId: string) => {
+      const handlers: Record<string, Array<(...args: unknown[]) => void>> = {};
+      return {
+        peer: peerId,
+        open: true,
+        on(event: string, cb: (...args: unknown[]) => void) {
+          handlers[event] = handlers[event] ?? [];
+          handlers[event]!.push(cb);
+        },
+        emit(event: string, ...args: unknown[]) {
+          for (const cb of handlers[event] ?? []) cb(...args);
+        },
+        send() {},
+        close() {
+          this.open = false;
+        },
+      };
+    };
+
+    const g1 = makeGuest('g1');
+    const g2 = makeGuest('g2');
+    const g3 = makeGuest('g3');
+    for (const g of [g1, g2, g3]) {
+      peer.emit('connection', g);
+      g.emit('open');
+      g.emit('data', { kind: 'JOIN', playerName: g.peer });
+    }
+    session.startGame();
+
+    // ホストから始まるまで進めることは不要 — 強制的に誰かが鳴ける状態を内部状態に作って応答待ちを検証
+    const hostInternals = session as unknown as {
+      state: import('../../types/state').GameState;
+      responseTimerId: ReturnType<typeof setTimeout> | null;
+      commitState: (s: import('../../types/state').GameState) => void;
+    };
+    const { createStartedCustomGame } = await import(
+      '../../engine/__tests__/testHelpers'
+    );
+    const { reduce } = await import('../../engine/reducer');
+    let customState = createStartedCustomGame(4, {
+      hands: {
+        0: ['1z', '1z', '2z', '2z', '3z', '3z', '4z', '4z', '6z', '6z', '7z', '7z', '9s'],
+        1: ['5m', '5m', '1p', '1p', '1p', '2p', '2p', '2p', '3p', '3p', '3p', '4p', '4p'],
+        2: ['1s', '1s', '1s', '2s', '2s', '2s', '3s', '3s', '3s', '5s', '5s', '5s', '8s'],
+        3: ['7m', '7m', '7m', '8m', '8m', '8m', '9m', '9m', '9m', '9p', '9p', '9p', '3z'],
+      },
+      dealerDrawnKind: '5m',
+    });
+    customState = {
+      ...customState,
+      ruleConfig: { ...customState.ruleConfig, responseTimeoutMs: 30 },
+      hostPlayerId: peer.id,
+      players: customState.players.map((p, idx) => ({
+        ...p,
+        playerId: idx === 0 ? peer.id : `g${idx}`,
+      })),
+    };
+    customState = reduce(customState, {
+      type: 'DISCARD_TILE',
+      playerId: peer.id,
+      tileId: customState.players[0]!.drawnTile!.id,
+      now: Date.now() - 100, // すでにタイムアウト超過済み
+    });
+    expect(customState.phase).toBe('awaiting_responses');
+
+    hostInternals.commitState(customState);
+    // ブラウザ背面のスロットリングでタイマーが消えてしまった状況を作る
+    if (hostInternals.responseTimerId !== null) {
+      clearTimeout(hostInternals.responseTimerId);
+      hostInternals.responseTimerId = null;
+    }
+    session.setHostAway(true);
+    session.setHostAway(false);
+
+    // 復帰により delay=0 で再スケジュールされ、すぐに自動パスされて次巡(playing)へ進む
+    await new Promise((r) => setTimeout(r, 25));
+    expect(views.at(-1)!.phase).toBe('playing');
+
+    session.destroy();
+  });
+
+  it('鳴ける牌・鳴けない牌の両方で次手番への遅延分布と初期マスクStateViewが完全に一致する', async () => {
+    const runDiscardCheck = async (cpuHasPair: boolean) => {
+      peerInstances.length = 0;
+      const scheduled: Array<{ fn: () => void; delayMs: number }> = [];
+      const hostViews: StateView[] = [];
+      const guestSent: HostMessage[] = [];
+      const session = new HostSession(
+        'ホスト',
+        { playerCount: 4, gameLength: 'tonpuu', responseTimeoutMs: 0 },
+        {
+          onViewChange: (v) => hostViews.push(v),
+          onStatusChange: () => {},
+          onError: () => {},
+        },
+        {
+          cpuCount: 2,
+          cpuDelayMs: 1000,
+          cpuRandom: () => 0.5,
+          cpuScheduler: (fn, delayMs) => {
+            scheduled.push({ fn, delayMs });
+          },
+        },
+      );
+      session.start();
+      const peer = peerInstances.at(-1)!;
+      peer.emit('open', peer.id);
+
+      const guestConn = {
+        peer: 'guest-p1',
+        open: true,
+        handlers: {} as Record<string, Array<(...args: unknown[]) => void>>,
+        on(event: string, cb: (...args: unknown[]) => void) {
+          this.handlers[event] = this.handlers[event] ?? [];
+          this.handlers[event]!.push(cb);
+        },
+        emit(event: string, ...args: unknown[]) {
+          for (const cb of this.handlers[event] ?? []) cb(...args);
+        },
+        send(msg: HostMessage) {
+          guestSent.push(msg);
+        },
+        close() {
+          this.open = false;
+        },
+      };
+      peer.emit('connection', guestConn);
+      guestConn.emit('open');
+      guestConn.emit('data', { kind: 'JOIN', playerName: 'ゲスト' });
+      session.startGame();
+
+      const { createStartedCustomGame } = await import(
+        '../../engine/__tests__/testHelpers'
+      );
+      const customBase = createStartedCustomGame(4, {
+        hands: {
+          0: ['1z', '1z', '2z', '2z', '3z', '3z', '4z', '4z', '6z', '6z', '7z', '7z', '9s'],
+          1: ['1p', '1p', '1p', '2p', '2p', '2p', '3p', '3p', '3p', '4p', '4p', '4p', '8s'],
+          2: cpuHasPair
+            ? ['5m', '5m', '1m', '2m', '3m', '4p', '5p', '6p', '7s', '8s', '9s', '2p', '3p']
+            : ['7s', '7s', '7s', '8s', '8s', '8s', '9s', '9s', '9s', '5s', '5s', '5s', '6s'],
+          3: ['7m', '7m', '7m', '8m', '8m', '8m', '9m', '9m', '9m', '9p', '9p', '9p', '3z'],
+        },
+        dealerDrawnKind: '5m',
+      });
+      const hostInternals = session as unknown as {
+        state: import('../../types/state').GameState;
+        commitState: (s: import('../../types/state').GameState) => void;
+      };
+      const fixedState: import('../../types/state').GameState = {
+        ...customBase,
+        ruleConfig: { ...customBase.ruleConfig, responseTimeoutMs: 0 },
+        hostPlayerId: peer.id,
+        players: customBase.players.map((p, idx) => {
+          if (idx === 0) return { ...p, playerId: peer.id };
+          if (idx === 1) return { ...p, playerId: 'guest-p1' };
+          if (idx === 2) return { ...p, playerId: 'cpu-1' };
+          return { ...p, playerId: 'cpu-2' };
+        }),
+      };
+      hostInternals.commitState(fixedState);
+      scheduled.length = 0;
+      guestSent.length = 0;
+
+      // ホストが 5m を打牌（cpuHasPair=true なら cpu-1 がポン可、false なら誰も鳴けない）
+      session.discardTile(fixedState.players[0]!.drawnTile!.id);
+
+      const initialDelay = scheduled[0]!.delayMs;
+      const guestViewBefore = guestSent
+        .filter((m): m is Extract<HostMessage, { kind: 'STATE_VIEW' }> => m.kind === 'STATE_VIEW')
+        .at(-1)!.payload;
+
+      // 遅延満了を実行すると次の人間プレイヤー(guest-p1)にツモ牌が届く
+      scheduled[0]!.fn();
+      const guestViewAfter = guestSent
+        .filter((m): m is Extract<HostMessage, { kind: 'STATE_VIEW' }> => m.kind === 'STATE_VIEW')
+        .at(-1)!.payload;
+
+      session.destroy();
+      return { initialDelay, guestViewBefore, guestViewAfter };
+    };
+
+    const callable = await runDiscardCheck(true);
+    const nonCallable = await runDiscardCheck(false);
+
+    expect(callable.initialDelay).toBe(nonCallable.initialDelay);
+    expect(callable.guestViewBefore.phase).toBe('playing');
+    expect(nonCallable.guestViewBefore.phase).toBe('playing');
+    expect(callable.guestViewBefore.myDrawnTile).toBeNull();
+    expect(nonCallable.guestViewBefore.myDrawnTile).toBeNull();
+    expect(callable.guestViewBefore.round?.remainingWallCount).toBe(
+      nonCallable.guestViewBefore.round?.remainingWallCount,
+    );
+    expect(callable.guestViewAfter.myDrawnTile).not.toBeNull();
+    expect(nonCallable.guestViewAfter.myDrawnTile).not.toBeNull();
   });
 });

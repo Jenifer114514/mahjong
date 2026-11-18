@@ -74,6 +74,7 @@ export interface TableUiState {
   roundEndStep?: RoundEndStep;
   unreadChatCount?: number;
   perspectiveSeatIndex?: number;
+  hostStatusBanner?: string | null;
 }
 
 const DEFAULT_TABLE_UI_STATE: TableUiState = {
@@ -84,6 +85,7 @@ const DEFAULT_TABLE_UI_STATE: TableUiState = {
   selectedTileId: null,
   roundEndStep: 'details',
   unreadChatCount: 0,
+  hostStatusBanner: null,
 };
 
 const MELD_TYPE_LABELS: Record<Meld['type'], string> = {
@@ -234,6 +236,14 @@ export function renderGameTable(
   const doraPanel = renderDoraPanel(perspectiveView);
   if (doraPanel) {
     felt.appendChild(doraPanel);
+  }
+
+  if (uiState.hostStatusBanner) {
+    const awayBanner = document.createElement('div');
+    awayBanner.className = 'table-host-away-banner';
+    awayBanner.setAttribute('role', 'alert');
+    awayBanner.textContent = uiState.hostStatusBanner;
+    felt.appendChild(awayBanner);
   }
 
   felt.addEventListener('click', (event) => {

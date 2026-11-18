@@ -340,6 +340,91 @@ export function countKindInHandAndMelds(
   return count;
 }
 
+const KOKUSHI_INDICES: readonly number[] = KOKUSHI_KINDS.map(
+  (k) => KIND_TO_INDEX.get(k)!,
+);
+
+function canExtractMentsuFast(
+  counts: number[],
+  needed: number,
+  startIdx: number,
+): boolean {
+  if (needed === 0) return true;
+  let i = startIdx;
+  while (i < 34 && counts[i] === 0) i++;
+  if (i >= 34) return false;
+
+  const c = counts[i]!;
+  if (c >= 3) {
+    counts[i] = c - 3;
+    if (canExtractMentsuFast(counts, needed - 1, i)) {
+      counts[i] = c;
+      return true;
+    }
+    counts[i] = c;
+  }
+  if (i < 27 && i % 9 <= 6 && counts[i + 1]! > 0 && counts[i + 2]! > 0) {
+    counts[i] = c - 1;
+    counts[i + 1]!--;
+    counts[i + 2]!--;
+    if (canExtractMentsuFast(counts, needed - 1, i)) {
+      counts[i] = c;
+      counts[i + 1]!++;
+      counts[i + 2]!++;
+      return true;
+    }
+    counts[i] = c;
+    counts[i + 1]!++;
+    counts[i + 2]!++;
+  }
+  return false;
+}
+
+function canFormAgariFast(counts: number[], meldCount: number): boolean {
+  if (meldCount === 0) {
+    // 1. 国士無双チェック
+    let kokushiDistinct = 0;
+    let kokushiPair = false;
+    let kokushiTotal = 0;
+    for (let k = 0; k < KOKUSHI_INDICES.length; k++) {
+      const c = counts[KOKUSHI_INDICES[k]!]!;
+      if (c >= 1) {
+        kokushiDistinct++;
+        kokushiTotal += c;
+        if (c === 2) kokushiPair = true;
+      }
+    }
+    if (kokushiDistinct === 13 && kokushiTotal === 14 && kokushiPair) {
+      return true;
+    }
+
+    // 2. 七対子チェック
+    let pairs = 0;
+    let nonPair = false;
+    for (let i = 0; i < 34; i++) {
+      const c = counts[i]!;
+      if (c === 2) pairs++;
+      else if (c !== 0) {
+        nonPair = true;
+        break;
+      }
+    }
+    if (!nonPair && pairs === 7) return true;
+  }
+
+  // 3. 通常形（4面子1雀頭）
+  const needed = 4 - meldCount;
+  for (let pairIdx = 0; pairIdx < 34; pairIdx++) {
+    const c = counts[pairIdx]!;
+    if (c < 2) continue;
+    counts[pairIdx] = c - 2;
+    const ok = canExtractMentsuFast(counts, needed, 0);
+    counts[pairIdx] = c;
+    if (ok) return true;
+  }
+  return false;
+}
+
 /** フリテン・後付け判定用: 現在の手牌＋副露で和了形が完成する待ち牌種をすべて返す */
 export function getTenpaiWaitKinds(
   hand: readonly Tile[],
@@ -351,14 +436,57 @@ export function getTenpaiWaitKinds(
     return [];
   }
 
+  const handCounts = new Array<number>(ALL_TILE_KINDS.length).fill(0);
+  for (let i = 0; i < hand.length; i++) {
+    const idx = KIND_TO_INDEX.get(hand[i]!.kind);
+    if (idx !== undefined) handCounts[idx]!++;
+  }
+  const totalCounts = [...handCounts];
+  for (let i = 0; i < melds.length; i++) {
+    const meldTiles = melds[i]!.tiles;
+    for (let j = 0; j < meldTiles.length; j++) {
+      const idx = KIND_TO_INDEX.get(meldTiles[j]!.kind);
+      if (idx !== undefined) totalCounts[idx]!++;
+    }
+  }
+
+  let kokushiBaseKinds = 0;
+  if (melds.length === 0) {
+    for (let k = 0; k < KOKUSHI_INDICES.length; k++) {
+      if (handCounts[KOKUSHI_INDICES[k]!]! > 0) kokushiBaseKinds++;
+    }
+  }
+  const canTryKokushi = melds.length === 0 && kokushiBaseKinds >= 12;
+
+  const copiesPerKind = rules.tileSet.copiesPerKind;
+  const allowed = rules.allowedTileKinds;
   const waits: TileKind[] = [];
-  for (const kind of rules.allowedTileKinds) {
-    if (
-      countKindInHandAndMelds(hand, melds, kind) >= rules.tileSet.copiesPerKind
-    ) {
+
+  for (let i = 0; i < allowed.length; i++) {
+    const kind = allowed[i]!;
+    const idx = KIND_TO_INDEX.get(kind)!;
+    if (totalCounts[idx]! >= copiesPerKind) {
       continue;
     }
-    if (enumerateAgariDecompositions(hand, melds, kind, false).length > 0) {
+
+    const hc = handCounts[idx]!;
+    let isRelevant = hc >= 1;
+    if (!isRelevant && idx < 27) {
+      const r = idx % 9;
+      isRelevant =
+        (r >= 2 && handCounts[idx - 2]! > 0 && handCounts[idx - 1]! > 0) ||
+        (r >= 1 && r <= 7 && handCounts[idx - 1]! > 0 && handCounts[idx + 1]! > 0) ||
+        (r <= 6 && handCounts[idx + 1]! > 0 && handCounts[idx + 2]! > 0);
+    }
+    if (!isRelevant && canTryKokushi && KOKUSHI_SET.has(kind)) {
+      isRelevant = true;
+    }
+    if (!isRelevant) continue;
+
+    handCounts[idx] = hc + 1;
+    const wins = canFormAgariFast(handCounts, melds.length);
+    handCounts[idx] = hc;
+    if (wins) {
       waits.push(kind);
     }
   }
@@ -379,6 +507,38 @@ export function getCanRiichiDiscardTileIds(
   const expectedAfterDiscard = (4 - melds.length) * 3 + 1;
   if (allTiles.length - 1 !== expectedAfterDiscard) {
     return [];
+  }
+
+  // 高速枝刈り: 孤立牌（対子・刻子・隣接牌なし）が 3 枚以上あれば、
+  // 1枚切っても 2枚以上の孤立牌が残るため国士無双以外では聴牌にならない
+  const allCounts = new Array<number>(ALL_TILE_KINDS.length).fill(0);
+  for (let i = 0; i < allTiles.length; i++) {
+    const idx = KIND_TO_INDEX.get(allTiles[i]!.kind);
+    if (idx !== undefined) allCounts[idx]!++;
+  }
+  let kokushiKinds = 0;
+  if (melds.length === 0) {
+    for (let k = 0; k < KOKUSHI_INDICES.length; k++) {
+      if (allCounts[KOKUSHI_INDICES[k]!]! > 0) kokushiKinds++;
+    }
+  }
+  if (kokushiKinds < 12) {
+    let isolatedSingles = 0;
+    for (let idx = 0; idx < 34; idx++) {
+      if (allCounts[idx] !== 1) continue;
+      if (idx >= 27) {
+        isolatedSingles++;
+      } else {
+        const r = idx % 9;
+        const hasNeighbor =
+          (r >= 1 && allCounts[idx - 1]! > 0) ||
+          (r >= 2 && allCounts[idx - 2]! > 0) ||
+          (r <= 7 && allCounts[idx + 1]! > 0) ||
+          (r <= 6 && allCounts[idx + 2]! > 0);
+        if (!hasNeighbor) isolatedSingles++;
+      }
+      if (isolatedSingles >= 3) return [];
+    }
   }
 
   const result: string[] = [];

@@ -627,4 +627,148 @@ describe('CPU プレイヤー (decideCpuAction)', () => {
     // 現物の 9p (def-h-7) を切る
     expect(decision).toEqual({ type: 'DISCARD_TILE', tileId: 'def-h-7' });
   });
+
+  it('修正1検証: 通常聴牌(123m 9m 23456p 789s 11z)・七対子(5z+9s)・国士13面(+5m)を正しく判定する', () => {
+    // 1) 通常聴牌形: 123m 9m 23456p 789s 11z (14枚) → 9m を切る（1p-4p-7p の3面待ち聴牌）
+    {
+      let state = startCpuOnlyGame(4, 'tonpuu', 1101);
+      const actor = state.players.find(
+        (p) => p.seatIndex === state.round!.currentTurnIndex,
+      )!;
+      const handKinds: TileKind[] = [
+        '1m', '2m', '3m', '2p', '3p', '4p', '5p', '6p', '7s', '8s', '9s', '1z', '1z',
+      ];
+      state = {
+        ...state,
+        players: state.players.map((p) =>
+          p.playerId === actor.playerId
+            ? {
+                ...p,
+                hand: makeTiles(handKinds, 'std10'),
+                drawnTile: { id: 'std10-9m', kind: '9m', isRed: false },
+                melds: [],
+                score: 500, // リーチ不可にして純粋な打牌判断も確認
+              }
+            : p,
+        ),
+      };
+      const decision = decideCpuAction(toStateView(state, actor.playerId, 0));
+      expect(decision).toEqual({ type: 'DISCARD_TILE', tileId: 'std10-9m' });
+    }
+
+    // 2) 七対子テンパイ形: 11m 33m 55p 77p 22s 44s 5z + ツモ9s → 9s を切る（対子を崩さない）
+    {
+      let state = startCpuOnlyGame(4, 'tonpuu', 1102);
+      const actor = state.players.find(
+        (p) => p.seatIndex === state.round!.currentTurnIndex,
+      )!;
+      const handKinds: TileKind[] = [
+        '1m', '1m', '3m', '3m', '5p', '5p', '7p', '7p', '2s', '2s', '4s', '4s', '5z',
+      ];
+      state = {
+        ...state,
+        players: state.players.map((p) =>
+          p.playerId === actor.playerId
+            ? {
+                ...p,
+                hand: makeTiles(handKinds, 'c7'),
+                drawnTile: { id: 'c7-9s', kind: '9s', isRed: false },
+                melds: [],
+              }
+            : p,
+        ),
+      };
+      const decision = decideCpuAction(toStateView(state, actor.playerId, 0));
+      expect(decision).toEqual({ type: 'DECLARE_RIICHI', tileId: 'c7-9s' });
+
+      // リーチ不可（持ち点500）の純粋打牌でも 9s を切って 5z 単騎を残す（5z は役牌価値高）
+      const noRiichiState: GameState = {
+        ...state,
+        players: state.players.map((p) =>
+          p.playerId === actor.playerId ? { ...p, score: 500 } : p,
+        ),
+      };
+      const discardDecision = decideCpuAction(
+        toStateView(noRiichiState, actor.playerId, 0),
+      );
+      expect(discardDecision).toEqual({ type: 'DISCARD_TILE', tileId: 'c7-9s' });
+    }
+
+    // 3) 国士無双13面テンパイ形: 19m19p19s 1234567z + ツモ5m → 5m を切る
+    {
+      let state = startCpuOnlyGame(4, 'tonpuu', 1103);
+      const actor = state.players.find(
+        (p) => p.seatIndex === state.round!.currentTurnIndex,
+      )!;
+      const handKinds: TileKind[] = [
+        '1m', '9m', '1p', '9p', '1s', '9s', '1z', '2z', '3z', '4z', '5z', '6z', '7z',
+      ];
+      state = {
+        ...state,
+        players: state.players.map((p) =>
+          p.playerId === actor.playerId
+            ? {
+                ...p,
+                hand: makeTiles(handKinds, 'k13'),
+                drawnTile: { id: 'k13-5m', kind: '5m', isRed: false },
+                melds: [],
+              }
+            : p,
+        ),
+      };
+      const decision = decideCpuAction(toStateView(state, actor.playerId, 0));
+      expect(decision).toEqual({ type: 'DECLARE_RIICHI', tileId: 'k13-5m' });
+
+      const noRiichiState: GameState = {
+        ...state,
+        players: state.players.map((p) =>
+          p.playerId === actor.playerId ? { ...p, score: 500 } : p,
+        ),
+      };
+      expect(
+        decideCpuAction(toStateView(noRiichiState, actor.playerId, 0)),
+      ).toEqual({ type: 'DISCARD_TILE', tileId: 'k13-5m' });
+    }
+  });
+
+  it('修正2検証: cpuLevel="easy" でも暗槓のみの副露は門前扱いとして非役牌を鳴かない', () => {
+    const state = startCpuOnlyGame(4, 'tonpuu', 1104, 'easy');
+    const actor = state.players[0]!;
+    const discarder = state.players[1]!;
+    const baseView = toStateView(state, actor.playerId, 0);
+    const ankanView: StateView = {
+      ...baseView,
+      phase: 'awaiting_responses',
+      myHand: makeTiles(['2m', '2m', '4p', '5p', '6p', '7s', '8s', '9s', '5z', '5z'], 'ak-easy'),
+      myDrawnTile: null,
+      myCallOptions: {
+        discardedTile: { id: 'disc-2m', kind: '2m', isRed: false },
+        discarderSeatIndex: discarder.seatIndex,
+        canRon: false,
+        canPon: true,
+        canDaiminkan: false,
+        chiOptions: [],
+      },
+      players: baseView.players.map((p) =>
+        p.playerId === actor.playerId
+          ? {
+              ...p,
+              melds: [
+                {
+                  type: 'ankan',
+                  tiles: makeTiles(['1s', '1s', '1s', '1s'], 'ak-easy-m'),
+                  calledTile: null,
+                  fromSeatIndex: null,
+                  addedTile: null,
+                },
+              ],
+            }
+          : p,
+      ),
+    };
+    expect(decideCpuAction(ankanView)).toEqual({
+      type: 'CALL_RESPONSE',
+      choice: { type: 'pass' },
+    });
+  });
 });

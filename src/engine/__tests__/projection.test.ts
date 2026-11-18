@@ -184,9 +184,119 @@ describe('toStateView (情報隠蔽の検証)', () => {
       expect(viewWithCall.round?.currentTurnIndex).toBe(
         viewNoCall.round?.currentTurnIndex,
       );
+      expect(viewWithCall.round?.actingPlayerId).toBe(
+        viewNoCall.round?.actingPlayerId,
+      );
+      expect(viewWithCall.round?.remainingWallCount).toBe(
+        viewNoCall.round?.remainingWallCount,
+      );
+      expect(viewWithCall.round?.turnCount).toBe(viewNoCall.round?.turnCount);
       expect(viewWithCall.players.map((p) => p.isCurrentTurn)).toEqual(
         viewNoCall.players.map((p) => p.isCurrentTurn),
       );
+      expect(viewWithCall.players.map((p) => p.hasDrawnTile)).toEqual(
+        viewNoCall.players.map((p) => p.hasDrawnTile),
+      );
+      expect(viewWithCall.players.map((p) => p.handCount)).toEqual(
+        viewNoCall.players.map((p) => p.handCount),
+      );
+    }
+  });
+
+  it('槍槓待ち中も選択肢のない視点には応答待ちや残り時間が漏れない', () => {
+    let state = createStartedCustomGame(4, {
+      hands: {
+        0: ['1m', '1m', '2m', '2m', '3m', '3m', '4m', '4m', '5m', '5m', '6m', '6m', '9m'],
+        1: ['5p', '5p', '2s', '3s', '4s', '5s', '6s', '7s', '2p', '3p', '4p', '8s', '8s'],
+        2: ['4p', '6p', '7m', '8m', '9m', '1s', '1s', '2s', '3s', '4s', '5s', '6s', '7s'],
+        3: ['4z', '4z', '4z', '5z', '5z', '5z', '6z', '6z', '6z', '7z', '7z', '7z', '1s'],
+      },
+      dealerDrawnKind: '5p',
+      liveWallHeadKinds: ['2z', '2z', '3z', '5p'],
+    });
+
+    // p0 が 5p 捨て -> p1 が 5p ポン -> p1 が 8s 捨て -> ... -> p1 が 5p を加槓すると p2(5p待ちではないが仮定) ではなく p2 へ槍槓待ちを作る
+    state = reduce(state, {
+      type: 'DISCARD_TILE',
+      playerId: 'p0',
+      tileId: state.players[0]!.drawnTile!.id,
+      now: 100,
+    });
+    state = reduce(state, {
+      type: 'CALL_RESPONSE',
+      playerId: 'p1',
+      choice: { type: 'pon' },
+    });
+    const p1Discard = state.players[1]!.hand.find((t) => t.kind === '8s')!;
+    state = reduce(state, {
+      type: 'DISCARD_TILE',
+      playerId: 'p1',
+      tileId: p1Discard.id,
+      now: 200,
+    });
+    if (state.phase === 'awaiting_responses') {
+      state = reduce(state, { type: 'RESPONSE_TIMEOUT', playerId: 'p0' });
+    }
+    // p2, p3, p0 のツモ切り
+    for (const pid of ['p2', 'p3', 'p0']) {
+      const pl = state.players.find((p) => p.playerId === pid)!;
+      state = reduce(state, {
+        type: 'DISCARD_TILE',
+        playerId: pid,
+        tileId: pl.drawnTile!.id,
+        now: 300,
+      });
+      if (state.phase === 'awaiting_responses') {
+        state = reduce(state, { type: 'RESPONSE_TIMEOUT', playerId: 'p0' });
+      }
+    }
+
+    // p1 が 5p をツモって加槓（p2 をテンパイに差し替えた状態を作ってもよい）
+    expect(state.players[1]!.drawnTile?.kind).toBe('5p');
+    state = {
+      ...state,
+      players: state.players.map((p) =>
+        p.playerId === 'p2'
+          ? {
+              ...p,
+              hand: [
+                { id: 'c1', kind: '4p', isRed: false },
+                { id: 'c2', kind: '6p', isRed: false },
+                { id: 'c3', kind: '1s', isRed: false },
+                { id: 'c4', kind: '1s', isRed: false },
+                { id: 'c5', kind: '1s', isRed: false },
+                { id: 'c6', kind: '2s', isRed: false },
+                { id: 'c7', kind: '3s', isRed: false },
+                { id: 'c8', kind: '4s', isRed: false },
+                { id: 'c9', kind: '7m', isRed: false },
+                { id: 'c10', kind: '8m', isRed: false },
+                { id: 'c11', kind: '9m', isRed: false },
+                { id: 'c12', kind: '9p', isRed: false },
+                { id: 'c13', kind: '9p', isRed: false },
+              ],
+            }
+          : p,
+      ),
+    };
+    const chankanAwaiting = reduce(state, {
+      type: 'DECLARE_KAKAN',
+      playerId: 'p1',
+      tileId: state.players[1]!.drawnTile!.id,
+      now: 1000,
+    });
+    expect(chankanAwaiting.phase).toBe('awaiting_responses');
+
+    const v2 = toStateView(chankanAwaiting, 'p2', 2000);
+    expect(v2.phase).toBe('awaiting_responses');
+    expect(v2.myCallOptions?.canRon).toBe(true);
+    expect(v2.responseRemainingMs).toBe(14000);
+
+    for (const otherId of ['p0', 'p3']) {
+      const vOther = toStateView(chankanAwaiting, otherId, 2000);
+      expect(vOther.phase).toBe('playing');
+      expect(vOther.myCallOptions).toBeNull();
+      expect(vOther.responseRemainingMs).toBeNull();
+      expect(vOther.round?.currentTurnIndex).toBe(1);
     }
   });
 });

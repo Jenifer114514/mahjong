@@ -92,20 +92,23 @@ export function toStateView(
     }
   }
 
-  // 選択肢のない視点には応答待ちの有無を漏らさない（phase・手番・残り時間を通常進行に見せる）
+  // 選択肢のない視点には応答待ちの有無を漏らさない（phase・手番・ツモ表示・残り枚数を通常進行に見せる）
   const isMaskedAwaiting =
     state.phase === 'awaiting_responses' && myCallOptions === null;
   const viewPhase = isMaskedAwaiting ? 'playing' : state.phase;
 
   let maskedTurnIndex = state.round?.currentTurnIndex ?? 0;
+  let maskedNextDrawsTile = false;
   if (isMaskedAwaiting && state.round?.pendingResponse) {
     const pending = state.round.pendingResponse;
-    maskedTurnIndex =
-      pending.kind === 'kakan' || pending.kind === 'ankan'
-        ? pending.discarderSeatIndex
-        : state.round.wall.length > 0
-          ? (pending.discarderSeatIndex + 1) % rules.playerCount
-          : pending.discarderSeatIndex;
+    if (pending.kind === 'kakan' || pending.kind === 'ankan') {
+      maskedTurnIndex = pending.discarderSeatIndex;
+    } else if (state.round.wall.length > 0) {
+      maskedTurnIndex = (pending.discarderSeatIndex + 1) % rules.playerCount;
+      maskedNextDrawsTile = true;
+    } else {
+      maskedTurnIndex = pending.discarderSeatIndex;
+    }
   }
 
   const maskedTurnPlayer = state.round
@@ -126,7 +129,9 @@ export function toStateView(
       : null,
     score: p.score,
     handCount: p.hand.length,
-    hasDrawnTile: p.drawnTile !== null,
+    hasDrawnTile:
+      p.drawnTile !== null ||
+      (maskedNextDrawsTile && p.seatIndex === maskedTurnIndex),
     discards: p.discards.map((d) => ({
       tile: { ...d.tile },
       isTsumogiri: d.isTsumogiri,
@@ -160,8 +165,12 @@ export function toStateView(
         dealerIndex: state.round.dealerIndex,
         currentTurnIndex: maskedTurnIndex,
         actingPlayerId: maskedTurnPlayerId,
-        turnCount: state.round.turnCount,
-        remainingWallCount: state.round.wall.length,
+        turnCount: maskedNextDrawsTile
+          ? state.round.turnCount + 1
+          : state.round.turnCount,
+        remainingWallCount: maskedNextDrawsTile
+          ? Math.max(0, state.round.wall.length - 1)
+          : state.round.wall.length,
         doraIndicators: state.round.deadWall.doraIndicators
           .slice(0, state.round.deadWall.revealedDoraCount)
           .map((t) => ({ ...t })),
