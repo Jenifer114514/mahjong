@@ -43,6 +43,12 @@ type Session =
   | { role: 'host'; session: HostSession }
   | { role: 'client'; session: ClientSession };
 
+interface WakeLockSentinelLike {
+  released?: boolean;
+  release(): Promise<void>;
+  addEventListener?: (type: 'release', listener: () => void) => void;
+}
+
 class MahjongApp {
   private readonly root: HTMLElement;
   private readonly mainLayer: HTMLElement;
@@ -73,10 +79,40 @@ class MahjongApp {
   private countdownTimerId: ReturnType<typeof setInterval> | null = null;
   private savedSession: SavedSessionRecord | null = null;
   private perspectiveSeatIndex = 0;
+  private wakeLockSentinel: WakeLockSentinelLike | null = null;
+  private wakeLockSyncSeq = 0;
+  private hostTabWarning = false;
+  private hostAway = false;
   private readonly handleFullscreenChange = () => {
+    if (!this.root.isConnected) {
+      document.removeEventListener('fullscreenchange', this.handleFullscreenChange);
+      document.removeEventListener(
+        'webkitfullscreenchange',
+        this.handleFullscreenChange,
+      );
+      return;
+    }
     if (this.settingsOpen) {
       this.renderFloating();
     }
+  };
+  private readonly handleVisibilityChange = () => {
+    if (!this.root.isConnected) {
+      document.removeEventListener('visibilitychange', this.handleVisibilityChange);
+      return;
+    }
+    const hidden = document.visibilityState === 'hidden';
+    if (this.activeSession?.role === 'host') {
+      const activeRoom =
+        this.currentView !== null &&
+        this.currentView.phase !== 'finished' &&
+        (this.currentView.phase !== 'lobby' ||
+          !this.activeSession.session.isOffline());
+      this.hostTabWarning = hidden && activeRoom;
+      this.activeSession.session.setHostAway(hidden);
+      this.render();
+    }
+    void this.syncWakeLock();
   };
 
   private readonly formState: LobbyFormState;
@@ -127,6 +163,7 @@ class MahjongApp {
       'webkitfullscreenchange',
       this.handleFullscreenChange,
     );
+    document.addEventListener('visibilitychange', this.handleVisibilityChange);
 
     // 対局画面では横画面を必須にする（縦持ち時はローテーション案内で覆う）
     watchOrientation(() => this.syncOrientationOverlay());
@@ -276,6 +313,12 @@ class MahjongApp {
       },
       onPromoteFromCheckpoint: (params) => {
         this.promoteToHostFromCheckpoint(params);
+      },
+      onHostAwayChange: (away) => {
+        if (this.hostAway !== away) {
+          this.hostAway = away;
+          this.render();
+        }
       },
     };
   }
@@ -612,6 +655,7 @@ class MahjongApp {
     }
     this.scheduleAutoAssistIfNeeded(view);
     this.scheduleAutoTsumogiriIfNeeded(view);
+    void this.syncWakeLock();
     this.render();
   }
 
@@ -789,6 +833,73 @@ class MahjongApp {
     this.render();
   }
 
+  private isActiveGameForWakeLock(): boolean {
+    return (
+      Boolean(this.activeSession) &&
+      this.currentView !== null &&
+      this.currentView.phase !== 'lobby' &&
+      this.currentView.phase !== 'finished'
+    );
+  }
+
+  private async releaseWakeLock(): Promise<void> {
+    this.wakeLockSyncSeq++;
+    const current = this.wakeLockSentinel;
+    this.wakeLockSentinel = null;
+    if (current) {
+      await current.release().catch(() => {});
+    }
+  }
+
+  private async syncWakeLock(): Promise<void> {
+    const seq = ++this.wakeLockSyncSeq;
+    const shouldHold =
+      this.isActiveGameForWakeLock() && document.visibilityState === 'visible';
+    if (shouldHold) {
+      if (this.wakeLockSentinel && !this.wakeLockSentinel.released) return;
+      const nav = navigator as Navigator & {
+        wakeLock?: { request(type: 'screen'): Promise<WakeLockSentinelLike> };
+      };
+      if (!nav.wakeLock || typeof nav.wakeLock.request !== 'function') return;
+      try {
+        const sentinel = await nav.wakeLock.request('screen');
+        if (
+          seq !== this.wakeLockSyncSeq ||
+          !this.isActiveGameForWakeLock() ||
+          document.visibilityState !== 'visible'
+        ) {
+          await sentinel.release().catch(() => {});
+          return;
+        }
+        this.wakeLockSentinel = sentinel;
+        sentinel.addEventListener?.('release', () => {
+          if (this.wakeLockSentinel === sentinel) {
+            this.wakeLockSentinel = null;
+          }
+        });
+      } catch {
+        // Wake Lock API 非対応や権限拒否時はそのまま続行
+      }
+      return;
+    }
+
+    const current = this.wakeLockSentinel;
+    this.wakeLockSentinel = null;
+    if (current) {
+      await current.release().catch(() => {});
+    }
+  }
+
+  private getHostStatusBannerText(): string | null {
+    if (this.activeSession?.role === 'client' && this.hostAway) {
+      return 'ホストが画面を離れています';
+    }
+    if (this.activeSession?.role === 'host' && this.hostTabWarning) {
+      return '警告: タブが背面になっています。対局中はホスト画面を開いたままにしてください（通信やCPU進行が停止する場合があります）。';
+    }
+    return null;
+  }
+
   private cleanupSession(): void {
     this.stopAutoTsumogiriTimer();
     this.stopAutoAssistTimer();
@@ -799,6 +910,9 @@ class MahjongApp {
     this.unreadChatCount = 0;
     this.chatDraft = '';
     this.fullscreenError = null;
+    this.hostAway = false;
+    this.hostTabWarning = false;
+    void this.releaseWakeLock();
     this.renderFloating();
     if (!this.activeSession) return;
     this.activeSession.session.destroy();
@@ -1079,6 +1193,15 @@ class MahjongApp {
       shell.appendChild(banner);
     }
 
+    const hostStatusBannerText = this.getHostStatusBannerText();
+    if (!inGame && hostStatusBannerText) {
+      const awayBanner = document.createElement('div');
+      awayBanner.className = 'host-away-banner';
+      awayBanner.setAttribute('role', 'alert');
+      awayBanner.textContent = hostStatusBannerText;
+      shell.appendChild(awayBanner);
+    }
+
     const content = document.createElement('main');
     if (inGame) content.className = 'table-only-main';
     shell.appendChild(content);
@@ -1234,6 +1357,7 @@ class MahjongApp {
           roundEndStep: this.roundEndStep,
           unreadChatCount: this.unreadChatCount,
           perspectiveSeatIndex: this.perspectiveSeatIndex,
+          hostStatusBanner: hostStatusBannerText,
         },
       );
     }

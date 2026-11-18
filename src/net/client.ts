@@ -15,6 +15,7 @@ import type { CallResponseChoice } from '../types/state';
 import type { TileKind } from '../types/tile';
 import {
   PEER_OPTIONS,
+  hasTurnConfig,
   migratedHostPeerId,
   normalizeRoomCode,
   parseHostMessage,
@@ -27,6 +28,14 @@ export type ClientConnectionStatus =
   | 'connected'
   | 'disconnected'
   | 'error';
+
+export function formatConnectionFailureMessage(
+  baseMessage: string,
+  turnConfigured: boolean,
+): string {
+  if (turnConfigured) return baseMessage;
+  return `${baseMessage} TURNサーバー未設定のため、異なる回線や制限の厳しいNAT環境ではP2P接続できない場合があります。`;
+}
 
 export interface PromoteFromCheckpointParams {
   checkpoint: HostCheckpointPayload;
@@ -48,6 +57,7 @@ export interface ClientSessionCallbacks {
   onPromoteFromCheckpoint?: (params: PromoteFromCheckpointParams) => void;
   onNoHostAvailable?: (roomCode: string) => void;
   onMigrated?: (migration: HostMigratingPayload) => void;
+  onHostAwayChange?: (away: boolean) => void;
 }
 
 export interface ClientSessionOptions {
@@ -58,6 +68,7 @@ export interface ClientSessionOptions {
   connectTimeoutMs?: number;
   migrateDelayMs?: number;
   reconnectMaxAttempts?: number;
+  turnConfigured?: boolean;
 }
 
 const DEFAULT_CONNECT_TIMEOUT_MS = 12000;
@@ -74,6 +85,7 @@ export class ClientSession {
   private readonly connectTimeoutMs: number;
   private readonly migrateDelayMs: number;
   private readonly reconnectMaxAttempts: number;
+  private readonly turnConfigured: boolean;
 
   private hostEpoch: number;
   private currentHostPeerId: string;
@@ -111,6 +123,7 @@ export class ClientSession {
       options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
     this.migrateDelayMs = options.migrateDelayMs ?? 600;
     this.reconnectMaxAttempts = options.reconnectMaxAttempts ?? 8;
+    this.turnConfigured = options.turnConfigured ?? hasTurnConfig();
   }
 
   connect(): void {
@@ -182,7 +195,10 @@ export class ClientSession {
         }
         this.callbacks.onStatusChange(
           'error',
-          `部屋コード「${this.roomCode}」が見つかりません。ホストが部屋を開いているか確認してください。`,
+          formatConnectionFailureMessage(
+            `部屋コード「${this.roomCode}」が見つかりません。ホストが部屋を開いているか確認してください。`,
+            this.turnConfigured,
+          ),
         );
         return;
       }
@@ -194,7 +210,10 @@ export class ClientSession {
 
       this.callbacks.onStatusChange(
         'error',
-        `接続エラー (${err.type}): ${err.message}`,
+        formatConnectionFailureMessage(
+          `接続エラー (${err.type}): ${err.message}`,
+          this.turnConfigured,
+        ),
       );
     });
   }
@@ -212,7 +231,10 @@ export class ClientSession {
         }
         this.callbacks.onStatusChange(
           'error',
-          '接続がタイムアウトしました。部屋コードやネットワーク環境（NAT/TURN制限）を確認してください。',
+          formatConnectionFailureMessage(
+            '接続がタイムアウトしました。部屋コードやネットワーク環境を確認してください。',
+            this.turnConfigured,
+          ),
         );
       } else if (this.isRecovering) {
         this.handleRecoveryFailure();
@@ -347,8 +369,14 @@ export class ClientSession {
         return;
       }
 
+      if (msg.kind === 'HOST_STATUS') {
+        this.callbacks.onHostAwayChange?.(msg.payload.away);
+        return;
+      }
+
       if (msg.kind === 'HOST_HANDOVER') {
         this.clearTimeout();
+        this.callbacks.onHostAwayChange?.(false);
         const cb = this.callbacks.onHostHandover;
         this.destroy();
         cb?.(msg.payload);
@@ -382,11 +410,15 @@ export class ClientSession {
         }
         this.callbacks.onStatusChange(
           'disconnected',
-          'ホストとの接続が確立する前に切断されました。',
+          formatConnectionFailureMessage(
+            'ホストとの接続が確立する前に切断されました。',
+            this.turnConfigured,
+          ),
         );
         return;
       }
 
+      this.callbacks.onHostAwayChange?.(false);
       this.beginConnectionRecovery();
     });
 
@@ -399,7 +431,10 @@ export class ClientSession {
       }
       this.callbacks.onStatusChange(
         'error',
-        `データ通信エラー: ${err.message}`,
+        formatConnectionFailureMessage(
+          `データ通信エラー: ${err.message}`,
+          this.turnConfigured,
+        ),
       );
     });
   }

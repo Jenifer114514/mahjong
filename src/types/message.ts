@@ -377,6 +377,10 @@ export type HostMessage =
       payload: HostRedirectPayload;
     }
   | {
+      kind: 'HOST_STATUS';
+      payload: { away: boolean };
+    }
+  | {
       kind: 'ERROR';
       payload: GameError;
     };

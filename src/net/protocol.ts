@@ -20,15 +20,68 @@ const ROOM_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const ROOM_CODE_LENGTH = 6;
 const VALID_TILE_KINDS = new Set<string>(ALL_TILE_KINDS);
 
-export const PEER_OPTIONS: PeerOptions = {
-  debug: 1,
-  config: {
-    iceServers: [
-      { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:stun1.l.google.com:19302' },
-    ],
-  },
-};
+export interface TurnEnv {
+  VITE_TURN_URL?: string;
+  VITE_TURN_USERNAME?: string;
+  VITE_TURN_CREDENTIAL?: string;
+}
+
+const DEFAULT_STUN_SERVERS: RTCIceServer[] = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+];
+
+export function readDefaultTurnEnv(): TurnEnv {
+  const hasMetaEnv = typeof import.meta !== 'undefined' && Boolean(import.meta.env);
+  if (!hasMetaEnv) return {};
+  const url = import.meta.env.VITE_TURN_URL;
+  const username = import.meta.env.VITE_TURN_USERNAME;
+  const credential = import.meta.env.VITE_TURN_CREDENTIAL;
+  return {
+    VITE_TURN_URL: typeof url === 'string' ? url : undefined,
+    VITE_TURN_USERNAME: typeof username === 'string' ? username : undefined,
+    VITE_TURN_CREDENTIAL: typeof credential === 'string' ? credential : undefined,
+  };
+}
+
+function parseTurnUrls(rawUrl: string | undefined): string[] {
+  if (!rawUrl) return [];
+  return rawUrl
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+export function hasTurnConfig(env: TurnEnv = readDefaultTurnEnv()): boolean {
+  return parseTurnUrls(env.VITE_TURN_URL).length > 0;
+}
+
+export function buildPeerOptions(env: TurnEnv = readDefaultTurnEnv()): PeerOptions {
+  const iceServers: RTCIceServer[] = [...DEFAULT_STUN_SERVERS];
+  const turnUrls = parseTurnUrls(env.VITE_TURN_URL);
+  if (turnUrls.length > 0) {
+    const turnEntry: RTCIceServer = {
+      urls: turnUrls.length === 1 ? turnUrls[0]! : turnUrls,
+    };
+    const username = env.VITE_TURN_USERNAME?.trim();
+    const credential = env.VITE_TURN_CREDENTIAL?.trim();
+    if (username) {
+      turnEntry.username = username;
+    }
+    if (credential) {
+      turnEntry.credential = credential;
+    }
+    iceServers.push(turnEntry);
+  }
+  return {
+    debug: 1,
+    config: {
+      iceServers,
+    },
+  };
+}
+
+export const PEER_OPTIONS: PeerOptions = buildPeerOptions();
 
 export function generateRoomCode(): string {
   const chars: string[] = [];
@@ -454,6 +507,16 @@ export function parseHostMessage(raw: unknown): HostMessage | null {
     return {
       kind: 'HOST_REDIRECT',
       payload: raw.payload as unknown as HostRedirectPayload,
+    };
+  }
+
+  if (raw.kind === 'HOST_STATUS') {
+    if (!isRecord(raw.payload) || typeof raw.payload.away !== 'boolean') {
+      return null;
+    }
+    return {
+      kind: 'HOST_STATUS',
+      payload: { away: raw.payload.away },
     };
   }
 
