@@ -86,7 +86,8 @@ describe('アプリ起動とローカルCPU対局', () => {
     const root = document.getElementById('app') as HTMLElement;
     expect(root.querySelector('.app-shell')).not.toBeNull();
     expect(root.querySelector('.app-title')?.textContent).toBe('PeerJS 対戦リーチ麻雀');
-    expect(root.textContent).toContain('部屋を作る（ホスト）');
+    expect(root.textContent).toContain('部屋を作る');
+    expect(root.textContent).not.toContain('部屋を作る（ホスト）');
     expect(root.textContent).toContain('いますぐCPUと対局');
     expect(
       Array.from(root.querySelectorAll('.seg-btn')).some(
@@ -191,10 +192,15 @@ describe('アプリ起動とローカルCPU対局', () => {
         firstTile.click();
         for (let j = 0; j < 20 && !acted; j++) {
           await new Promise((resolve) => setTimeout(resolve, 30));
-          const after = root.querySelectorAll(
+          const riverTiles = root.querySelectorAll<HTMLElement>(
             '.seat-self .discard-river .mj-tile',
-          ).length;
-          if (after === before + 1) acted = true;
+          );
+          if (riverTiles.length === before + 1) {
+            expect(riverTiles[riverTiles.length - 1]!.dataset.discardAnim).toBe(
+              'true',
+            );
+            acted = true;
+          }
         }
       }
     }
@@ -225,7 +231,8 @@ describe('アプリ起動とローカルCPU対局', () => {
     root.querySelector<HTMLButtonElement>('.table-chrome-leave')!.click();
     expect(clickByText(root, '.leave-confirm-modal button', 'ロビーに戻る')).toBe(true);
     expect(root.querySelector('.table-stage')).toBeNull();
-    expect(root.textContent).toContain('部屋を作る（ホスト）');
+    expect(root.textContent).toContain('部屋を作る');
+    expect(root.textContent).not.toContain('部屋を作る（ホスト）');
   });
 
   it('設定ボタンでフル画面表示のON/OFF設定が開き、チャットボタンでメッセージ送信できる', async () => {
@@ -449,5 +456,66 @@ describe('アプリ起動とローカルCPU対局', () => {
     });
     const banner = container.querySelector('.table-host-away-banner');
     expect(banner?.textContent).toBe('ホストが画面を離れています');
+  });
+
+  it('ホーム画面で常設ルームの参加状況を自動取得しても入力欄のフォーカスを維持する', async () => {
+    localStorage.clear();
+    bootApp();
+    await loadMain();
+
+    const root = document.getElementById('app') as HTMLElement;
+    const nameInput = root.querySelector<HTMLInputElement>('#player-name-input')!;
+    expect(nameInput).not.toBeNull();
+    nameInput.focus();
+    expect(document.activeElement).toBe(nameInput);
+
+    let allEmpty = false;
+    for (let i = 0; i < 40; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      const occupancies = Array.from(
+        root.querySelectorAll('.permanent-room-occupancy'),
+      ).map((el) => el.textContent ?? '');
+      if (
+        occupancies.length === 3 &&
+        occupancies.every((t) => t.includes('空き（現在 0人）'))
+      ) {
+        allEmpty = true;
+        break;
+      }
+    }
+
+    expect(allEmpty).toBe(true);
+    expect(document.activeElement).toBe(nameInput);
+  });
+
+  it('対局中の設定ポップアップから効果音の ON/OFF を切り替えられる', async () => {
+    localStorage.clear();
+    bootApp();
+    await loadMain();
+    const { soundEngine } = await import('../sound');
+    soundEngine.setEnabled(true);
+
+    const root = document.getElementById('app') as HTMLElement;
+    expect(clickByText(root, 'button', 'CPU対局をはじめる')).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    root.querySelector<HTMLButtonElement>('.table-chrome-settings')!.click();
+    const soundSwitch = root.querySelector<HTMLButtonElement>(
+      '.table-settings-panel button[aria-label="効果音"]',
+    );
+    expect(soundSwitch).not.toBeNull();
+    expect(soundSwitch!.getAttribute('aria-checked')).toBe('true');
+
+    soundSwitch!.click();
+    expect(soundEngine.isEnabled()).toBe(false);
+    expect(localStorage.getItem('arena-mahjong:sound-enabled:v1')).toBe('0');
+    const updatedSwitch = root.querySelector<HTMLButtonElement>(
+      '.table-settings-panel button[aria-label="効果音"]',
+    );
+    expect(updatedSwitch!.getAttribute('aria-checked')).toBe('false');
+
+    updatedSwitch!.click();
+    expect(soundEngine.isEnabled()).toBe(true);
+    expect(localStorage.getItem('arena-mahjong:sound-enabled:v1')).toBe('1');
   });
 });

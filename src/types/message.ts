@@ -306,8 +306,26 @@ export interface HostMigratingPayload {
   hostEpoch: number;
 }
 
+export interface RoomOccupancyPlayer {
+  name: string;
+  isCpu: boolean;
+  connected: boolean;
+  isHost: boolean;
+}
+
+export interface RoomStatusPayload {
+  roomCode: string;
+  phase: GamePhase;
+  maxPlayers: number;
+  players: RoomOccupancyPlayer[];
+  spectatorNames: string[];
+}
+
 /** クライアント → ホスト（要求のみ送る） */
 export type ClientMessage =
+  | {
+      kind: 'PROBE_ROOM';
+    }
   | {
       kind: 'JOIN';
       playerName: string;
@@ -379,6 +397,10 @@ export type HostMessage =
   | {
       kind: 'HOST_STATUS';
       payload: { away: boolean };
+    }
+  | {
+      kind: 'ROOM_STATUS';
+      payload: RoomStatusPayload;
     }
   | {
       kind: 'ERROR';

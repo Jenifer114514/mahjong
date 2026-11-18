@@ -12,6 +12,7 @@ import {
 } from '../recovery';
 import {
   PERMANENT_ROOMS,
+  PERMANENT_ROOM_DEFAULT_RULE_CONFIG,
   formatRoomDisplayName,
   getPermanentRoom,
   isPermanentRoomCode,
@@ -30,8 +31,16 @@ describe('常設ルーム定義・暗号化チェックポイント・保存セ�
     expect(isPermanentRoomCode('GOLD')).toBe(true);
     expect(isPermanentRoomCode('ABC123')).toBe(false);
 
-    expect(getPermanentRoom('GOLD')?.defaultRuleConfig.doubleRon).toBe(false);
-    expect(getPermanentRoom('BRONZE')?.defaultRuleConfig.gameLength).toBe('tonpuu');
+    expect(getPermanentRoom('GOLD')?.defaultRuleConfig).toEqual(
+      PERMANENT_ROOM_DEFAULT_RULE_CONFIG,
+    );
+    expect(getPermanentRoom('SILVER')?.defaultRuleConfig).toEqual(
+      PERMANENT_ROOM_DEFAULT_RULE_CONFIG,
+    );
+    expect(getPermanentRoom('BRONZE')?.defaultRuleConfig).toEqual(
+      PERMANENT_ROOM_DEFAULT_RULE_CONFIG,
+    );
+    expect(new Set(PERMANENT_ROOMS.map((r) => r.tierLabel)).size).toBe(1);
     expect(formatRoomDisplayName('BRONZE')).toBe('銅の間 (BRONZE)');
     expect(formatRoomDisplayName('LOCAL')).toBe('ローカルCPU戦');
     expect(formatRoomDisplayName('XYZ999')).toBe('部屋 XYZ999');
@@ -147,6 +156,34 @@ describe('常設ルーム定義・暗号化チェックポイント・保存セ�
         },
       }),
     ).toMatchObject({ kind: 'SESSION_WELCOME', payload: { isSpectator: true } });
+
+    expect(parseClientMessage({ kind: 'PROBE_ROOM' })).toEqual({
+      kind: 'PROBE_ROOM',
+    });
+    expect(
+      parseHostMessage({
+        kind: 'ROOM_STATUS',
+        payload: {
+          roomCode: 'BRONZE',
+          phase: 'lobby',
+          maxPlayers: 4,
+          players: [
+            { name: 'ホスト', isCpu: false, connected: true, isHost: true },
+            { name: 'CPU 1', isCpu: true, connected: true, isHost: false },
+          ],
+          spectatorNames: ['観戦者A'],
+        },
+      }),
+    ).toMatchObject({
+      kind: 'ROOM_STATUS',
+      payload: { roomCode: 'BRONZE', maxPlayers: 4 },
+    });
+    expect(
+      parseHostMessage({
+        kind: 'ROOM_STATUS',
+        payload: { roomCode: 'BRONZE', phase: 'invalid' },
+      }),
+    ).toBeNull();
   });
 
   it('観戦者視点の StateView は全員の非公開手牌・山牌・鳴き候補を一切含まない', () => {

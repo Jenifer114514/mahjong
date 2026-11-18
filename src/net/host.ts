@@ -19,6 +19,7 @@ import type {
   HostMessage,
   HostMigratingPayload,
   HostSnapshotPayload,
+  RoomStatusPayload,
   SessionWelcomePayload,
   StateView,
 } from '../types/message';
@@ -1000,6 +1001,19 @@ export class HostSession {
           message: '不正な形式のメッセージです。',
         },
       });
+      return;
+    }
+
+    if (message.kind === 'PROBE_ROOM') {
+      this.sendToConn(conn, {
+        kind: 'ROOM_STATUS',
+        payload: this.buildRoomStatusPayload(),
+      });
+      setTimeout(() => {
+        if (!this.destroyed && conn.open) {
+          conn.close();
+        }
+      }, 150);
       return;
     }
 
@@ -2053,6 +2067,46 @@ export class HostSession {
         inlineKeyBase64: encrypted.keyBase64,
       },
     });
+  }
+
+  private buildRoomStatusPayload(): RoomStatusPayload {
+    if (this.pendingTakeover) {
+      const v = this.pendingTakeover.fallbackView;
+      const rules = deriveRules(v.ruleConfig);
+      return {
+        roomCode: v.roomCode,
+        phase: v.phase === 'awaiting_responses' ? 'playing' : v.phase,
+        maxPlayers: rules.playerCount,
+        players: v.players.map((p) => ({
+          name: p.name,
+          isCpu: isCpuPlayerId(p.playerId),
+          connected: p.connected,
+          isHost: p.playerId === v.hostPlayerId,
+        })),
+        spectatorNames: (v.spectators ?? [])
+          .filter((s) => s.connected)
+          .map((s) => s.name),
+      };
+    }
+
+    const rules = deriveRules(this.state.ruleConfig);
+    return {
+      roomCode: this.state.roomCode,
+      phase:
+        this.state.phase === 'awaiting_responses'
+          ? 'playing'
+          : this.state.phase,
+      maxPlayers: rules.playerCount,
+      players: this.state.players.map((p) => ({
+        name: p.name,
+        isCpu: isCpuPlayerId(p.playerId),
+        connected: p.connected,
+        isHost: p.playerId === this.state.hostPlayerId,
+      })),
+      spectatorNames: (this.state.spectators ?? [])
+        .filter((s) => s.connected)
+        .map((s) => s.name),
+    };
   }
 
   private buildViewForViewer(viewerId: string, now: number): StateView {

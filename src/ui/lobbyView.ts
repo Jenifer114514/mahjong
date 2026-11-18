@@ -1,5 +1,6 @@
 import { CPU_PLAYER_ID_PREFIX, isCpuPlayerId, maxCpuCount } from '../cpu/player';
 import { deriveRules } from '../engine/rules';
+import type { PermanentRoomProbeState } from '../net/roomProbe';
 import {
   PERMANENT_ROOMS,
   formatRoomDisplayName,
@@ -40,10 +41,28 @@ export interface LobbyHandlers {
   onTransferHost?: (targetPlayerId: string) => void;
   /** ホストを他の参加者へ譲って自分は退出する */
   onTransferHostAndLeave?: () => void;
+  /** 常設ルームの参加状況を手動で再取得する */
+  onRefreshRoomStatuses?: () => void;
+}
+
+export interface LandscapeLockUiState {
+  enabled: boolean;
+  fullscreenActive: boolean;
+  message?: string | null;
+  messageKind?: 'info' | 'err';
+  onToggle: (next: boolean) => void;
+  onApplyNow?: () => void;
 }
 
 export interface LobbyEntryOptions {
   savedSession?: SavedSessionRecord | null;
+  landscapeLock?: LandscapeLockUiState;
+  roomStatuses?: Partial<Record<PermanentRoomId, PermanentRoomProbeState>>;
+  roomRefreshing?: boolean;
+}
+
+export interface WaitingRoomOptions {
+  landscapeLock?: LandscapeLockUiState;
 }
 
 export interface LobbyFormState {
@@ -112,6 +131,170 @@ function createOnOffToggleField(params: {
 
   field.append(meta, toggleBtn);
   return field;
+}
+
+function createLandscapeLockField(
+  lock: LandscapeLockUiState,
+  variant: 'card' | 'box',
+): HTMLElement {
+  const container = document.createElement('div');
+  container.className =
+    variant === 'card' ? 'card landscape-lock-card' : 'landscape-lock-box';
+
+  const row = document.createElement('div');
+  row.className = 'landscape-lock-row';
+
+  const meta = document.createElement('div');
+  meta.className = 'landscape-lock-meta';
+
+  const label = document.createElement('span');
+  label.className = 'landscape-lock-label';
+  label.textContent = '横画面固定（Android・フル画面）';
+
+  const sub = document.createElement('span');
+  sub.className = 'seg-sub landscape-lock-sub';
+  sub.textContent =
+    lock.enabled && lock.fullscreenActive
+      ? 'フル画面表示で横向きに固定しています'
+      : lock.enabled
+        ? '有効（対局開始・参加時に自動で横画面へ切り替わります）'
+        : 'ONにするとフル画面表示になり、端末を横向きに固定します（Android向け）';
+
+  meta.append(label, sub);
+
+  const controls = document.createElement('div');
+  controls.className = 'landscape-lock-controls';
+
+  if (lock.enabled && !lock.fullscreenActive && lock.onApplyNow) {
+    const applyBtn = document.createElement('button');
+    applyBtn.type = 'button';
+    applyBtn.className = 'btn btn-secondary landscape-lock-apply-btn';
+    applyBtn.textContent = '今すぐ横画面';
+    applyBtn.addEventListener('click', () => lock.onApplyNow?.());
+    controls.appendChild(applyBtn);
+  }
+
+  const toggleBtn = document.createElement('button');
+  toggleBtn.type = 'button';
+  toggleBtn.className = `toggle-switch landscape-lock-switch${lock.enabled ? ' is-on' : ''}`;
+  toggleBtn.setAttribute('role', 'switch');
+  toggleBtn.setAttribute('aria-checked', lock.enabled ? 'true' : 'false');
+  toggleBtn.setAttribute('aria-label', '横画面固定（Android・フル画面）');
+
+  const track = document.createElement('span');
+  track.className = 'toggle-track';
+  track.setAttribute('aria-hidden', 'true');
+  const thumb = document.createElement('span');
+  thumb.className = 'toggle-thumb';
+  track.appendChild(thumb);
+
+  const stateText = document.createElement('span');
+  stateText.className = 'toggle-state-text';
+  stateText.textContent = lock.enabled ? 'ON' : 'OFF';
+
+  toggleBtn.append(track, stateText);
+  toggleBtn.addEventListener('click', () => {
+    lock.onToggle(!lock.enabled);
+  });
+
+  controls.appendChild(toggleBtn);
+  row.append(meta, controls);
+  container.appendChild(row);
+
+  if (lock.message) {
+    const msg = document.createElement('div');
+    msg.className = `landscape-lock-message${
+      lock.messageKind === 'err' ? ' is-err' : ' is-info'
+    }`;
+    msg.setAttribute('role', 'status');
+    msg.textContent = lock.message;
+    container.appendChild(msg);
+  }
+
+  return container;
+}
+
+export function renderPermanentRoomOccupancy(
+  target: HTMLElement,
+  state: PermanentRoomProbeState = { status: 'checking' },
+): void {
+  target.innerHTML = '';
+
+  if (state.status === 'checking') {
+    const line = document.createElement('div');
+    line.className = 'permanent-room-status-line is-checking';
+    line.textContent = '参加状況を確認中...';
+    target.appendChild(line);
+    return;
+  }
+
+  if (state.status === 'empty') {
+    const line = document.createElement('div');
+    line.className = 'permanent-room-status-line is-empty';
+    line.textContent = '空き（現在 0人）';
+    target.appendChild(line);
+    return;
+  }
+
+  if (state.status === 'error') {
+    const line = document.createElement('div');
+    line.className = 'permanent-room-status-line is-err';
+    line.textContent = '状況を取得できませんでした';
+    target.appendChild(line);
+    return;
+  }
+
+  const info = state.info;
+  const phaseLabel =
+    info.phase === 'lobby'
+      ? '待機中'
+      : info.phase === 'finished'
+        ? '終局'
+        : '対局中';
+
+  const statusLine = document.createElement('div');
+  statusLine.className = 'permanent-room-status-line is-occupied';
+
+  const phaseBadge = document.createElement('span');
+  phaseBadge.className = `permanent-room-phase-badge${
+    info.phase === 'lobby' ? ' is-lobby' : ' is-playing'
+  }`;
+  phaseBadge.textContent = phaseLabel;
+
+  const countText = document.createElement('span');
+  countText.textContent =
+    info.spectatorNames.length > 0
+      ? `${info.players.length}/${info.maxPlayers}人 ・ 観戦 ${info.spectatorNames.length}人`
+      : `${info.players.length}/${info.maxPlayers}人`;
+
+  statusLine.append(phaseBadge, countText);
+  target.appendChild(statusLine);
+
+  if (info.players.length > 0) {
+    const members = document.createElement('div');
+    members.className = 'permanent-room-members';
+    for (const p of info.players) {
+      const chip = document.createElement('span');
+      chip.className = `permanent-room-member${p.isCpu ? ' is-cpu' : ''}${
+        !p.connected ? ' is-disconnected' : ''
+      }`;
+      const tags: string[] = [];
+      if (p.isHost) tags.push('ホスト');
+      if (p.isCpu) tags.push('CPU');
+      if (!p.connected) tags.push('切断');
+      chip.textContent =
+        tags.length > 0 ? `${p.name} (${tags.join('/')})` : p.name;
+      members.appendChild(chip);
+    }
+    target.appendChild(members);
+  }
+
+  if (info.spectatorNames.length > 0) {
+    const specLine = document.createElement('div');
+    specLine.className = 'permanent-room-spectators';
+    specLine.textContent = `観戦: ${info.spectatorNames.join('、')}`;
+    target.appendChild(specLine);
+  }
 }
 
 export function renderLobbyEntry(
@@ -191,7 +374,15 @@ export function renderLobbyEntry(
 
   nameField.append(nameLabel, nameInput);
   nameCard.appendChild(nameField);
-  wrap.appendChild(nameCard);
+
+  if (options.landscapeLock) {
+    const topGrid = document.createElement('div');
+    topGrid.className = 'lobby-entry-top-grid';
+    topGrid.append(nameCard, createLandscapeLockField(options.landscapeLock, 'card'));
+    wrap.appendChild(topGrid);
+  } else {
+    wrap.appendChild(nameCard);
+  }
 
   // 常設ルーム（銅の間 / 銀の間 / 金の間）
   const permCard = document.createElement('div');
@@ -200,17 +391,27 @@ export function renderLobbyEntry(
   const permHeader = document.createElement('div');
   permHeader.className = 'permanent-rooms-header';
 
+  const permTitleRow = document.createElement('div');
+  permTitleRow.className = 'permanent-rooms-title-row';
+
   const permTitle = document.createElement('h2');
   permTitle.style.margin = '0';
   permTitle.textContent = '常設ルーム（銅の間・銀の間・金の間）';
 
-  const permSub = document.createElement('p');
-  permSub.className = 'hub-sub';
-  permSub.style.margin = '4px 0 12px';
-  permSub.textContent =
-    '開いている卓があれば参加（対局中・満席時は観戦）し、無人の場合は自動でホストとして部屋を開きます。';
+  permTitleRow.appendChild(permTitle);
+  if (handlers.onRefreshRoomStatuses) {
+    const refreshBtn = document.createElement('button');
+    refreshBtn.type = 'button';
+    refreshBtn.className = 'btn btn-secondary permanent-rooms-refresh-btn';
+    refreshBtn.disabled = Boolean(options.roomRefreshing);
+    refreshBtn.textContent = options.roomRefreshing ? '確認中...' : '状況を更新';
+    refreshBtn.addEventListener('click', () =>
+      handlers.onRefreshRoomStatuses?.(),
+    );
+    permTitleRow.appendChild(refreshBtn);
+  }
 
-  permHeader.append(permTitle, permSub);
+  permHeader.append(permTitleRow);
 
   const permGrid = document.createElement('div');
   permGrid.className = 'permanent-rooms-grid';
@@ -237,13 +438,10 @@ export function renderLobbyEntry(
     roomTitle.className = 'permanent-room-name';
     roomTitle.textContent = room.name;
 
-    const roomDesc = document.createElement('p');
-    roomDesc.className = 'hub-sub permanent-room-desc';
-    roomDesc.textContent = room.description;
-
-    const roomRules = document.createElement('div');
-    roomRules.className = 'permanent-room-rules';
-    roomRules.textContent = room.rulesSummary;
+    const occupancy = document.createElement('div');
+    occupancy.className = 'permanent-room-occupancy';
+    occupancy.dataset.roomOccupancy = room.id;
+    renderPermanentRoomOccupancy(occupancy, options.roomStatuses?.[room.id]);
 
     const enterBtn = document.createElement('button');
     enterBtn.type = 'button';
@@ -258,7 +456,7 @@ export function renderLobbyEntry(
       }
     });
 
-    item.append(topRow, roomTitle, roomDesc, roomRules, enterBtn);
+    item.append(topRow, roomTitle, occupancy, enterBtn);
     permGrid.appendChild(item);
   }
 
@@ -272,27 +470,28 @@ export function renderLobbyEntry(
   const createCard = document.createElement('div');
   createCard.className = 'card';
   const createTitle = document.createElement('h2');
-  createTitle.textContent = '部屋を作る（ホスト）';
+  createTitle.textContent = '部屋を作る';
   createCard.appendChild(createTitle);
 
   const countField = document.createElement('div');
   countField.className = 'field';
-  const countLabel = document.createElement('label');
-  countLabel.textContent = '人数';
   const countSeg = document.createElement('div');
   countSeg.className = 'segmented';
 
-  const countOptions: Array<{ value: PlayerCount; title: string; sub: string }> = [
-    { value: 4, title: '4人麻雀', sub: '136枚 / 25,000点' },
-    { value: 3, title: '3人麻雀', sub: '108枚(2〜8萬抜き) / 35,000点' },
+  const countOptions: Array<{ value: PlayerCount; title: string }> = [
+    { value: 4, title: '4人麻雀' },
+    { value: 3, title: '3人麻雀' },
   ];
 
   const lengthField = document.createElement('div');
   lengthField.className = 'field';
-  const lengthLabel = document.createElement('label');
-  lengthLabel.textContent = '長さ';
   const lengthSeg = document.createElement('div');
   lengthSeg.className = 'segmented';
+
+  const lengthOptions: Array<{ value: GameLength; title: string }> = [
+    { value: 'tonpuu', title: '東風戦' },
+    { value: 'hanchan', title: '半荘戦' },
+  ];
 
   const renderRuleButtons = () => {
     countSeg.innerHTML = '';
@@ -300,7 +499,7 @@ export function renderLobbyEntry(
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = `seg-btn${formState.playerCount === opt.value ? ' is-active' : ''}`;
-      btn.innerHTML = `${opt.title}<span class="seg-sub">${opt.sub}</span>`;
+      btn.textContent = opt.title;
       btn.addEventListener('click', () => {
         formState.playerCount = opt.value;
         renderRuleButtons();
@@ -309,25 +508,11 @@ export function renderLobbyEntry(
     }
 
     lengthSeg.innerHTML = '';
-    const tonpuuRules = deriveRules({
-      playerCount: formState.playerCount,
-      gameLength: 'tonpuu',
-    });
-    const hanchanRules = deriveRules({
-      playerCount: formState.playerCount,
-      gameLength: 'hanchan',
-    });
-
-    const lengthOptions: Array<{ value: GameLength; title: string; sub: string }> = [
-      { value: 'tonpuu', title: '東風戦', sub: `全${tonpuuRules.totalRounds}局（東場のみ）` },
-      { value: 'hanchan', title: '半荘戦', sub: `全${hanchanRules.totalRounds}局（東・南場）` },
-    ];
-
     for (const opt of lengthOptions) {
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = `seg-btn${formState.gameLength === opt.value ? ' is-active' : ''}`;
-      btn.innerHTML = `${opt.title}<span class="seg-sub">${opt.sub}</span>`;
+      btn.textContent = opt.title;
       btn.addEventListener('click', () => {
         formState.gameLength = opt.value;
         renderRuleButtons();
@@ -337,14 +522,8 @@ export function renderLobbyEntry(
   };
 
   renderRuleButtons();
-  countField.append(countLabel, countSeg);
-  lengthField.append(lengthLabel, lengthSeg);
-
-  const createNote = document.createElement('p');
-  createNote.className = 'hub-sub';
-  createNote.style.margin = '0 0 12px';
-  createNote.textContent =
-    '詳細ルールの ON / OFF や CPU の追加は、部屋を作成したあとのロビーで変更できます。';
+  countField.append(countSeg);
+  lengthField.append(lengthSeg);
 
   const buildBaseRuleConfig = (): RuleConfig => ({
     playerCount: formState.playerCount,
@@ -367,20 +546,14 @@ export function renderLobbyEntry(
     handlers.onCreateRoom(formState.playerName, buildBaseRuleConfig(), 0);
   });
 
-  createCard.append(countField, lengthField, createNote, createBtn);
+  createCard.append(countField, lengthField, createBtn);
 
   // Local (CPU only) game card
   const localCard = document.createElement('div');
   localCard.className = 'card card-local';
 
   const localTitle = document.createElement('h2');
-  localTitle.textContent = 'いますぐCPUと対局（通信なし）';
-
-  const localNote = document.createElement('p');
-  localNote.className = 'hub-sub';
-  localNote.style.margin = '0 0 10px';
-  localNote.textContent =
-    '部屋コードの共有なしで、選んだ人数・長さのまま CPU を相手に対局します。対人戦と同じく横画面に最適化されます。';
+  localTitle.textContent = 'いますぐCPUと対局';
 
   const localBtn = document.createElement('button');
   localBtn.type = 'button';
@@ -396,13 +569,13 @@ export function renderLobbyEntry(
     );
   });
 
-  localCard.append(localTitle, localNote, localBtn);
+  localCard.append(localTitle, localBtn);
 
   // Join room card
   const joinCard = document.createElement('div');
   joinCard.className = 'card';
   const joinTitle = document.createElement('h2');
-  joinTitle.textContent = '部屋に参加する（ゲスト）';
+  joinTitle.textContent = '部屋に参加する';
 
   const codeField = document.createElement('div');
   codeField.className = 'field';
@@ -451,6 +624,7 @@ export function renderWaitingRoom(
   container: HTMLElement,
   view: StateView,
   handlers: LobbyHandlers,
+  options: WaitingRoomOptions = {},
 ): void {
   container.innerHTML = '';
   const rules = deriveRules(view.ruleConfig);
@@ -845,6 +1019,10 @@ export function renderWaitingRoom(
     btnRow.append(addCpuBtn, removeCpuBtn);
     cpuControls.append(cpuCaption, btnRow);
     card.appendChild(cpuControls);
+  }
+
+  if (options.landscapeLock) {
+    card.appendChild(createLandscapeLockField(options.landscapeLock, 'box'));
   }
 
   const leaveBtn = document.createElement('button');

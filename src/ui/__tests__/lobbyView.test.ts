@@ -427,4 +427,182 @@ describe('renderWaitingRoom（CPU の後入れ）', () => {
     );
     expect(specRoot.querySelector('.spectator-lobby-banner')).not.toBeNull();
   });
+
+  it('ホーム画面と待機ロビーに Android 向け横画面固定トグルを表示し操作できる', () => {
+    const onToggle = vi.fn();
+    const onApplyNow = vi.fn();
+    const formState: LobbyFormState = {
+      playerName: 'テスト',
+      playerCount: 4,
+      gameLength: 'tonpuu',
+      tobi: true,
+      tsumoLoss: false,
+      allowKuitan: true,
+      allowAtozuke: true,
+      honbaBonus: true,
+      joinCode: '',
+      cpuCount: 0,
+      cpuLevel: 'normal',
+    };
+
+    const entryRoot = document.createElement('div');
+    renderLobbyEntry(
+      entryRoot,
+      formState,
+      {
+        onCreateRoom: () => {},
+        onJoinRoom: () => {},
+        onStartLocalGame: () => {},
+        onLeaveLobby: () => {},
+      },
+      false,
+      {
+        landscapeLock: {
+          enabled: true,
+          fullscreenActive: false,
+          onToggle,
+          onApplyNow,
+        },
+      },
+    );
+
+    expect(entryRoot.querySelector('.landscape-lock-card')).not.toBeNull();
+    expect(entryRoot.querySelector('.rule-toggle-field')).toBeNull();
+    expect(entryRoot.querySelectorAll('.seg-btn')).toHaveLength(4);
+    entryRoot.querySelector<HTMLButtonElement>('.landscape-lock-apply-btn')!.click();
+    expect(onApplyNow).toHaveBeenCalledTimes(1);
+    entryRoot.querySelector<HTMLButtonElement>('.landscape-lock-switch')!.click();
+    expect(onToggle).toHaveBeenCalledWith(false);
+
+    const { session, latest } = lobbySession(1);
+    session.start();
+    const waitRoot = document.createElement('div');
+    renderWaitingRoom(
+      waitRoot,
+      latest(),
+      {
+        onCreateRoom: () => {},
+        onJoinRoom: () => {},
+        onStartLocalGame: () => {},
+        onLeaveLobby: () => {},
+      },
+      {
+        landscapeLock: {
+          enabled: false,
+          fullscreenActive: false,
+          onToggle,
+        },
+      },
+    );
+    expect(waitRoot.querySelector('.landscape-lock-box')).not.toBeNull();
+    waitRoot.querySelector<HTMLButtonElement>('.landscape-lock-switch')!.click();
+    expect(onToggle).toHaveBeenCalledWith(true);
+    session.destroy();
+  });
+
+  it('ホーム画面の不要な説明文・サブ表記が削除され、常設ルームの参加状況と更新ボタンを表示できる', () => {
+    const onRefreshRoomStatuses = vi.fn();
+    const formState: LobbyFormState = {
+      playerName: '',
+      playerCount: 4,
+      gameLength: 'tonpuu',
+      tobi: true,
+      tsumoLoss: false,
+      allowKuitan: true,
+      allowAtozuke: true,
+      honbaBonus: true,
+      joinCode: '',
+      cpuCount: 0,
+      cpuLevel: 'normal',
+    };
+
+    const root = document.createElement('div');
+    renderLobbyEntry(
+      root,
+      formState,
+      {
+        onCreateRoom: () => {},
+        onJoinRoom: () => {},
+        onStartLocalGame: () => {},
+        onLeaveLobby: () => {},
+        onRefreshRoomStatuses,
+      },
+      false,
+      {
+        roomStatuses: {
+          BRONZE: {
+            status: 'occupied',
+            info: {
+              roomCode: 'BRONZE',
+              phase: 'lobby',
+              maxPlayers: 4,
+              players: [
+                { name: 'たろう', isCpu: false, connected: true, isHost: true },
+                { name: '花子', isCpu: false, connected: false, isHost: false },
+                { name: 'CPU1', isCpu: true, connected: true, isHost: false },
+              ],
+              spectatorNames: ['観戦太郎'],
+            },
+          },
+          SILVER: { status: 'empty' },
+          GOLD: { status: 'error' },
+        },
+      },
+    );
+
+    const text = root.textContent ?? '';
+    // 赤線で指定された文言・追加削除指定文言がすべて消えていること
+    for (const removed of [
+      '136枚 / 25,000点',
+      '108枚(2〜8萬抜き) / 35,000点',
+      '全4局（東場のみ）',
+      '全8局（東・南場）',
+      '詳細ルールの ON / OFF',
+      '部屋を作る（ホスト）',
+      '部屋に参加する（ゲスト）',
+      'いますぐCPUと対局（通信なし）',
+      '部屋コードの共有なしで',
+      '開いている卓があれば参加',
+      '気軽に参加できる4人東風戦',
+      '標準ルールの4人半荘戦',
+      '頭ハネ（ダブロンなし）を採用',
+    ]) {
+      expect(text).not.toContain(removed);
+    }
+    expect(
+      Array.from(root.querySelectorAll('label')).some(
+        (l) => l.textContent === '人数' || l.textContent === '長さ',
+      ),
+    ).toBe(false);
+    expect(text).toContain('部屋を作る');
+    expect(text).toContain('部屋に参加する');
+    expect(text).toContain('いますぐCPUと対局');
+
+    // 金銀銅の間のバッジが統一されていること
+    const tiers = Array.from(root.querySelectorAll('.permanent-room-tier')).map(
+      (el) => el.textContent,
+    );
+    expect(new Set(tiers).size).toBe(1);
+
+    // 銅の間・銀の間・金の間の参加者状況が表示されること
+    const bronzeBox = root.querySelector('[data-room-occupancy="BRONZE"]')!;
+    expect(bronzeBox.textContent).toContain('待機中');
+    expect(bronzeBox.textContent).toContain('3/4人');
+    expect(bronzeBox.textContent).toContain('観戦 1人');
+    expect(bronzeBox.textContent).toContain('たろう (ホスト)');
+    expect(bronzeBox.textContent).toContain('花子 (切断)');
+    expect(bronzeBox.textContent).toContain('CPU1 (CPU)');
+    expect(bronzeBox.textContent).toContain('観戦: 観戦太郎');
+
+    const silverBox = root.querySelector('[data-room-occupancy="SILVER"]')!;
+    expect(silverBox.textContent).toContain('空き（現在 0人）');
+
+    const goldBox = root.querySelector('[data-room-occupancy="GOLD"]')!;
+    expect(goldBox.textContent).toContain('状況を取得できませんでした');
+
+    root
+      .querySelector<HTMLButtonElement>('.permanent-rooms-refresh-btn')!
+      .click();
+    expect(onRefreshRoomStatuses).toHaveBeenCalledTimes(1);
+  });
 });

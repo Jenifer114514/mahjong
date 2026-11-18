@@ -9,6 +9,7 @@ import type { PublicPlayerView, RoundView, StateView } from '../types/message';
 import type {
   AbortiveDrawReason,
   CallResponseChoice,
+  DiscardEntry,
   Meld,
   RoundAgariWinner,
 } from '../types/state';
@@ -20,6 +21,7 @@ import {
   formatTileLabel,
   windToJa,
 } from './tileView';
+import { soundEngine } from './sound';
 
 /** 卓を囲む4方向（下=自分から見た相対位置） */
 export type SeatSide = 'self' | 'top' | 'left' | 'right';
@@ -65,6 +67,23 @@ export interface TableHandlers {
   onChangePerspective?: (seatIndex: number) => void;
 }
 
+export interface TileRectSnapshot {
+  cx: number;
+  cy: number;
+  width: number;
+  height: number;
+}
+
+export interface SeatHandOriginSnapshot {
+  tiles: TileRectSnapshot[];
+  area: TileRectSnapshot | null;
+}
+
+export interface DiscardOriginSnapshot {
+  selfTileRects: Map<string, TileRectSnapshot>;
+  seatHands: Partial<Record<SeatSide, SeatHandOriginSnapshot>>;
+}
+
 export interface TableUiState {
   riichiSelectingMode: boolean;
   autoTsumogiriEnabled: boolean;
@@ -75,6 +94,9 @@ export interface TableUiState {
   unreadChatCount?: number;
   perspectiveSeatIndex?: number;
   hostStatusBanner?: string | null;
+  prevView?: StateView | null;
+  prevPerspectiveSeatIndex?: number;
+  discardOriginSnapshot?: DiscardOriginSnapshot | null;
 }
 
 const DEFAULT_TABLE_UI_STATE: TableUiState = {
@@ -122,9 +144,802 @@ const ABORTIVE_DRAW_META: Record<
   },
 };
 
+interface InternalRenderSnapshot {
+  viewRef: StateView;
+  viewerSeatIndex: number;
+}
+
+const previousRenderSnapshots = new WeakMap<HTMLElement, InternalRenderSnapshot>();
+
+function toTileRectSnapshot(el: Element): TileRectSnapshot | null {
+  if (typeof el.getBoundingClientRect !== 'function') return null;
+  const rect = el.getBoundingClientRect();
+  if (!Number.isFinite(rect.width) || !Number.isFinite(rect.height)) return null;
+  if (rect.width <= 0 || rect.height <= 0) return null;
+  return {
+    cx: rect.left + rect.width / 2,
+    cy: rect.top + rect.height / 2,
+    width: rect.width,
+    height: rect.height,
+  };
+}
+
+/**
+ * 再描画前に現行 DOM から自分手牌・各席手牌の座標を採取する。
+ * 捨て牌アニメーションの開始位置を実際の牌位置へ合わせるために使用する。
+ */
+export function captureDiscardOriginSnapshot(
+  root: ParentNode,
+): DiscardOriginSnapshot {
+  const selfTileRects = new Map<string, TileRectSnapshot>();
+  const seatHands: Partial<Record<SeatSide, SeatHandOriginSnapshot>> = {};
+
+  const selfTiles = root.querySelectorAll<HTMLElement>(
+    '.seat-self .hand-area [data-tile-id]',
+  );
+  for (const el of selfTiles) {
+    const id = el.dataset.tileId;
+    if (!id) continue;
+    const snap = toTileRectSnapshot(el);
+    if (snap) {
+      selfTileRects.set(id, snap);
+    }
+  }
+
+  const collectSeatHand = (
+    areaEl: HTMLElement | null,
+    tileSelector: string,
+  ): SeatHandOriginSnapshot => {
+    if (!areaEl) return { tiles: [], area: null };
+    const tiles: TileRectSnapshot[] = [];
+    for (const el of areaEl.querySelectorAll(tileSelector)) {
+      const snap = toTileRectSnapshot(el);
+      if (snap) tiles.push(snap);
+    }
+    return {
+      tiles,
+      area: toTileRectSnapshot(areaEl),
+    };
+  };
+
+  seatHands.self = collectSeatHand(
+    root.querySelector<HTMLElement>('.seat-self .hand-area'),
+    '.mj-tile',
+  );
+  for (const side of ['top', 'left', 'right'] as const) {
+    seatHands[side] = collectSeatHand(
+      root.querySelector<HTMLElement>(`.hand-orient-${side}`),
+      '.mj-tile',
+    );
+  }
+
+  return { selfTileRects, seatHands };
+}
+
+function getSeatSideForIndex(
+  viewerSeatIndex: number,
+  playerCount: number,
+  seatIndex: number,
+): SeatSide | null {
+  if (playerCount <= 0) return null;
+  if (seatIndex === viewerSeatIndex) return 'self';
+  if (seatIndex === (viewerSeatIndex + 1) % playerCount) return 'right';
+  if (playerCount === 4 && seatIndex === (viewerSeatIndex + 2) % playerCount) {
+    return 'top';
+  }
+  if (
+    seatIndex ===
+    (viewerSeatIndex + (playerCount === 4 ? 3 : 2)) % playerCount
+  ) {
+    return 'left';
+  }
+  return null;
+}
+
+interface NewDiscardTarget {
+  side: SeatSide;
+  entry: DiscardEntry;
+}
+
+function detectNewlyDiscardedTargets(
+  prevView: StateView | null,
+  prevPerspectiveSeatIndex: number | undefined,
+  nextView: StateView,
+  nextPerspectiveSeatIndex: number,
+): NewDiscardTarget[] {
+  if (!prevView || prevView === nextView) return [];
+  if (
+    prevView.phase === 'lobby' ||
+    nextView.phase === 'lobby' ||
+    nextView.phase === 'finished'
+  ) {
+    return [];
+  }
+  if (!prevView.round || !nextView.round) return [];
+  if (prevView.round.roundIndex !== nextView.round.roundIndex) return [];
+  if (
+    prevPerspectiveSeatIndex !== undefined &&
+    prevPerspectiveSeatIndex !== nextPerspectiveSeatIndex
+  ) {
+    return [];
+  }
+
+  const playerCount = nextView.players.length;
+  const targets: NewDiscardTarget[] = [];
+
+  for (const player of nextView.players) {
+    const prevPlayer = prevView.players.find(
+      (p) => p.playerId === player.playerId,
+    );
+    if (!prevPlayer) continue;
+    if (player.discards.length <= prevPlayer.discards.length) continue;
+
+    let prefixMatches = true;
+    for (let i = 0; i < prevPlayer.discards.length; i++) {
+      if (player.discards[i]?.tile.id !== prevPlayer.discards[i]?.tile.id) {
+        prefixMatches = false;
+        break;
+      }
+    }
+    if (!prefixMatches) continue;
+
+    const latestEntry = player.discards[player.discards.length - 1];
+    if (!latestEntry) continue;
+
+    const side = getSeatSideForIndex(
+      nextPerspectiveSeatIndex,
+      playerCount,
+      player.seatIndex,
+    );
+    if (!side) continue;
+    targets.push({ side, entry: latestEntry });
+  }
+
+  return targets;
+}
+
+function resolveDiscardOriginRect(
+  snapshot: DiscardOriginSnapshot | null,
+  side: SeatSide,
+  entry: DiscardEntry,
+  isSpectator: boolean,
+): TileRectSnapshot | null {
+  if (!snapshot) return null;
+
+  if (side === 'self' && !isSpectator) {
+    const exact = snapshot.selfTileRects.get(entry.tile.id);
+    if (exact) return exact;
+  }
+
+  const hand = snapshot.seatHands[side];
+  if (!hand) return null;
+  if (hand.tiles.length > 0) {
+    if (entry.isTsumogiri) {
+      return hand.tiles[hand.tiles.length - 1] ?? hand.area;
+    }
+    const midIdx = Math.floor(hand.tiles.length / 2);
+    return hand.tiles[midIdx] ?? hand.area;
+  }
+  return hand.area;
+}
+
+const FALLBACK_DISCARD_DELTA: Record<SeatSide, { dx: number; dy: number }> = {
+  self: { dx: 0, dy: 92 },
+  top: { dx: 0, dy: -92 },
+  left: { dx: -92, dy: 0 },
+  right: { dx: 92, dy: 0 },
+};
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function applyDiscardThrowAnimations(
+  felt: HTMLElement,
+  targets: readonly NewDiscardTarget[],
+  originSnapshot: DiscardOriginSnapshot | null,
+  isSpectator: boolean,
+): void {
+  for (const { side, entry } of targets) {
+    const riverZone = felt.querySelector<HTMLElement>(`.river-zone.river-${side}`);
+    if (!riverZone) continue;
+
+    let tileEl: HTMLElement | null = null;
+    for (const candidate of riverZone.querySelectorAll<HTMLElement>(
+      '.discard-river .mj-tile',
+    )) {
+      if (candidate.dataset.tileId === entry.tile.id) {
+        tileEl = candidate;
+        break;
+      }
+    }
+    if (!tileEl) continue;
+
+    const destRect = toTileRectSnapshot(tileEl);
+    const originRect = resolveDiscardOriginRect(
+      originSnapshot,
+      side,
+      entry,
+      isSpectator,
+    );
+
+    const fallback = FALLBACK_DISCARD_DELTA[side];
+    let dx = fallback.dx;
+    let dy = fallback.dy;
+    let startScale = side === 'self' && !isSpectator ? 1.38 : 1.04;
+
+    if (destRect && originRect) {
+      const rawDx = clampNumber(originRect.cx - destRect.cx, -900, 900);
+      const rawDy = clampNumber(originRect.cy - destRect.cy, -700, 700);
+      if (Math.hypot(rawDx, rawDy) >= 4) {
+        dx = rawDx;
+        dy = rawDy;
+      }
+      if (side === 'self' && !isSpectator) {
+        startScale = clampNumber(originRect.width / destRect.width, 1.12, 1.48);
+      }
+    }
+
+    const dist = Math.hypot(dx, dy);
+    const ux = dist > 0 ? -dx / dist : 0;
+    const uy = dist > 0 ? -dy / dist : -1;
+    const arcLift = clampNumber(dist * 0.09, 9, 18);
+    const midX = dx * 0.48;
+    const midY = dy * 0.48 - arcLift;
+    const settleDist = 2.2;
+    const settleX = ux * settleDist;
+    const settleY = uy * settleDist;
+    const peakScale =
+      side === 'self' && !isSpectator
+        ? Math.max(startScale * 1.03, 1.28)
+        : 1.22;
+
+    const isRiichiDecl = Boolean(entry.isRiichiDeclaration);
+    if (isRiichiDecl) {
+      tileEl.style.setProperty('--discard-start-rot', 'var(--river-rot, 0deg)');
+      tileEl.style.setProperty(
+        '--discard-mid-rot',
+        'calc(var(--river-rot, 0deg) - 24deg)',
+      );
+      tileEl.style.setProperty(
+        '--discard-settle-rot',
+        'calc(var(--river-rot, 0deg) - 94deg)',
+      );
+      tileEl.style.setProperty(
+        '--discard-end-rot',
+        'calc(var(--river-rot, 0deg) - 90deg)',
+      );
+    } else {
+      const tiltStart = side === 'right' ? 4 : -4;
+      const tiltMid = side === 'right' ? -2 : 3;
+      tileEl.style.setProperty(
+        '--discard-start-rot',
+        `calc(var(--river-rot, 0deg) + ${tiltStart}deg)`,
+      );
+      tileEl.style.setProperty(
+        '--discard-mid-rot',
+        `calc(var(--river-rot, 0deg) + ${tiltMid}deg)`,
+      );
+      tileEl.style.setProperty(
+        '--discard-settle-rot',
+        'var(--river-rot, 0deg)',
+      );
+      tileEl.style.setProperty('--discard-end-rot', 'var(--river-rot, 0deg)');
+    }
+
+    tileEl.style.setProperty('--discard-dx', `${dx.toFixed(1)}px`);
+    tileEl.style.setProperty('--discard-dy', `${dy.toFixed(1)}px`);
+    tileEl.style.setProperty('--discard-mid-x', `${midX.toFixed(1)}px`);
+    tileEl.style.setProperty('--discard-mid-y', `${midY.toFixed(1)}px`);
+    tileEl.style.setProperty('--discard-settle-x', `${settleX.toFixed(1)}px`);
+    tileEl.style.setProperty('--discard-settle-y', `${settleY.toFixed(1)}px`);
+    tileEl.style.setProperty('--discard-start-scale', startScale.toFixed(3));
+    tileEl.style.setProperty('--discard-peak-scale', peakScale.toFixed(3));
+
+    tileEl.dataset.discardAnim = 'true';
+    riverZone.classList.add('is-discard-animating');
+    tileEl.classList.add('mj-tile-discard-anim');
+    if (isRiichiDecl) {
+      tileEl.classList.add('mj-tile-discard-riichi-anim');
+    }
+
+    const animTile = tileEl;
+    let cleaned = false;
+    let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      if (fallbackTimer !== null) {
+        clearTimeout(fallbackTimer);
+        fallbackTimer = null;
+      }
+      animTile.classList.remove(
+        'mj-tile-discard-anim',
+        'mj-tile-discard-riichi-anim',
+      );
+      if (!riverZone.querySelector('.mj-tile-discard-anim')) {
+        riverZone.classList.remove('is-discard-animating');
+      }
+    };
+
+    animTile.addEventListener(
+      'animationend',
+      (event) => {
+        if (event.target !== animTile) return;
+        const animName = (event as AnimationEvent).animationName;
+        if (animName && animName !== 'tileDiscardThrow') return;
+        cleanup();
+      },
+    );
+    fallbackTimer = setTimeout(cleanup, isRiichiDecl ? 500 : 440);
+  }
+}
+
 /** 横向き画面（スマホ横持ち・PC）と縦向き画面の両対応を切り替える目印 */
 function applyOrientationClass(element: HTMLElement): void {
   element.classList.add('is-landscape');
+}
+
+const KANJI_KYOKU_NUMBERS = ['', '一', '二', '三', '四'] as const;
+
+function formatRoundKanjiTitle(
+  roundWind: 'E' | 'S' | 'W' | 'N',
+  kyokuNumber: number,
+): string {
+  const windStr = windToJa(roundWind);
+  const numStr = KANJI_KYOKU_NUMBERS[kyokuNumber] ?? String(kyokuNumber);
+  return `${windStr}${numStr}局`;
+}
+
+interface DrawTarget {
+  side: SeatSide;
+  tileId: string | null;
+}
+
+const FALLBACK_DRAW_DELTA: Record<SeatSide, { dx: number; dy: number }> = {
+  self: { dx: 0, dy: -110 },
+  top: { dx: 0, dy: 96 },
+  left: { dx: 110, dy: 0 },
+  right: { dx: -110, dy: 0 },
+};
+
+function detectNewDrawTargets(
+  prevView: StateView | null,
+  prevPerspectiveSeatIndex: number | undefined,
+  nextView: StateView,
+  nextPerspectiveSeatIndex: number,
+): DrawTarget[] {
+  if (nextView.phase !== 'playing' || !nextView.round) return [];
+  if (prevView === nextView) return [];
+  if (
+    prevView &&
+    prevPerspectiveSeatIndex !== undefined &&
+    prevView.round?.roundIndex === nextView.round.roundIndex &&
+    prevPerspectiveSeatIndex !== nextPerspectiveSeatIndex
+  ) {
+    return [];
+  }
+
+  const isSpectator = Boolean(nextView.isSpectator);
+  const playerCount = nextView.players.length;
+  const sameRound =
+    prevView !== null &&
+    prevView.phase !== 'lobby' &&
+    prevView.phase !== 'round_end' &&
+    prevView.phase !== 'finished' &&
+    prevView.round?.roundIndex === nextView.round.roundIndex;
+
+  const isFreshRoundStart =
+    !sameRound &&
+    nextView.players.every((p) => p.discards.length === 0 && p.melds.length === 0);
+
+  const targets: DrawTarget[] = [];
+
+  for (const player of nextView.players) {
+    const side = getSeatSideForIndex(
+      nextPerspectiveSeatIndex,
+      playerCount,
+      player.seatIndex,
+    );
+    if (!side) continue;
+
+    const prevPlayer = sameRound
+      ? prevView?.players.find((p) => p.playerId === player.playerId)
+      : undefined;
+
+    if (side === 'self' && !isSpectator) {
+      const drawn = nextView.myDrawnTile;
+      if (!drawn) continue;
+      if (isFreshRoundStart) {
+        targets.push({ side, tileId: drawn.id });
+        continue;
+      }
+      if (
+        sameRound &&
+        (prevView?.myDrawnTile === null ||
+          prevView?.myDrawnTile?.id !== drawn.id)
+      ) {
+        targets.push({ side, tileId: drawn.id });
+      }
+      continue;
+    }
+
+    if (!player.hasDrawnTile) continue;
+    if (isFreshRoundStart) {
+      targets.push({ side, tileId: null });
+      continue;
+    }
+    if (
+      sameRound &&
+      prevPlayer &&
+      (!prevPlayer.hasDrawnTile ||
+        (player.isCurrentTurn && !prevPlayer.isCurrentTurn))
+    ) {
+      targets.push({ side, tileId: null });
+    }
+  }
+
+  return targets;
+}
+
+function applyDrawSlideAnimations(
+  felt: HTMLElement,
+  targets: readonly DrawTarget[],
+  delayMs: number,
+  isSpectator: boolean,
+): void {
+  const centerHub = felt.querySelector<HTMLElement>('.center-hub');
+  const centerRect = centerHub ? toTileRectSnapshot(centerHub) : null;
+
+  for (const target of targets) {
+    const seatEl = felt.querySelector<HTMLElement>(
+      `.seat-orient-${target.side}`,
+    );
+    if (!seatEl) continue;
+
+    let tileEl: HTMLElement | null = null;
+    if (target.side === 'self' && !isSpectator && target.tileId) {
+      for (const candidate of seatEl.querySelectorAll<HTMLElement>(
+        '.hand-area .mj-tile-drawn',
+      )) {
+        if (candidate.dataset.tileId === target.tileId) {
+          tileEl = candidate;
+          break;
+        }
+      }
+    } else {
+      tileEl = seatEl.querySelector<HTMLElement>(
+        `.hand-orient-${target.side} .opp-tile-drawn`,
+      );
+    }
+    if (!tileEl) continue;
+
+    const destRect = toTileRectSnapshot(tileEl);
+    const fallback = FALLBACK_DRAW_DELTA[target.side];
+    let dx = fallback.dx;
+    let dy = fallback.dy;
+
+    if (destRect && centerRect) {
+      const rawDx = clampNumber(centerRect.cx - destRect.cx, -850, 850);
+      const rawDy = clampNumber(centerRect.cy - destRect.cy, -650, 650);
+      if (Math.hypot(rawDx, rawDy) >= 6) {
+        dx = rawDx;
+        dy = rawDy;
+      }
+    }
+
+    tileEl.style.setProperty('--draw-dx', `${dx.toFixed(1)}px`);
+    tileEl.style.setProperty('--draw-dy', `${dy.toFixed(1)}px`);
+    tileEl.style.setProperty(
+      '--draw-delay',
+      delayMs > 0 ? `${delayMs}ms` : '0ms',
+    );
+    tileEl.dataset.drawAnim = 'true';
+    tileEl.classList.add('mj-tile-draw-anim');
+
+    const animTile = tileEl;
+    let cleaned = false;
+    let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      if (fallbackTimer !== null) {
+        clearTimeout(fallbackTimer);
+        fallbackTimer = null;
+      }
+      animTile.classList.remove('mj-tile-draw-anim');
+    };
+
+    animTile.addEventListener('animationend', (event) => {
+      if (event.target !== animTile) return;
+      const animName = (event as AnimationEvent).animationName;
+      if (animName && animName !== 'tileDrawSlide') return;
+      cleanup();
+    });
+    fallbackTimer = setTimeout(cleanup, delayMs + 340);
+  }
+}
+
+interface RenderDiffSummary {
+  newlyRiichiSides: Set<SeatSide>;
+  newlyMeldedSides: Map<SeatSide, Set<number>>;
+  newlyAddedKitaSides: Set<SeatSide>;
+  newlyRevealedDoraIndices: Set<number>;
+  scoreDeltasBySide: Map<SeatSide, { prevScore: number; nextScore: number }>;
+  hasNewDoraFlipSound: boolean;
+  hasNewMeldSound: boolean;
+}
+
+function computeRenderDiff(
+  prevView: StateView | null,
+  prevPerspectiveSeatIndex: number | undefined,
+  nextView: StateView,
+  nextPerspectiveSeatIndex: number,
+): RenderDiffSummary {
+  const newlyRiichiSides = new Set<SeatSide>();
+  const newlyMeldedSides = new Map<SeatSide, Set<number>>();
+  const newlyAddedKitaSides = new Set<SeatSide>();
+  const newlyRevealedDoraIndices = new Set<number>();
+  const scoreDeltasBySide = new Map<
+    SeatSide,
+    { prevScore: number; nextScore: number }
+  >();
+
+  let hasNewDoraFlipSound = false;
+  let hasNewMeldSound = false;
+
+  const samePerspective =
+    prevPerspectiveSeatIndex === undefined ||
+    prevPerspectiveSeatIndex === nextPerspectiveSeatIndex;
+  const sameRound =
+    prevView !== null &&
+    prevView.phase !== 'lobby' &&
+    prevView.phase !== 'round_end' &&
+    prevView.phase !== 'finished' &&
+    prevView.round !== null &&
+    nextView.round !== null &&
+    prevView.round.roundIndex === nextView.round.roundIndex;
+
+  if (nextView.round) {
+    if (sameRound && prevView?.round) {
+      const prevLen = prevView.round.doraIndicators.length;
+      const nextLen = nextView.round.doraIndicators.length;
+      for (let i = prevLen; i < nextLen; i++) {
+        newlyRevealedDoraIndices.add(i);
+        hasNewDoraFlipSound = true;
+      }
+    } else if (
+      nextView.phase === 'playing' &&
+      nextView.players.every((p) => p.discards.length === 0) &&
+      nextView.round.doraIndicators.length > 0
+    ) {
+      newlyRevealedDoraIndices.add(0);
+    }
+  }
+
+  const playerCount = nextView.players.length;
+  if (prevView && prevView !== nextView && prevView.phase !== 'lobby') {
+    for (const player of nextView.players) {
+      const prevPlayer = prevView.players.find(
+        (p) => p.playerId === player.playerId,
+      );
+      if (!prevPlayer) continue;
+      const side = getSeatSideForIndex(
+        nextPerspectiveSeatIndex,
+        playerCount,
+        player.seatIndex,
+      );
+      if (!side) continue;
+
+      if (player.score !== prevPlayer.score) {
+        scoreDeltasBySide.set(side, {
+          prevScore: prevPlayer.score,
+          nextScore: player.score,
+        });
+      }
+
+      if (sameRound && samePerspective) {
+        if (!prevPlayer.isRiichi && player.isRiichi) {
+          newlyRiichiSides.add(side);
+        }
+
+        const meldIndices = new Set<number>();
+        if (player.melds.length > prevPlayer.melds.length) {
+          for (let i = prevPlayer.melds.length; i < player.melds.length; i++) {
+            meldIndices.add(i);
+          }
+        }
+        for (
+          let i = 0;
+          i < Math.min(player.melds.length, prevPlayer.melds.length);
+          i++
+        ) {
+          if (
+            prevPlayer.melds[i]?.type === 'pon' &&
+            player.melds[i]?.type === 'kakan'
+          ) {
+            meldIndices.add(i);
+          }
+        }
+        if (meldIndices.size > 0) {
+          newlyMeldedSides.set(side, meldIndices);
+          hasNewMeldSound = true;
+        }
+
+        if (player.kitaTiles.length > prevPlayer.kitaTiles.length) {
+          newlyAddedKitaSides.add(side);
+          hasNewMeldSound = true;
+        }
+      }
+    }
+  }
+
+  return {
+    newlyRiichiSides,
+    newlyMeldedSides,
+    newlyAddedKitaSides,
+    newlyRevealedDoraIndices,
+    scoreDeltasBySide,
+    hasNewDoraFlipSound,
+    hasNewMeldSound,
+  };
+}
+
+function animateNumericCounter(
+  el: HTMLElement,
+  from: number,
+  to: number,
+  durationMs = 520,
+): void {
+  el.dataset.targetScore = String(to);
+  if (from === to) {
+    el.textContent = String(to);
+    return;
+  }
+  if (
+    typeof requestAnimationFrame !== 'function' ||
+    typeof performance === 'undefined' ||
+    (typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches)
+  ) {
+    el.textContent = String(to);
+    return;
+  }
+
+  el.textContent = String(from);
+  const startTime = performance.now();
+  const diff = to - from;
+  const step = (now: number) => {
+    if (!el.isConnected) return;
+    const t = clampNumber((now - startTime) / durationMs, 0, 1);
+    // イーズアウト（3乗）
+    const eased = 1 - Math.pow(1 - t, 3);
+    const current = Math.round(from + diff * eased);
+    el.textContent = String(current);
+    if (t < 1) {
+      requestAnimationFrame(step);
+    } else {
+      el.textContent = String(to);
+    }
+  };
+  requestAnimationFrame(step);
+}
+
+interface ActiveRoundBannerState {
+  key: string;
+  title: string;
+  subtitle: string;
+  expiresAt: number;
+  timer: ReturnType<typeof setTimeout> | null;
+}
+
+const activeRoundBanners = new WeakMap<HTMLElement, ActiveRoundBannerState>();
+
+function updateAndRenderRoundBanner(
+  container: HTMLElement,
+  felt: HTMLElement,
+  prevView: StateView | null,
+  view: StateView,
+): boolean {
+  const existing = activeRoundBanners.get(container) ?? null;
+
+  if (view.phase !== 'playing' || !view.round) {
+    if (existing?.timer) clearTimeout(existing.timer);
+    activeRoundBanners.delete(container);
+    return false;
+  }
+
+  const round = view.round;
+  const key = `${round.roundIndex}:${round.honba}`;
+  const isTransitionToNewRound =
+    prevView === null
+      ? view.players.every((p) => p.discards.length === 0 && p.melds.length === 0)
+      : prevView.phase === 'lobby' ||
+        prevView.phase === 'round_end' ||
+        prevView.round?.roundIndex !== round.roundIndex;
+
+  let bannerState = existing;
+  let triggeredNew = false;
+
+  if (isTransitionToNewRound && existing?.key !== key) {
+    if (existing?.timer) clearTimeout(existing.timer);
+    const dealer = view.players.find((p) => p.seatIndex === round.dealerIndex);
+    const title = formatRoundKanjiTitle(round.roundWind, round.kyokuNumber);
+    const parts: string[] = [];
+    if (round.honba > 0) parts.push(`${round.honba}本場`);
+    if (dealer) parts.push(`親: ${dealer.name}`);
+    const subtitle = parts.join(' ・ ');
+
+    bannerState = {
+      key,
+      title,
+      subtitle,
+      expiresAt: Date.now() + 1650,
+      timer: null,
+    };
+    activeRoundBanners.set(container, bannerState);
+    triggeredNew = true;
+  }
+
+  if (!bannerState || Date.now() >= bannerState.expiresAt) {
+    if (bannerState && Date.now() >= bannerState.expiresAt) {
+      if (bannerState.timer) clearTimeout(bannerState.timer);
+      activeRoundBanners.delete(container);
+    }
+    return false;
+  }
+
+  const bannerEl = document.createElement('div');
+  bannerEl.className = 'round-start-banner';
+  bannerEl.setAttribute('role', 'status');
+
+  const titleEl = document.createElement('div');
+  titleEl.className = 'round-start-banner-title';
+  titleEl.textContent = bannerState.title;
+  bannerEl.appendChild(titleEl);
+
+  if (bannerState.subtitle) {
+    const subEl = document.createElement('div');
+    subEl.className = 'round-start-banner-sub';
+    subEl.textContent = bannerState.subtitle;
+    bannerEl.appendChild(subEl);
+  }
+
+  felt.appendChild(bannerEl);
+
+  if (!bannerState.timer) {
+    const remaining = Math.max(50, bannerState.expiresAt - Date.now());
+    const refState = bannerState;
+    refState.timer = setTimeout(() => {
+      if (activeRoundBanners.get(container) === refState) {
+        activeRoundBanners.delete(container);
+      }
+      if (bannerEl.isConnected) {
+        bannerEl.classList.add('is-leaving');
+        setTimeout(() => {
+          bannerEl.remove();
+        }, 260);
+      }
+    }, remaining);
+  }
+
+  return triggeredNew;
+}
+
+function resolveActiveSeatIndex(
+  view: StateView,
+  perspectiveSeatIndex: number | undefined,
+): number {
+  const count = view.players.length;
+  if (
+    Boolean(view.isSpectator) &&
+    count > 0 &&
+    perspectiveSeatIndex !== undefined
+  ) {
+    return ((perspectiveSeatIndex % count) + count) % count;
+  }
+  return view.viewerSeatIndex;
 }
 
 export function renderGameTable(
@@ -133,6 +948,22 @@ export function renderGameTable(
   handlers: TableHandlers,
   uiState: TableUiState = DEFAULT_TABLE_UI_STATE,
 ): void {
+  const internalPrev = previousRenderSnapshots.get(container) ?? null;
+  const useExternalPrev = uiState.prevView !== undefined;
+  const prevView = useExternalPrev
+    ? (uiState.prevView ?? null)
+    : (internalPrev?.viewRef ?? null);
+  const prevPerspectiveSeatIndex = prevView
+    ? useExternalPrev
+      ? resolveActiveSeatIndex(prevView, uiState.prevPerspectiveSeatIndex)
+      : internalPrev?.viewerSeatIndex
+    : undefined;
+  const originSnapshot = useExternalPrev
+    ? (uiState.discardOriginSnapshot ?? null)
+    : internalPrev
+      ? captureDiscardOriginSnapshot(container)
+      : null;
+
   container.innerHTML = '';
 
   const playerCount = view.players.length;
@@ -140,15 +971,49 @@ export function renderGameTable(
   const isHost = !isSpectator && view.viewerPlayerId === view.hostPlayerId;
 
   if (view.phase === 'finished') {
+    const isFreshFinish = prevView !== null && prevView.phase !== 'finished';
+    if (
+      isFreshFinish &&
+      prevView?.phase !== 'round_end' &&
+      view.players.some((p) => p.score !== deriveRules(view.ruleConfig).initialPoints)
+    ) {
+      soundEngine.playRoundStart();
+    }
+    previousRenderSnapshots.set(container, {
+      viewRef: view,
+      viewerSeatIndex: view.viewerSeatIndex,
+    });
     renderFinishedScreen(container, view, handlers);
     return;
   }
 
-  const activeSeatIndex =
-    isSpectator && playerCount > 0 && uiState.perspectiveSeatIndex !== undefined
-      ? ((uiState.perspectiveSeatIndex % playerCount) + playerCount) %
-        playerCount
-      : view.viewerSeatIndex;
+  const activeSeatIndex = resolveActiveSeatIndex(
+    view,
+    uiState.perspectiveSeatIndex,
+  );
+
+  const discardTargets = detectNewlyDiscardedTargets(
+    prevView,
+    prevPerspectiveSeatIndex,
+    view,
+    activeSeatIndex,
+  );
+  const drawTargets = detectNewDrawTargets(
+    prevView,
+    prevPerspectiveSeatIndex,
+    view,
+    activeSeatIndex,
+  );
+  const diff = computeRenderDiff(
+    prevView,
+    prevPerspectiveSeatIndex,
+    view,
+    activeSeatIndex,
+  );
+  const rankByPlayerId = computePlayerRankMap(
+    view.players,
+    view.initialDealerIndex,
+  );
 
   const perspectiveView: StateView =
     activeSeatIndex === view.viewerSeatIndex
@@ -189,7 +1054,16 @@ export function renderGameTable(
         );
 
   if (topPlayer) {
-    felt.appendChild(renderOpponentSeat('top', topPlayer, perspectiveView));
+    felt.appendChild(
+      renderOpponentSeat(
+        'top',
+        topPlayer,
+        perspectiveView,
+        rankByPlayerId.get(topPlayer.playerId),
+        diff.newlyMeldedSides.get('top'),
+        diff.newlyAddedKitaSides.has('top'),
+      ),
+    );
   } else {
     const emptyTop = document.createElement('div');
     emptyTop.className = 'seat-top seat-empty';
@@ -197,17 +1071,35 @@ export function renderGameTable(
   }
 
   if (leftPlayer) {
-    felt.appendChild(renderOpponentSeat('left', leftPlayer, perspectiveView));
+    felt.appendChild(
+      renderOpponentSeat(
+        'left',
+        leftPlayer,
+        perspectiveView,
+        rankByPlayerId.get(leftPlayer.playerId),
+        diff.newlyMeldedSides.get('left'),
+        diff.newlyAddedKitaSides.has('left'),
+      ),
+    );
   } else {
     const emptyLeft = document.createElement('div');
     emptyLeft.className = 'seat-left seat-empty';
     felt.appendChild(emptyLeft);
   }
 
-  felt.appendChild(renderCenterHub(perspectiveView));
+  felt.appendChild(renderCenterHub(perspectiveView, diff));
 
   if (rightPlayer) {
-    felt.appendChild(renderOpponentSeat('right', rightPlayer, perspectiveView));
+    felt.appendChild(
+      renderOpponentSeat(
+        'right',
+        rightPlayer,
+        perspectiveView,
+        rankByPlayerId.get(rightPlayer.playerId),
+        diff.newlyMeldedSides.get('right'),
+        diff.newlyAddedKitaSides.has('right'),
+      ),
+    );
   } else {
     const emptyRight = document.createElement('div');
     emptyRight.className = 'seat-right seat-empty';
@@ -217,8 +1109,21 @@ export function renderGameTable(
   if (selfPlayer) {
     felt.appendChild(
       isSpectator
-        ? renderSpectatedBottomSeat(selfPlayer)
-        : renderSelfSeat(perspectiveView, selfPlayer, handlers, uiState),
+        ? renderSpectatedBottomSeat(
+            selfPlayer,
+            rankByPlayerId.get(selfPlayer.playerId),
+            diff.newlyMeldedSides.get('self'),
+            diff.newlyAddedKitaSides.has('self'),
+          )
+        : renderSelfSeat(
+            perspectiveView,
+            selfPlayer,
+            handlers,
+            uiState,
+            rankByPlayerId.get(selfPlayer.playerId),
+            diff.newlyMeldedSides.get('self'),
+            diff.newlyAddedKitaSides.has('self'),
+          ),
     );
   }
 
@@ -233,7 +1138,10 @@ export function renderGameTable(
     felt.appendChild(renderLeftActionBar(handlers, uiState));
   }
 
-  const doraPanel = renderDoraPanel(perspectiveView);
+  const doraPanel = renderDoraPanel(
+    perspectiveView,
+    diff.newlyRevealedDoraIndices,
+  );
   if (doraPanel) {
     felt.appendChild(doraPanel);
   }
@@ -245,6 +1153,13 @@ export function renderGameTable(
     awayBanner.textContent = uiState.hostStatusBanner;
     felt.appendChild(awayBanner);
   }
+
+  const triggeredNewRoundBanner = updateAndRenderRoundBanner(
+    container,
+    felt,
+    prevView,
+    view,
+  );
 
   felt.addEventListener('click', (event) => {
     if (
@@ -267,6 +1182,67 @@ export function renderGameTable(
   wrapper.appendChild(felt);
   container.appendChild(wrapper);
 
+  if (discardTargets.length > 0) {
+    applyDiscardThrowAnimations(
+      felt,
+      discardTargets,
+      originSnapshot,
+      isSpectator,
+    );
+  }
+
+  if (drawTargets.length > 0) {
+    const drawDelayMs = discardTargets.length > 0 ? 150 : 0;
+    applyDrawSlideAnimations(felt, drawTargets, drawDelayMs, isSpectator);
+  }
+
+  // 各種効果音をアニメーションタイミングに合わせて再生
+  const isEnteringRoundEnd =
+    prevView !== null &&
+    prevView.phase !== 'round_end' &&
+    view.phase === 'round_end' &&
+    view.round !== null;
+  const hasAgariInRound =
+    Boolean(
+      view.round &&
+        (view.round.agariResults.length > 0 || view.round.ronWinners.length > 0),
+    );
+
+  if (isEnteringRoundEnd) {
+    if (hasAgariInRound) {
+      const isTsumo = view.round!.agariResults[0]?.winType === 'tsumo';
+      soundEngine.playAgari(isTsumo);
+    } else {
+      soundEngine.playDrawRound();
+    }
+  } else {
+    const hasRiichiDiscard = discardTargets.some(
+      (t) => t.entry.isRiichiDeclaration,
+    );
+    if (hasRiichiDiscard || diff.newlyRiichiSides.size > 0) {
+      soundEngine.playRiichi(195);
+    } else if (discardTargets.length > 0) {
+      soundEngine.playDiscard(195);
+    }
+    if (diff.hasNewMeldSound) {
+      soundEngine.playMeld();
+    }
+    if (diff.hasNewDoraFlipSound) {
+      soundEngine.playDoraFlip();
+    }
+    if (triggeredNewRoundBanner) {
+      soundEngine.playRoundStart();
+    }
+    if (drawTargets.length > 0 && !triggeredNewRoundBanner) {
+      soundEngine.playDraw(discardTargets.length > 0 ? 185 : 55);
+    }
+  }
+
+  previousRenderSnapshots.set(container, {
+    viewRef: view,
+    viewerSeatIndex: activeSeatIndex,
+  });
+
   // 局終了オーバーレイ（和了 / 流局）
   if (view.phase === 'round_end' && view.round) {
     renderRoundEndOverlay(
@@ -275,6 +1251,7 @@ export function renderGameTable(
       isHost,
       handlers,
       uiState,
+      isEnteringRoundEnd && hasAgariInRound,
     );
   }
 }
@@ -357,10 +1334,15 @@ function renderRoundEndOverlay(
   isHost: boolean,
   handlers: TableHandlers,
   uiState: TableUiState = DEFAULT_TABLE_UI_STATE,
+  isFreshAgariReveal = false,
 ): void {
   const round = view.round!;
+  const hasAgariResults =
+    round.agariResults.length > 0 || round.ronWinners.length > 0;
   const overlay = document.createElement('div');
-  overlay.className = 'overlay-panel round-end-panel';
+  overlay.className = `overlay-panel round-end-panel${
+    hasAgariResults ? ' is-agari-panel' : ''
+  }`;
   applyOrientationClass(overlay);
 
   const roundTitle = formatRoundName(round.roundWind, round.kyokuNumber, round.honba);
@@ -440,6 +1422,51 @@ function renderRoundEndOverlay(
 
     if (step === 'details') {
       if (round.agariResults.length > 0) {
+        const firstAgari = round.agariResults[0]!;
+        const calloutHero = document.createElement('div');
+        calloutHero.className = 'agari-callout-hero';
+
+        const calloutType = document.createElement('div');
+        calloutType.className = 'agari-callout-type';
+        calloutType.textContent =
+          firstAgari.winType === 'tsumo'
+            ? 'TSUMO'
+            : round.agariResults.length >= 2
+              ? 'DOUBLE RON'
+              : 'RON';
+
+        const calloutMain = document.createElement('div');
+        calloutMain.className = 'agari-callout-main';
+        const firstWinner = view.players.find(
+          (p) => p.playerId === firstAgari.playerId,
+        );
+        const heroTitle = document.createElement('div');
+        heroTitle.className = 'agari-callout-winner';
+        heroTitle.textContent =
+          round.agariResults.length >= 2
+            ? round.agariResults
+                .map(
+                  (a) =>
+                    view.players.find((p) => p.playerId === a.playerId)?.name ??
+                    a.playerId,
+                )
+                .join(' ・ ')
+            : `${firstWinner?.name ?? firstAgari.playerId} の${firstAgari.winType === 'tsumo' ? 'ツモ和了' : 'ロン和了'}`;
+
+        const heroPoints = document.createElement('div');
+        heroPoints.className = 'agari-callout-points';
+        const totalAwarded = round.agariResults.reduce(
+          (sum, a) => sum + a.pointsAwarded + a.honbaPointsAwarded,
+          0,
+        );
+        heroPoints.textContent = firstAgari.isYakuman
+          ? `${firstAgari.scoreLabel}  ${totalAwarded.toLocaleString()}点`
+          : `${firstAgari.han}翻 ${firstAgari.fu}符  ${firstAgari.scoreLabel}  ${totalAwarded.toLocaleString()}点`;
+
+        calloutMain.append(heroTitle, heroPoints);
+        calloutHero.append(calloutType, calloutMain);
+        overlay.appendChild(calloutHero);
+
         const cardsWrap = document.createElement('div');
         cardsWrap.className = 'agari-cards-list';
         for (const agari of round.agariResults) {
@@ -651,18 +1678,37 @@ function renderRoundEndOverlay(
   renderStepBody(currentStep);
 
   const backdrop = document.createElement('div');
-  backdrop.className = 'overlay-backdrop overlay-backdrop-modal';
+  backdrop.className = `overlay-backdrop overlay-backdrop-modal${
+    hasAgariResults ? ' is-agari-backdrop' : ''
+  }${isFreshAgariReveal ? ' is-agari-flash' : ''}`;
   backdrop.appendChild(overlay);
   container.appendChild(backdrop);
 }
 
+const MELD_SLIDE_VECTOR: Record<SeatSide, { x: string; y: string }> = {
+  self: { x: '-72px', y: '28px' },
+  top: { x: '72px', y: '-28px' },
+  left: { x: '-28px', y: '-72px' },
+  right: { x: '28px', y: '72px' },
+};
+
 function renderMeldGroup(
   meld: Meld,
-  options: { ankanHidden?: boolean; small?: boolean } = {},
+  options: {
+    ankanHidden?: boolean;
+    small?: boolean;
+    animateMeld?: boolean;
+    side?: SeatSide;
+  } = {},
 ): HTMLElement {
   const small = options.small ?? true;
   const group = document.createElement('div');
-  group.className = 'meld-group';
+  group.className = `meld-group${options.animateMeld ? ' is-meld-anim' : ''}`;
+  if (options.animateMeld) {
+    const vec = MELD_SLIDE_VECTOR[options.side ?? 'self'];
+    group.style.setProperty('--meld-slide-x', vec.x);
+    group.style.setProperty('--meld-slide-y', vec.y);
+  }
 
   const label = document.createElement('span');
   label.className = 'meld-label';
@@ -689,9 +1735,21 @@ function renderMeldGroup(
   return group;
 }
 
-function renderKitaGroup(kitaTiles: readonly { id: string; kind: TileKind }[], small = true): HTMLElement {
+function renderKitaGroup(
+  kitaTiles: readonly { id: string; kind: TileKind }[],
+  small = true,
+  animateKita = false,
+  side: SeatSide = 'self',
+): HTMLElement {
   const group = document.createElement('div');
-  group.className = 'meld-group meld-group-kita';
+  group.className = `meld-group meld-group-kita${
+    animateKita ? ' is-meld-anim' : ''
+  }`;
+  if (animateKita) {
+    const vec = MELD_SLIDE_VECTOR[side];
+    group.style.setProperty('--meld-slide-x', vec.x);
+    group.style.setProperty('--meld-slide-y', vec.y);
+  }
 
   const label = document.createElement('span');
   label.className = 'meld-label';
@@ -830,7 +1888,10 @@ function renderAgariWinnerCard(
  * 卓の左上に固定するドラ表示パネル（雀魂準拠）。
  * ドラ表示牌 5 枠 + リーチ棒・本場棒の集計 + 対局モード表記をコンパクトにまとめる。
  */
-function renderDoraPanel(view: StateView): HTMLElement | null {
+function renderDoraPanel(
+  view: StateView,
+  newlyRevealedDoraIndices?: Set<number>,
+): HTMLElement | null {
   const round = view.round;
   if (!round) return null;
   const rules = deriveRules(view.ruleConfig);
@@ -847,7 +1908,11 @@ function renderDoraPanel(view: StateView): HTMLElement | null {
   for (let i = 0; i < rules.doraIndicatorCount; i++) {
     const indicator = round.doraIndicators[i];
     if (indicator) {
-      tiles.appendChild(createTileElement(indicator, { small: true }));
+      const tileEl = createTileElement(indicator, { small: true });
+      if (newlyRevealedDoraIndices?.has(i)) {
+        tileEl.classList.add('dora-tile-flip');
+      }
+      tiles.appendChild(tileEl);
     } else {
       const back = createTileBackElement(true, true);
       back.classList.add('dora-slot-back');
@@ -1023,7 +2088,10 @@ function getSeatPlayersMap(view: StateView): Map<SeatSide, PublicPlayerView> {
   return bySide;
 }
 
-function renderCenterHub(view: StateView): HTMLElement {
+function renderCenterHub(
+  view: StateView,
+  diff?: RenderDiffSummary,
+): HTMLElement {
   const wrap = document.createElement('div');
   wrap.className = 'seat-center';
 
@@ -1046,8 +2114,32 @@ function renderCenterHub(view: StateView): HTMLElement {
     if (player) {
       const val = document.createElement('span');
       val.className = 'console-score-val';
-      val.textContent = String(player.score);
+      const deltaInfo = diff?.scoreDeltasBySide.get(side);
+      if (deltaInfo && deltaInfo.prevScore !== deltaInfo.nextScore) {
+        animateNumericCounter(val, deltaInfo.prevScore, deltaInfo.nextScore);
+        const deltaNum = deltaInfo.nextScore - deltaInfo.prevScore;
+        const deltaEl = document.createElement('span');
+        deltaEl.className = `console-score-delta ${
+          deltaNum > 0 ? 'is-pos' : 'is-neg'
+        }`;
+        deltaEl.textContent =
+          deltaNum > 0
+            ? `+${deltaNum.toLocaleString()}`
+            : deltaNum.toLocaleString();
+        cell.appendChild(deltaEl);
+      } else {
+        val.textContent = String(player.score);
+      }
       cell.appendChild(val);
+
+      if (player.isRiichi) {
+        const stick = document.createElement('span');
+        stick.className = `console-riichi-stick${
+          diff?.newlyRiichiSides.has(side) ? ' is-riichi-stick-placed' : ''
+        }`;
+        stick.setAttribute('aria-label', 'リーチ棒');
+        cell.appendChild(stick);
+      }
     }
     scoresLayer.appendChild(cell);
   }
@@ -1068,11 +2160,36 @@ function renderCenterHub(view: StateView): HTMLElement {
 
   core.append(roundLabel, wallCounter);
 
-  if (round && round.honba > 0) {
-    const honbaTag = document.createElement('div');
-    honbaTag.className = 'console-honba';
-    honbaTag.textContent = `${round.honba}本場`;
-    core.appendChild(honbaTag);
+  if (round) {
+    const dealer = view.players.find((p) => p.seatIndex === round.dealerIndex);
+    const metaRow = document.createElement('div');
+    metaRow.className = 'console-meta-row';
+
+    if (dealer) {
+      const oyaPill = document.createElement('span');
+      oyaPill.className = 'console-meta-pill console-oya-pill';
+      oyaPill.title = `親: ${dealer.name}`;
+      oyaPill.textContent = `親 ${dealer.name}`;
+      metaRow.appendChild(oyaPill);
+    }
+
+    const sticksMeta = document.createElement('div');
+    sticksMeta.className = 'console-sticks-meta';
+
+    const honbaTag = document.createElement('span');
+    honbaTag.className = `console-honba${round.honba > 0 ? ' is-active' : ''}`;
+    honbaTag.textContent = `${round.honba}本`;
+
+    const kyotakuTag = document.createElement('span');
+    kyotakuTag.className = `console-kyotaku${
+      view.kyotakuCount > 0 ? ' is-active' : ''
+    }`;
+    kyotakuTag.title = `供託 ${view.kyotakuCount}本`;
+    kyotakuTag.innerHTML = `<span class="stick-icon stick-riichi" aria-hidden="true"></span><span>${view.kyotakuCount}</span>`;
+
+    sticksMeta.append(honbaTag, kyotakuTag);
+    metaRow.appendChild(sticksMeta);
+    core.appendChild(metaRow);
   }
 
   hub.appendChild(core);
@@ -1161,9 +2278,13 @@ function renderSeatHeader(
   player: PublicPlayerView,
   isSelf: boolean,
   isSelfFuriten = false,
+  rank?: number,
+  isSelfTurnGlow = false,
 ): HTMLElement {
   const header = document.createElement('div');
-  header.className = `seat-header${player.isCurrentTurn ? ' is-turn' : ''}`;
+  header.className = `seat-header${player.isCurrentTurn ? ' is-turn' : ''}${
+    isSelf && isSelfTurnGlow ? ' is-self-turn' : ''
+  }`;
 
   const cardTop = document.createElement('div');
   cardTop.className = 'seat-card-top';
@@ -1178,6 +2299,13 @@ function renderSeatHeader(
 
   const identity = document.createElement('div');
   identity.className = 'seat-identity';
+
+  if (rank !== undefined) {
+    const rankBadge = document.createElement('span');
+    rankBadge.className = `seat-rank-badge rank-${rank}`;
+    rankBadge.textContent = `${rank}位`;
+    identity.appendChild(rankBadge);
+  }
 
   if (isCpuPlayerId(player.playerId)) {
     const cpuBadge = document.createElement('span');
@@ -1295,6 +2423,8 @@ function renderDiscardRiver(
 function renderMeldsAndKita(
   player: PublicPlayerView,
   side: SeatSide = 'self',
+  newlyMeldedIndices?: Set<number>,
+  newlyAddedKita = false,
 ): HTMLElement | null {
   if (player.melds.length === 0 && player.kitaTiles.length === 0) {
     return null;
@@ -1303,12 +2433,19 @@ function renderMeldsAndKita(
   const row = document.createElement('div');
   row.className = `meld-kita-row meld-orient-${side}`;
 
-  for (const meld of player.melds) {
-    row.appendChild(renderMeldGroup(meld, { ankanHidden: true, small: true }));
-  }
+  player.melds.forEach((meld, idx) => {
+    row.appendChild(
+      renderMeldGroup(meld, {
+        ankanHidden: true,
+        small: true,
+        animateMeld: newlyMeldedIndices?.has(idx) ?? false,
+        side,
+      }),
+    );
+  });
 
   if (player.kitaTiles.length > 0) {
-    row.appendChild(renderKitaGroup(player.kitaTiles, true));
+    row.appendChild(renderKitaGroup(player.kitaTiles, true, newlyAddedKita, side));
   }
 
   return row;
@@ -1318,6 +2455,9 @@ function renderOpponentSeat(
   side: Exclude<SeatSide, 'self'>,
   player: PublicPlayerView,
   _view: StateView,
+  rank?: number,
+  newlyMeldedIndices?: Set<number>,
+  newlyAddedKita = false,
 ): HTMLElement {
   const box = document.createElement('div');
   box.className = `seat-box ${SEAT_CLASS[side]} seat-orient-${side}${
@@ -1326,7 +2466,7 @@ function renderOpponentSeat(
   box.dataset.seat = side;
 
   // 席情報（名前・自風・持ち点）は卓の外周側に置く
-  box.appendChild(renderSeatHeader(player, false));
+  box.appendChild(renderSeatHeader(player, false, false, rank, false));
 
   // 外周（手牌）→ 副露 → 中央（河）の順に並べる入れ物
   const body = document.createElement('div');
@@ -1335,13 +2475,22 @@ function renderOpponentSeat(
   // 手牌（裏向き）は卓の外周を向く。実物同様、左家は縦、対面は逆さになる。
   const handRow = document.createElement('div');
   handRow.className = `opponent-hand hand-orient-${side}`;
-  const totalVisibleBacks = player.handCount + (player.hasDrawnTile ? 1 : 0);
-  for (let i = 0; i < totalVisibleBacks; i++) {
+  for (let i = 0; i < player.handCount; i++) {
     handRow.appendChild(createTileBackElement(true));
+  }
+  if (player.hasDrawnTile) {
+    const drawnBack = createTileBackElement(true);
+    drawnBack.classList.add('opp-tile-drawn');
+    handRow.appendChild(drawnBack);
   }
   body.appendChild(handRow);
 
-  const meldsEl = renderMeldsAndKita(player, side);
+  const meldsEl = renderMeldsAndKita(
+    player,
+    side,
+    newlyMeldedIndices,
+    newlyAddedKita,
+  );
   if (meldsEl) {
     body.appendChild(meldsEl);
   }
@@ -1351,6 +2500,18 @@ function renderOpponentSeat(
 
   box.appendChild(body);
   return box;
+}
+
+function createActionTilePreview(
+  tiles: readonly { id: string; kind: TileKind; isRed: boolean }[],
+): HTMLElement {
+  const wrap = document.createElement('span');
+  wrap.className = 'btn-tile-preview';
+  wrap.setAttribute('aria-hidden', 'true');
+  for (const tile of tiles) {
+    wrap.appendChild(createTileElement(tile, { small: true }));
+  }
+  return wrap;
 }
 
 function renderCallResponseBar(
@@ -1388,8 +2549,10 @@ function renderCallResponseBar(
   if (opts.canRon) {
     const ronBtn = document.createElement('button');
     ronBtn.type = 'button';
-    ronBtn.className = 'btn btn-ron';
-    ronBtn.textContent = 'ロン';
+    ronBtn.className = 'btn btn-ron btn-with-tiles';
+    const textSpan = document.createElement('span');
+    textSpan.textContent = 'ロン';
+    ronBtn.append(textSpan, createActionTilePreview([opts.discardedTile]));
     ronBtn.addEventListener('click', () =>
       handlers.onCallResponse({ type: 'ron' }),
     );
@@ -1399,8 +2562,10 @@ function renderCallResponseBar(
   if (opts.canPon) {
     const ponBtn = document.createElement('button');
     ponBtn.type = 'button';
-    ponBtn.className = 'btn btn-call';
-    ponBtn.textContent = `ポン (${formatTileLabel(opts.discardedTile.kind)})`;
+    ponBtn.className = 'btn btn-call btn-with-tiles';
+    const textSpan = document.createElement('span');
+    textSpan.textContent = `ポン (${formatTileLabel(opts.discardedTile.kind)})`;
+    ponBtn.append(textSpan, createActionTilePreview([opts.discardedTile]));
     ponBtn.addEventListener('click', () =>
       handlers.onCallResponse({ type: 'pon' }),
     );
@@ -1410,8 +2575,10 @@ function renderCallResponseBar(
   if (opts.canDaiminkan) {
     const kanBtn = document.createElement('button');
     kanBtn.type = 'button';
-    kanBtn.className = 'btn btn-call';
-    kanBtn.textContent = `大明槓 (${formatTileLabel(opts.discardedTile.kind)})`;
+    kanBtn.className = 'btn btn-call btn-with-tiles';
+    const textSpan = document.createElement('span');
+    textSpan.textContent = `大明槓 (${formatTileLabel(opts.discardedTile.kind)})`;
+    kanBtn.append(textSpan, createActionTilePreview([opts.discardedTile]));
     kanBtn.addEventListener('click', () =>
       handlers.onCallResponse({ type: 'daiminkan' }),
     );
@@ -1422,8 +2589,10 @@ function renderCallResponseBar(
     const [t1, t2] = chiOpt.tiles;
     const chiBtn = document.createElement('button');
     chiBtn.type = 'button';
-    chiBtn.className = 'btn btn-call';
-    chiBtn.textContent = `チー (${formatTileLabel(t1.kind)}・${formatTileLabel(t2.kind)})`;
+    chiBtn.className = 'btn btn-call btn-with-tiles';
+    const textSpan = document.createElement('span');
+    textSpan.textContent = `チー (${formatTileLabel(t1.kind)}・${formatTileLabel(t2.kind)})`;
+    chiBtn.append(textSpan, createActionTilePreview([t1, t2]));
     chiBtn.addEventListener('click', () =>
       handlers.onCallResponse({
         type: 'chi',
@@ -1485,8 +2654,13 @@ function renderSelfTurnActionsBar(
   if (actions?.canTsumo) {
     const tsumoBtn = document.createElement('button');
     tsumoBtn.type = 'button';
-    tsumoBtn.className = 'btn btn-ron';
-    tsumoBtn.textContent = 'ツモ和了';
+    tsumoBtn.className = 'btn btn-ron btn-with-tiles';
+    const textSpan = document.createElement('span');
+    textSpan.textContent = 'ツモ和了';
+    tsumoBtn.appendChild(textSpan);
+    if (view.myDrawnTile) {
+      tsumoBtn.appendChild(createActionTilePreview([view.myDrawnTile]));
+    }
     tsumoBtn.addEventListener('click', handlers.onDeclareTsumo);
     btns.appendChild(tsumoBtn);
   }
@@ -1507,36 +2681,55 @@ function renderSelfTurnActionsBar(
   }
 
   if (actions) {
-    for (const kind of actions.canAnkanKinds) {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'btn btn-call';
-      btn.textContent = `暗槓 (${formatTileLabel(kind)})`;
-      btn.addEventListener('click', () => handlers.onDeclareAnkan(kind));
-      btns.appendChild(btn);
-    }
-
     const allMyTiles = view.myDrawnTile
       ? [...view.myHand, view.myDrawnTile]
       : view.myHand;
+
+    for (const kind of actions.canAnkanKinds) {
+      const sample = allMyTiles.find((t) => t.kind === kind) ?? {
+        id: `ankan-preview-${kind}`,
+        kind,
+        isRed: false,
+      };
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn btn-call btn-with-tiles';
+      const textSpan = document.createElement('span');
+      textSpan.textContent = `暗槓 (${formatTileLabel(kind)})`;
+      btn.append(textSpan, createActionTilePreview([sample]));
+      btn.addEventListener('click', () => handlers.onDeclareAnkan(kind));
+      btns.appendChild(btn);
+    }
 
     for (const tileId of actions.canKakanTileIds) {
       const tile = allMyTiles.find((t) => t.id === tileId);
       const tileLabel = tile ? formatTileLabel(tile.kind) : tileId;
       const btn = document.createElement('button');
       btn.type = 'button';
-      btn.className = 'btn btn-call';
-      btn.textContent = `加槓 (${tileLabel})`;
+      btn.className = 'btn btn-call btn-with-tiles';
+      const textSpan = document.createElement('span');
+      textSpan.textContent = `加槓 (${tileLabel})`;
+      btn.appendChild(textSpan);
+      if (tile) {
+        btn.appendChild(createActionTilePreview([tile]));
+      }
       btn.addEventListener('click', () => handlers.onDeclareKakan(tileId));
       btns.appendChild(btn);
     }
 
     if (actions.canKitaTileIds.length > 0) {
       const firstKitaId = actions.canKitaTileIds[0]!;
+      const kitaSample = allMyTiles.find((t) => t.id === firstKitaId) ?? {
+        id: 'kita-preview-4z',
+        kind: '4z' as TileKind,
+        isRed: false,
+      };
       const btn = document.createElement('button');
       btn.type = 'button';
-      btn.className = 'btn btn-kita';
-      btn.textContent = '抜北 (北)';
+      btn.className = 'btn btn-kita btn-with-tiles';
+      const textSpan = document.createElement('span');
+      textSpan.textContent = '抜北 (北)';
+      btn.append(textSpan, createActionTilePreview([kitaSample]));
       btn.addEventListener('click', () => handlers.onDeclareKita(firstKitaId));
       btns.appendChild(btn);
     }
@@ -1624,18 +2817,24 @@ function renderSelfSeat(
   player: PublicPlayerView,
   handlers: TableHandlers,
   uiState: TableUiState,
+  rank?: number,
+  newlyMeldedIndices?: Set<number>,
+  newlyAddedKita = false,
 ): HTMLElement {
-  const box = document.createElement('div');
-  box.className = `seat-box seat-self seat-orient-self${
-    player.isCurrentTurn ? ' is-turn' : ''
-  }`;
-  box.dataset.seat = 'self';
-
-  box.appendChild(renderSeatHeader(player, true, view.isFuriten));
-
   const isMyTurn = view.phase === 'playing' && player.isCurrentTurn;
   const canDiscardNow =
     isMyTurn && (view.myDrawnTile !== null || view.myHand.length % 3 === 2);
+
+  const box = document.createElement('div');
+  box.className = `seat-box seat-self seat-orient-self${
+    player.isCurrentTurn ? ' is-turn' : ''
+  }${canDiscardNow ? ' is-my-turn-active' : ''}`;
+  box.dataset.seat = 'self';
+
+  box.appendChild(
+    renderSeatHeader(player, true, view.isFuriten, rank, canDiscardNow),
+  );
+
   const canRiichiIds = view.mySelfActions?.canRiichiTileIds ?? [];
   const inRiichiMode =
     canDiscardNow && uiState.riichiSelectingMode && canRiichiIds.length > 0;
@@ -1684,7 +2883,7 @@ function renderSelfSeat(
 
   const forbiddenSet = new Set(canDiscardNow ? view.kuikaeForbiddenKinds : []);
   const handArea = document.createElement('div');
-  handArea.className = 'hand-area';
+  handArea.className = `hand-area${canDiscardNow ? ' is-my-turn-hand' : ''}`;
   const initialSelectedId = canDiscardNow ? (uiState.selectedTileId ?? null) : null;
 
   const setSelectedTileInDom = (nextId: string | null): void => {
@@ -1706,6 +2905,7 @@ function renderSelfSeat(
       onConfirm();
       return;
     }
+    soundEngine.playSelect();
     setSelectedTileInDom(tileId);
   };
 
@@ -1752,31 +2952,31 @@ function renderSelfSeat(
     handArea.appendChild(gap);
     if (inRiichiMode) {
       const isCandidate = riichiCandidateSet.has(drawn.id);
-      handArea.appendChild(
-        createTileElement(drawn, {
-          clickable: isCandidate,
-          selected: isCandidate && initialSelectedId === drawn.id,
-          disabled: !isCandidate,
-          riichiCandidate: isCandidate,
-          disabledReason: isCandidate
-            ? undefined
-            : 'この牌を切っても聴牌にならないためリーチできません',
-          onClick: () =>
-            handleTileTap(drawn.id, () => handlers.onDeclareRiichi(drawn.id)),
-        }),
-      );
+      const drawnEl = createTileElement(drawn, {
+        clickable: isCandidate,
+        selected: isCandidate && initialSelectedId === drawn.id,
+        disabled: !isCandidate,
+        riichiCandidate: isCandidate,
+        disabledReason: isCandidate
+          ? undefined
+          : 'この牌を切っても聴牌にならないためリーチできません',
+        onClick: () =>
+          handleTileTap(drawn.id, () => handlers.onDeclareRiichi(drawn.id)),
+      });
+      drawnEl.classList.add('mj-tile-drawn');
+      handArea.appendChild(drawnEl);
     } else {
       const blocked = forbiddenSet.has(drawn.kind);
       const canTap = canDiscardNow && !blocked;
-      handArea.appendChild(
-        createTileElement(drawn, {
-          clickable: canTap,
-          selected: canTap && initialSelectedId === drawn.id,
-          disabled: canDiscardNow && blocked,
-          disabledReason: blocked ? '喰い替え禁止のため切れません' : undefined,
-          onClick: () => handleTileTap(drawn.id, () => handlers.onDiscardTile(drawn.id)),
-        }),
-      );
+      const drawnEl = createTileElement(drawn, {
+        clickable: canTap,
+        selected: canTap && initialSelectedId === drawn.id,
+        disabled: canDiscardNow && blocked,
+        disabledReason: blocked ? '喰い替え禁止のため切れません' : undefined,
+        onClick: () => handleTileTap(drawn.id, () => handlers.onDiscardTile(drawn.id)),
+      });
+      drawnEl.classList.add('mj-tile-drawn');
+      handArea.appendChild(drawnEl);
     }
   }
 
@@ -1785,7 +2985,12 @@ function renderSelfSeat(
 
   const meldsSlot = document.createElement('div');
   meldsSlot.className = 'self-melds-dock';
-  const meldsEl = renderMeldsAndKita(player, 'self');
+  const meldsEl = renderMeldsAndKita(
+    player,
+    'self',
+    newlyMeldedIndices,
+    newlyAddedKita,
+  );
   if (meldsEl) {
     meldsSlot.appendChild(meldsEl);
   }
@@ -1803,14 +3008,19 @@ function renderSelfSeat(
   return box;
 }
 
-function renderSpectatedBottomSeat(player: PublicPlayerView): HTMLElement {
+function renderSpectatedBottomSeat(
+  player: PublicPlayerView,
+  rank?: number,
+  newlyMeldedIndices?: Set<number>,
+  newlyAddedKita = false,
+): HTMLElement {
   const box = document.createElement('div');
   box.className = `seat-box seat-self seat-orient-self is-spectated${
     player.isCurrentTurn ? ' is-turn' : ''
   }`;
   box.dataset.seat = 'self';
 
-  box.appendChild(renderSeatHeader(player, false));
+  box.appendChild(renderSeatHeader(player, false, false, rank, false));
 
   const controls = document.createElement('div');
   controls.className = 'self-controls';
@@ -1820,7 +3030,12 @@ function renderSpectatedBottomSeat(player: PublicPlayerView): HTMLElement {
 
   const meldsSlot = document.createElement('div');
   meldsSlot.className = 'self-melds-dock';
-  const meldsEl = renderMeldsAndKita(player, 'self');
+  const meldsEl = renderMeldsAndKita(
+    player,
+    'self',
+    newlyMeldedIndices,
+    newlyAddedKita,
+  );
   if (meldsEl) {
     meldsSlot.appendChild(meldsEl);
   }
@@ -1834,7 +3049,9 @@ function renderSpectatedBottomSeat(player: PublicPlayerView): HTMLElement {
     const gap = document.createElement('div');
     gap.className = 'drawn-gap';
     handArea.appendChild(gap);
-    handArea.appendChild(createTileBackElement(false));
+    const drawnBack = createTileBackElement(false);
+    drawnBack.classList.add('opp-tile-drawn');
+    handArea.appendChild(drawnBack);
   }
 
   const rightSpacer = document.createElement('div');
@@ -1950,11 +3167,24 @@ function rankPlayersByScore<T extends { seatIndex: number; score: number }>(
   });
 }
 
+function computePlayerRankMap(
+  players: readonly PublicPlayerView[],
+  initialDealerIndex: number,
+): Map<string, number> {
+  const ranked = rankPlayersByScore(players, initialDealerIndex);
+  const map = new Map<string, number>();
+  ranked.forEach((p, idx) => {
+    map.set(p.playerId, idx + 1);
+  });
+  return map;
+}
+
 function renderFinishedScreen(
   container: HTMLElement,
   view: StateView,
   handlers: TableHandlers,
 ): void {
+  const rules = deriveRules(view.ruleConfig);
   const panel = document.createElement('div');
   panel.className = 'overlay-panel finished-panel';
   applyOrientationClass(panel);
@@ -1966,13 +3196,59 @@ function renderFinishedScreen(
   const hasTobi = view.players.some((p) => p.score < 0);
   title.textContent = `終局 — ${view.ruleConfig.playerCount}人 ${lengthJa} 最終結果${hasTobi ? '（トビ終了）' : ''}`;
 
+  const rankedPlayers = rankPlayersByScore(
+    view.players,
+    view.initialDealerIndex,
+  );
+  const podium = document.createElement('div');
+  podium.className = 'finished-podium-list';
+  rankedPlayers.forEach((p, idx) => {
+    const rank = idx + 1;
+    const isSelf = !view.isSpectator && p.playerId === view.viewerPlayerId;
+    const card = document.createElement('div');
+    card.className = `finished-podium-card rank-${rank}${isSelf ? ' is-self' : ''}`;
+
+    const rankEl = document.createElement('div');
+    rankEl.className = `finished-rank-badge rank-${rank}`;
+    rankEl.textContent = `${rank}位`;
+
+    const avatar = createSeatAvatar(p, isSelf);
+
+    const info = document.createElement('div');
+    info.className = 'finished-podium-info';
+    const nameEl = document.createElement('div');
+    nameEl.className = 'finished-podium-name';
+    nameEl.textContent = isSelf ? `${p.name}（あなた）` : p.name;
+
+    const delta = p.score - rules.initialPoints;
+    const deltaEl = document.createElement('div');
+    deltaEl.className = `finished-podium-delta ${
+      delta > 0 ? 'delta-pos' : delta < 0 ? 'delta-neg' : 'delta-even'
+    }`;
+    deltaEl.textContent =
+      delta > 0
+        ? `開始比 +${delta.toLocaleString()}点`
+        : delta < 0
+          ? `開始比 ${delta.toLocaleString()}点`
+          : '開始比 ±0点';
+
+    info.append(nameEl, deltaEl);
+
+    const scoreEl = document.createElement('div');
+    scoreEl.className = 'finished-podium-score';
+    scoreEl.textContent = `${p.score.toLocaleString()}点`;
+
+    card.append(rankEl, avatar, info, scoreEl);
+    podium.appendChild(card);
+  });
+
   const table = buildScoreTable(
     view.players,
     true,
     undefined,
     view.initialDealerIndex,
   );
-  panel.append(title, table);
+  panel.append(title, podium, table);
 
   if (view.finalKyotakuAward) {
     const awardPlayer = view.players.find(

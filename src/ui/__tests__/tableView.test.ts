@@ -8,7 +8,12 @@ import type { StateView } from '../../types/message';
 import type { GameState } from '../../types/state';
 import { decideCpuAction } from '../../cpu/player';
 import { applyAction } from '../../engine/reducer';
-import { renderGameTable, type TableHandlers } from '../tableView';
+import {
+  captureDiscardOriginSnapshot,
+  renderGameTable,
+  type TableHandlers,
+} from '../tableView';
+import { soundEngine } from '../sound';
 
 const onLeaveGameSpy = vi.fn();
 
@@ -666,4 +671,542 @@ describe('renderGameTable（横画面レイアウト）', () => {
     seatBtns[2]!.click();
     expect(onChangePerspective).toHaveBeenCalledWith(2);
   });
+
+  it('新しく捨てられた牌のみリアル打牌モーションが付き、animationendでクリーンアップされる', () => {
+    const advanceToNextTurn = (s: GameState): GameState => {
+      let cur = s;
+      while (cur.phase === 'awaiting_responses' && cur.round?.pendingResponse) {
+        const pending = cur.round.pendingResponse;
+        const responder = Object.keys(pending.optionsByPlayerId).find(
+          (pid) => !(pid in pending.responses),
+        );
+        if (!responder) break;
+        const res = applyAction(cur, {
+          type: 'CALL_RESPONSE',
+          playerId: responder,
+          choice: { type: 'pass' },
+        });
+        if (res.error) break;
+        cur = res.state;
+      }
+      return cur;
+    };
+
+    const root = document.createElement('div');
+    const view0 = toStateView(state4, 'p0', 0);
+    renderGameTable(root, view0, noopHandlers);
+    expect(root.querySelectorAll('.mj-tile-discard-anim')).toHaveLength(0);
+
+    // 親 (p0) が 1 枚捨てる
+    const p0TileId =
+      state4.players[0]!.drawnTile?.id ?? state4.players[0]!.hand[0]!.id;
+    const afterP0Discard = advanceToNextTurn(
+      applyAction(state4, {
+        type: 'DISCARD_TILE',
+        playerId: 'p0',
+        tileId: p0TileId,
+        now: 1,
+      }).state,
+    );
+    const view1 = toStateView(afterP0Discard, 'p0', 0);
+    renderGameTable(root, view1, noopHandlers);
+
+    const selfAnimTiles = root.querySelectorAll<HTMLElement>(
+      '.river-self .mj-tile-discard-anim',
+    );
+    expect(selfAnimTiles).toHaveLength(1);
+    expect(selfAnimTiles[0]!.dataset.tileId).toBe(p0TileId);
+    expect(selfAnimTiles[0]!.dataset.discardAnim).toBe('true');
+    expect(selfAnimTiles[0]!.style.getPropertyValue('--discard-dx')).not.toBe('');
+    expect(selfAnimTiles[0]!.style.getPropertyValue('--discard-dy')).not.toBe('');
+    expect(
+      root.querySelector('.river-zone.river-self')?.classList.contains(
+        'is-discard-animating',
+      ),
+    ).toBe(true);
+
+    // 同じ StateView で再描画してもアニメーションは再発火しない
+    renderGameTable(root, view1, noopHandlers);
+    expect(root.querySelectorAll('.mj-tile-discard-anim')).toHaveLength(0);
+
+    // 下家 (p1) が 1 枚捨てる → 右家の新捨て牌のみアニメーションが付く
+    const p1 = afterP0Discard.players[1]!;
+    const p1TileId = p1.drawnTile?.id ?? p1.hand[0]!.id;
+    const afterP1Discard = advanceToNextTurn(
+      applyAction(afterP0Discard, {
+        type: 'DISCARD_TILE',
+        playerId: 'p1',
+        tileId: p1TileId,
+        now: 2,
+      }).state,
+    );
+    const view2 = toStateView(afterP1Discard, 'p0', 0);
+    renderGameTable(root, view2, noopHandlers);
+
+    expect(root.querySelectorAll('.river-self .mj-tile-discard-anim')).toHaveLength(
+      0,
+    );
+    const rightAnimTiles = root.querySelectorAll<HTMLElement>(
+      '.river-right .mj-tile-discard-anim',
+    );
+    expect(rightAnimTiles).toHaveLength(1);
+    expect(rightAnimTiles[0]!.dataset.tileId).toBe(p1TileId);
+    expect(
+      root.querySelector('.river-zone.river-right')?.classList.contains(
+        'is-discard-animating',
+      ),
+    ).toBe(true);
+
+    // animationend でクラスと河の前面昇格フラグが片付く
+    const endEvent = Object.assign(new Event('animationend'), {
+      animationName: 'tileDiscardThrow',
+    });
+    rightAnimTiles[0]!.dispatchEvent(endEvent);
+    expect(root.querySelectorAll('.mj-tile-discard-anim')).toHaveLength(0);
+    expect(
+      root.querySelector('.river-zone.river-right')?.classList.contains(
+        'is-discard-animating',
+      ),
+    ).toBe(false);
+  });
+
+  it('リーチ打牌時は専用の回転アニメが付与され、元の手牌座標差がFLIP反映される', () => {
+    const baseView = toStateView(state4, 'p0', 0);
+    const root = document.createElement('div');
+    renderGameTable(root, baseView, noopHandlers);
+
+    const discardTile = baseView.myDrawnTile ?? baseView.myHand[0]!;
+    const handEl = root.querySelector<HTMLElement>(
+      `.seat-self .hand-area [data-tile-id="${discardTile.id}"]`,
+    )!;
+    expect(handEl).not.toBeNull();
+
+    // 元の手牌座標をモックしてスナップショットを採取
+    vi.spyOn(handEl, 'getBoundingClientRect').mockReturnValue({
+      left: 380,
+      top: 520,
+      width: 54,
+      height: 74,
+      right: 434,
+      bottom: 594,
+      x: 380,
+      y: 520,
+      toJSON: () => ({}),
+    } as DOMRect);
+    const snapshot = captureDiscardOriginSnapshot(root);
+    expect(snapshot.selfTileRects.get(discardTile.id)?.cx).toBe(407);
+
+    // リーチ宣言牌が追加された次のビューを用意し、着地先の rect もモックできるよう Element プロトタイプ側で一時フック
+    const nextView: StateView = {
+      ...baseView,
+      players: baseView.players.map((p) =>
+        p.playerId === 'p0'
+          ? {
+              ...p,
+              isRiichi: true,
+              discards: [
+                ...p.discards,
+                {
+                  tile: discardTile,
+                  isTsumogiri: false,
+                  isRiichiDeclaration: true,
+                },
+              ],
+            }
+          : p,
+      ),
+    };
+
+    const origGetRect = HTMLElement.prototype.getBoundingClientRect;
+    const rectSpy = vi
+      .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: HTMLElement) {
+        if (
+          this.closest('.discard-river') &&
+          this.dataset.tileId === discardTile.id
+        ) {
+          return {
+            left: 290,
+            top: 320,
+            width: 31,
+            height: 43,
+            right: 321,
+            bottom: 363,
+            x: 290,
+            y: 320,
+            toJSON: () => ({}),
+          } as DOMRect;
+        }
+        return origGetRect.call(this);
+      });
+
+    try {
+      renderGameTable(root, nextView, noopHandlers, {
+        riichiSelectingMode: false,
+        autoTsumogiriEnabled: true,
+        prevView: baseView,
+        discardOriginSnapshot: snapshot,
+      });
+
+      const animTile = root.querySelector<HTMLElement>(
+        '.river-self .mj-tile-discard-anim',
+      )!;
+      expect(animTile).not.toBeNull();
+      expect(animTile.classList.contains('mj-tile-discard-riichi-anim')).toBe(
+        true,
+      );
+      // 407 - 305.5 = +101.5px, 557 - 341.5 = +215.5px
+      expect(animTile.style.getPropertyValue('--discard-dx')).toBe('101.5px');
+      expect(animTile.style.getPropertyValue('--discard-dy')).toBe('215.5px');
+      expect(animTile.style.getPropertyValue('--discard-end-rot')).toContain(
+        '- 90deg',
+      );
+    } finally {
+      rectSpy.mockRestore();
+    }
+  });
+
+  it('鳴きで捨て牌が減った場合や局が変わった場合はアニメーションしない', () => {
+    const baseView = toStateView(state4, 'p0', 0);
+    const t0 = baseView.myDrawnTile ?? baseView.myHand[0]!;
+    const withDiscardView: StateView = {
+      ...baseView,
+      players: baseView.players.map((p) =>
+        p.playerId === 'p0'
+          ? {
+              ...p,
+              discards: [
+                { tile: t0, isTsumogiri: false, isRiichiDeclaration: false },
+              ],
+            }
+          : p,
+      ),
+    };
+    const root = document.createElement('div');
+    renderGameTable(root, withDiscardView, noopHandlers);
+    expect(root.querySelectorAll('.mj-tile-discard-anim')).toHaveLength(0);
+
+    // 鳴きで捨て牌が減ったとき
+    renderGameTable(root, baseView, noopHandlers);
+    expect(root.querySelectorAll('.mj-tile-discard-anim')).toHaveLength(0);
+
+    // 局が進んで次の局になったとき
+    const nextRoundView: StateView = {
+      ...withDiscardView,
+      round: {
+        ...withDiscardView.round!,
+        roundIndex: withDiscardView.round!.roundIndex + 1,
+      },
+    };
+    renderGameTable(root, nextRoundView, noopHandlers);
+    expect(root.querySelectorAll('.mj-tile-discard-anim')).toHaveLength(0);
+  });
+
+  it('南家・西家など viewerSeatIndex が 0 以外のプレイヤーでも打牌モーションが発火し、観戦視点切替時は発火しない', () => {
+    const southView0 = toStateView(state4, 'p1', 0);
+    expect(southView0.viewerSeatIndex).toBe(1);
+    const root = document.createElement('div');
+    renderGameTable(root, southView0, noopHandlers, {
+      riichiSelectingMode: false,
+      autoTsumogiriEnabled: true,
+      perspectiveSeatIndex: 0,
+      prevView: null,
+      prevPerspectiveSeatIndex: 0,
+    });
+
+    const p0TileId =
+      state4.players[0]!.drawnTile?.id ?? state4.players[0]!.hand[0]!.id;
+    const afterP0Discard = applyAction(state4, {
+      type: 'DISCARD_TILE',
+      playerId: 'p0',
+      tileId: p0TileId,
+      now: 1,
+    }).state;
+    const southView1 = toStateView(afterP0Discard, 'p1', 0);
+    renderGameTable(root, southView1, noopHandlers, {
+      riichiSelectingMode: false,
+      autoTsumogiriEnabled: true,
+      perspectiveSeatIndex: 0,
+      prevView: southView0,
+      prevPerspectiveSeatIndex: 0,
+    });
+    // p1(席1) から見て p0(席0) は上家 (left)
+    expect(
+      root.querySelectorAll('.river-left .mj-tile-discard-anim'),
+    ).toHaveLength(1);
+
+    // 観戦中に視点席を切り替えた瞬間は誤発火しない
+    const specState = reduce(afterP0Discard, {
+      type: 'JOIN_SPECTATOR',
+      spectatorId: 'spec-persp',
+      name: '観戦',
+    });
+    const specView0 = toStateView(specState, 'spec-persp', 0, {
+      perspectiveSeatIndex: 0,
+    });
+    const specView1: StateView = {
+      ...specView0,
+      players: specView0.players.map((p) =>
+        p.playerId === 'p1'
+          ? {
+              ...p,
+              discards: [
+                ...p.discards,
+                {
+                  tile: afterP0Discard.players[1]!.hand[0]!,
+                  isTsumogiri: false,
+                  isRiichiDeclaration: false,
+                },
+              ],
+            }
+          : p,
+      ),
+    };
+    renderGameTable(root, specView1, noopHandlers, {
+      riichiSelectingMode: false,
+      autoTsumogiriEnabled: true,
+      perspectiveSeatIndex: 1,
+      prevView: specView0,
+      prevPerspectiveSeatIndex: 0,
+    });
+    expect(root.querySelectorAll('.mj-tile-discard-anim')).toHaveLength(0);
+  });
+
+  it('ツモモーション・ツモ牌間隔・手番発光・局開始テロップ・中央コンソール情報・順位バッジを描画する', () => {
+    const playRoundStartSpy = vi.spyOn(soundEngine, 'playRoundStart');
+    const playDrawSpy = vi.spyOn(soundEngine, 'playDraw');
+    const baseView = toStateView(state4, 'p0', 0);
+    const root = document.createElement('div');
+    renderGameTable(root, baseView, noopHandlers);
+
+    // 1. 局開始テロップ（例: 東一局）が中央に出る
+    const banner = root.querySelector('.round-start-banner');
+    expect(banner).not.toBeNull();
+    expect(banner!.querySelector('.round-start-banner-title')?.textContent).toBe('東一局');
+    expect(playRoundStartSpy).toHaveBeenCalledTimes(1);
+
+    // 2. ツモ牌が分離・スライドアニメーションが付く
+    expect(root.querySelector('.seat-self .hand-area > .drawn-gap')).not.toBeNull();
+    const drawnTile = root.querySelector('.seat-self .hand-area .mj-tile-drawn');
+    expect(drawnTile).not.toBeNull();
+    expect(drawnTile!.classList.contains('mj-tile-draw-anim')).toBe(true);
+
+    // 3. 自分の手番時は手牌とプレイヤー枠が発光する
+    expect(root.querySelector('.seat-self .hand-area.is-my-turn-hand')).not.toBeNull();
+    expect(root.querySelector('.seat-orient-self .seat-header.is-turn.is-self-turn')).not.toBeNull();
+
+    // 4. 中央コンソールに親・本場・供託・残り枚数が表示される
+    expect(root.querySelector('.console-core .console-oya-pill')?.textContent).toContain('親');
+    expect(root.querySelector('.console-core .console-honba')?.textContent).toContain('本');
+    expect(root.querySelector('.console-core .console-kyotaku .stick-riichi')).not.toBeNull();
+
+    // 5. 4席すべての統一プレイヤーカードに順位バッジがある
+    expect(root.querySelectorAll('.seat-header .seat-rank-badge')).toHaveLength(4);
+
+    // 6. 他家のツモ遷移でも相手の手牌ツモギャップとツモ音・アニメーションが発火する
+    const p1Tile = baseView.myDrawnTile ?? baseView.myHand[0]!;
+    const nextTurnView: StateView = {
+      ...baseView,
+      myDrawnTile: null,
+      players: baseView.players.map((p) => {
+        if (p.playerId === 'p0') {
+          return {
+            ...p,
+            isCurrentTurn: false,
+            hasDrawnTile: false,
+            discards: [
+              { tile: p1Tile, isTsumogiri: false, isRiichiDeclaration: false },
+            ],
+          };
+        }
+        if (p.playerId === 'p1') {
+          return { ...p, isCurrentTurn: true, hasDrawnTile: true };
+        }
+        return p;
+      }),
+    };
+    renderGameTable(root, nextTurnView, noopHandlers);
+    const rightDrawn = root.querySelector('.seat-orient-right .hand-orient-right .opp-tile-drawn');
+    expect(rightDrawn).not.toBeNull();
+    expect(rightDrawn!.classList.contains('mj-tile-draw-anim')).toBe(true);
+    expect(playDrawSpy).toHaveBeenCalled();
+
+    playRoundStartSpy.mockRestore();
+    playDrawSpy.mockRestore();
+  });
+
+  it('リーチ棒配置・鳴き移動＆横向き表示・ドラめくり・点数増減ポップが遷移に合わせて発火する', () => {
+    const playRiichiSpy = vi.spyOn(soundEngine, 'playRiichi');
+    const playMeldSpy = vi.spyOn(soundEngine, 'playMeld');
+    const playDoraFlipSpy = vi.spyOn(soundEngine, 'playDoraFlip');
+
+    const baseView = toStateView(state4, 'p0', 0);
+    const root = document.createElement('div');
+    renderGameTable(root, baseView, noopHandlers);
+
+    const tileA = baseView.myHand[0]!;
+    const tileB = baseView.myHand[1]!;
+    const tileC = baseView.myHand[2]!;
+    const extraDora = baseView.myHand[3]!;
+
+    const updatedView: StateView = {
+      ...baseView,
+      kyotakuCount: 1,
+      round: baseView.round
+        ? {
+            ...baseView.round,
+            doraIndicators: [...baseView.round.doraIndicators, extraDora],
+          }
+        : null,
+      players: baseView.players.map((p) => {
+        if (p.playerId === 'p0') {
+          return {
+            ...p,
+            score: p.score - 1000,
+            isRiichi: true,
+            discards: [
+              { tile: tileA, isTsumogiri: false, isRiichiDeclaration: true },
+            ],
+          };
+        }
+        if (p.playerId === 'p1') {
+          return {
+            ...p,
+            score: p.score + 2000,
+            melds: [
+              {
+                type: 'pon',
+                tiles: [tileA, tileB, tileC],
+                calledTile: tileA,
+                addedTile: null,
+                fromSeatIndex: 0,
+              },
+            ],
+          };
+        }
+        return p;
+      }),
+    };
+
+    renderGameTable(root, updatedView, noopHandlers);
+
+    // リーチ棒の実要素配置とアニメ
+    const stick = root.querySelector('.console-score-self .console-riichi-stick');
+    expect(stick).not.toBeNull();
+    expect(stick!.classList.contains('is-riichi-stick-placed')).toBe(true);
+    expect(playRiichiSpy).toHaveBeenCalled();
+
+    // 点数増減ポップ表示
+    const selfDelta = root.querySelector('.console-score-self .console-score-delta');
+    expect(selfDelta?.textContent).toBe('-1,000');
+    const rightDelta = root.querySelector('.console-score-right .console-score-delta');
+    expect(rightDelta?.textContent).toBe('+2,000');
+
+    // 鳴き移動アニメ＆鳴き牌クラス
+    const meldGroup = root.querySelector('.seat-orient-right .meld-group.is-meld-anim');
+    expect(meldGroup).not.toBeNull();
+    expect(meldGroup!.querySelector('.mj-tile-called')).not.toBeNull();
+    expect(playMeldSpy).toHaveBeenCalled();
+
+    // 新規ドラめくりアニメ
+    const flippedDoras = root.querySelectorAll('.dora-panel-tiles .dora-tile-flip');
+    expect(flippedDoras).toHaveLength(1);
+    expect(playDoraFlipSpy).toHaveBeenCalled();
+
+    playRiichiSpy.mockRestore();
+    playMeldSpy.mockRestore();
+    playDoraFlipSpy.mockRestore();
+  });
+
+  it('鳴きボタンに牌の画像プレビューを含め、和了時は暗転フラッシュと大きな和了表示を出し、終局時は専用リザルトに点数変動を出す', () => {
+    const playAgariSpy = vi.spyOn(soundEngine, 'playAgari');
+    const baseView = toStateView(state4, 'p0', 0);
+
+    // 1. 鳴き選択肢に牌の画像が含まれる
+    const callView: StateView = {
+      ...baseView,
+      phase: 'awaiting_responses',
+      myCallOptions: {
+        discardedTile: baseView.myHand[0]!,
+        discarderSeatIndex: 1,
+        canRon: true,
+        canPon: true,
+        canDaiminkan: true,
+        chiOptions: [
+          { tiles: [baseView.myHand[1]!, baseView.myHand[2]!] },
+        ],
+      },
+    };
+    const root = document.createElement('div');
+    renderGameTable(root, callView, noopHandlers);
+    const callBtns = root.querySelectorAll('.call-action-bar .btn-with-tiles');
+    expect(callBtns.length).toBeGreaterThanOrEqual(4);
+    for (const btn of Array.from(callBtns)) {
+      expect(btn.querySelector('.btn-tile-preview .mj-tile')).not.toBeNull();
+    }
+    const callText = root.querySelector('.call-action-bar')!.textContent!;
+    expect(callText).toContain('ロン');
+    expect(callText).toContain('ポン');
+    expect(callText).toContain('大明槓');
+    expect(callText).toContain('チー');
+    expect(callText).toContain('スルー');
+
+    // 2. playing -> round_end (和了あり) で暗転フラッシュ・強調コールアウト・和了音
+    const agariView: StateView = {
+      ...baseView,
+      phase: 'round_end',
+      round: {
+        ...baseView.round!,
+        agariResults: [
+          {
+            playerId: 'p0',
+            seatIndex: 0,
+            winType: 'tsumo',
+            fromSeatIndex: null,
+            winningTile: { id: 'w1', kind: '1m', isRed: false },
+            hand: [...baseView.myHand],
+            melds: [],
+            kitaTiles: [],
+            yaku: [{ id: 'riichi', name: '立直', han: 1 }],
+            doraCount: 1,
+            uraDoraCount: 0,
+            kitaCount: 0,
+            han: 2,
+            fu: 30,
+            isYakuman: false,
+            scoreLabel: '2000点',
+            pointsAwarded: 2000,
+            honbaPointsAwarded: 0,
+            scoreDeltas: {},
+          },
+        ],
+      },
+    };
+    renderGameTable(root, agariView, noopHandlers);
+    const backdrop = root.querySelector('.overlay-backdrop-modal');
+    expect(backdrop!.classList.contains('is-agari-flash')).toBe(true);
+    expect(root.querySelector('.agari-callout-hero')?.textContent).toContain('TSUMO');
+    expect(playAgariSpy).toHaveBeenCalledWith(true);
+
+    // 3. 終局リザルト画面に順位・最終点数・開始比点数変動カードが表示される（既存契約も維持）
+    const finishedView: StateView = {
+      ...baseView,
+      phase: 'finished',
+      round: null,
+      players: baseView.players.map((p, idx) => ({
+        ...p,
+        score: idx === 0 ? 38000 : idx === 1 ? 26000 : idx === 2 ? 21000 : 15000,
+      })),
+    };
+    renderGameTable(root, finishedView, noopHandlers);
+    const podiumCards = root.querySelectorAll('.finished-panel .finished-podium-card');
+    expect(podiumCards).toHaveLength(4);
+    expect(podiumCards[0]!.textContent).toContain('1位');
+    expect(podiumCards[0]!.textContent).toContain('38,000点');
+    expect(podiumCards[0]!.textContent).toContain('開始比 +13,000点');
+    expect(podiumCards[3]!.textContent).toContain('開始比 -10,000点');
+
+    playAgariSpy.mockRestore();
+  });
 });
+
