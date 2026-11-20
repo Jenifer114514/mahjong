@@ -2,6 +2,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // PeerJS はブラウザ専用のためスタブ化（常設ルーム自動開設試験にも対応）
+const fakePeerRegistry = new Map<
+  string,
+  { emit: (ev: string, ...args: unknown[]) => void }
+>();
+
 vi.mock('peerjs', () => {
   class FakePeer {
     static openPeers = new Set<string>();
@@ -10,6 +15,7 @@ vi.mock('peerjs', () => {
     private handlers: Record<string, Array<(...args: unknown[]) => void>> = {};
     constructor(id?: string) {
       this.id = id && id.length > 0 ? id : 'stub-client-peer';
+      fakePeerRegistry.set(this.id, this);
       queueMicrotask(() => {
         if (this.destroyed) return;
         FakePeer.openPeers.add(this.id);
@@ -43,6 +49,9 @@ vi.mock('peerjs', () => {
     destroy() {
       this.destroyed = true;
       FakePeer.openPeers.delete(this.id);
+      if (fakePeerRegistry.get(this.id) === this) {
+        fakePeerRegistry.delete(this.id);
+      }
     }
   }
   return { default: FakePeer };
@@ -517,5 +526,242 @@ describe('アプリ起動とローカルCPU対局', () => {
     updatedSwitch!.click();
     expect(soundEngine.isEnabled()).toBe(true);
     expect(localStorage.getItem('arena-mahjong:sound-enabled:v1')).toBe('1');
+  });
+
+  it('チャットを開いた時と新規受信時に会話の一番下へスクロールされる（DOM接続後にスクロール実行）', async () => {
+    localStorage.clear();
+
+    // 実ブラウザ同様、DOM 接続済み(isConnected=true)の場合だけ scrollHeight が 480 になる挙動を模擬
+    const origScrollHeightDesc = Object.getOwnPropertyDescriptor(
+      Element.prototype,
+      'scrollHeight',
+    );
+    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
+      configurable: true,
+      get(this: HTMLElement) {
+        if (this.classList?.contains('chat-messages-list')) {
+          return this.isConnected ? 480 : 0;
+        }
+        return origScrollHeightDesc?.get?.call(this) ?? 0;
+      },
+    });
+
+    try {
+      bootApp();
+      await loadMain();
+
+      const root = document.getElementById('app') as HTMLElement;
+      expect(clickByText(root, 'button', 'CPU対局をはじめる')).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 40));
+
+      // チャットを開いて連投してから一度閉じる
+      root.querySelector<HTMLButtonElement>('.table-chrome-chat')!.click();
+      for (const msg of ['1通目', '2通目', '3通目']) {
+        const input = root.querySelector<HTMLInputElement>('.chat-input')!;
+        input.value = msg;
+        input.dispatchEvent(new Event('input'));
+        root
+          .querySelector<HTMLFormElement>('.chat-input-row')!
+          .dispatchEvent(new Event('submit', { cancelable: true }));
+      }
+      root.querySelector<HTMLButtonElement>('.table-modal-close-btn')!.click();
+      expect(root.querySelector('.table-chat-modal')).toBeNull();
+
+      // 再度チャットを開いたとき、DOM接続後かつ rAF 後に一番下(scrollTop=480)になる
+      root.querySelector<HTMLButtonElement>('.table-chrome-chat')!.click();
+      const list = root.querySelector<HTMLElement>('.chat-messages-list')!;
+      expect(list).not.toBeNull();
+      expect(list.scrollTop).toBe(480);
+
+      // さらに開いた状態で追加送信しても一番下のまま
+      const input2 = root.querySelector<HTMLInputElement>('.chat-input')!;
+      input2.value = '4通目';
+      input2.dispatchEvent(new Event('input'));
+      root
+        .querySelector<HTMLFormElement>('.chat-input-row')!
+        .dispatchEvent(new Event('submit', { cancelable: true }));
+      expect(list.scrollTop).toBe(480);
+    } finally {
+      if (origScrollHeightDesc) {
+        Object.defineProperty(
+          HTMLElement.prototype,
+          'scrollHeight',
+          origScrollHeightDesc,
+        );
+      } else {
+        delete (HTMLElement.prototype as unknown as Record<string, unknown>)
+          .scrollHeight;
+      }
+    }
+  });
+
+  it('対局中にチャットを送ると送信プレイヤーのアイコンから吹き出しが出て一定時間後に消える', async () => {
+    vi.useFakeTimers();
+    localStorage.clear();
+    fakePeerRegistry.clear();
+
+    bootApp();
+    await loadMain();
+
+    const root = document.getElementById('app') as HTMLElement;
+    expect(clickByText(root, 'button', '部屋を作成')).toBe(true);
+    await vi.advanceTimersByTimeAsync(20);
+
+    const roomCode = root
+      .querySelector('.room-code-value')!
+      .textContent!.trim();
+    const { roomCodeToPeerId } = await import('../../net/protocol');
+    const hostPeer = fakePeerRegistry.get(roomCodeToPeerId(roomCode));
+    expect(hostPeer).toBeDefined();
+
+    // リモートプレイヤーを1人参加させて、残り2席をCPUで埋めて開始する
+    const connHandlers: Record<string, Array<(...args: unknown[]) => void>> = {};
+    const remoteConn = {
+      peer: 'remote-peer-1',
+      open: true,
+      on(ev: string, cb: (...args: unknown[]) => void) {
+        connHandlers[ev] = connHandlers[ev] ?? [];
+        connHandlers[ev]!.push(cb);
+      },
+      send() {},
+      close() {},
+    };
+    hostPeer!.emit('connection', remoteConn);
+    connHandlers.open?.forEach((cb) => cb());
+    connHandlers.data?.forEach((cb) =>
+      cb({ kind: 'JOIN', playerName: 'ゲスト花子' }),
+    );
+
+    expect(clickByText(root, 'button', 'CPU を追加')).toBe(true);
+    expect(clickByText(root, 'button', 'CPU を追加')).toBe(true);
+    root.querySelector<HTMLButtonElement>('.lobby-start-btn')!.click();
+    await vi.advanceTimersByTimeAsync(20);
+
+    expect(root.querySelector('.table-stage.is-landscape')).not.toBeNull();
+
+    // 自分がチャット送信 → 自分アイコン(.seat-orient-self .seat-card-top)から吹き出し出現
+    root.querySelector<HTMLButtonElement>('.table-chrome-chat')!.click();
+    expect(clickByText(root, '.chat-quick-btn', 'よろしく！')).toBe(true);
+
+    const selfBubble = root.querySelector(
+      '.seat-orient-self .seat-card-top .seat-chat-bubble',
+    );
+    expect(selfBubble).not.toBeNull();
+    expect(selfBubble!.textContent).toBe('よろしく！');
+    expect(selfBubble!.classList.contains('is-bubble-enter')).toBe(true);
+    root.querySelector<HTMLButtonElement>('.table-modal-close-btn')!.click();
+
+    // 他プレイヤー(ゲスト花子)がチャット送信 → 該当プレイヤーのアイコンから吹き出し出現
+    connHandlers.data?.forEach((cb) =>
+      cb({ kind: 'CHAT', text: 'お手柔らかに！' }),
+    );
+    const guestBubble = Array.from(
+      root.querySelectorAll('.seat-card-top .seat-chat-bubble'),
+    ).find((el) => el.textContent === 'お手柔らかに！');
+    expect(guestBubble).not.toBeNull();
+    expect(guestBubble!.classList.contains('is-bubble-enter')).toBe(true);
+
+    // 同じ吹き出しの再描画時（例: チャットを開いて未読クリアで再render）は再アニメしない
+    root.querySelector<HTMLButtonElement>('.table-chrome-chat')!.click();
+    const guestBubbleAfter = Array.from(
+      root.querySelectorAll('.seat-card-top .seat-chat-bubble'),
+    ).find((el) => el.textContent === 'お手柔らかに！');
+    expect(guestBubbleAfter).not.toBeNull();
+    expect(guestBubbleAfter!.classList.contains('is-bubble-enter')).toBe(false);
+
+    // 約4.2秒経過すると吹き出しが自動で消える
+    await vi.advanceTimersByTimeAsync(4300);
+    expect(root.querySelectorAll('.seat-card-top .seat-chat-bubble')).toHaveLength(
+      0,
+    );
+  });
+
+  it('開始前の待機ルームでもチャットでき、メッセージ受信時は画面上部に一定時間表示される', async () => {
+    vi.useFakeTimers();
+    localStorage.clear();
+    fakePeerRegistry.clear();
+
+    bootApp();
+    await loadMain();
+
+    const root = document.getElementById('app') as HTMLElement;
+    expect(clickByText(root, 'button', '部屋を作成')).toBe(true);
+    await vi.advanceTimersByTimeAsync(20);
+
+    // ロビー画面にチャットボタンがある
+    const lobbyChatBtn = root.querySelector<HTMLButtonElement>(
+      '.waiting-room-chat-btn',
+    );
+    expect(lobbyChatBtn).not.toBeNull();
+
+    const roomCode = root
+      .querySelector('.room-code-value')!
+      .textContent!.trim();
+    const { roomCodeToPeerId } = await import('../../net/protocol');
+    const hostPeer = fakePeerRegistry.get(roomCodeToPeerId(roomCode));
+
+    const connHandlers: Record<string, Array<(...args: unknown[]) => void>> = {};
+    const remoteConn = {
+      peer: 'remote-lobby-1',
+      open: true,
+      on(ev: string, cb: (...args: unknown[]) => void) {
+        connHandlers[ev] = connHandlers[ev] ?? [];
+        connHandlers[ev]!.push(cb);
+      },
+      send() {},
+      close() {},
+    };
+    hostPeer!.emit('connection', remoteConn);
+    connHandlers.open?.forEach((cb) => cb());
+    connHandlers.data?.forEach((cb) =>
+      cb({ kind: 'JOIN', playerName: '待機さん' }),
+    );
+
+    // 待機室で相手がメッセージを送ると画面上部に一定時間トースト表示＆未読バッジが出る
+    connHandlers.data?.forEach((cb) =>
+      cb({ kind: 'CHAT', text: '少し待っててね！' }),
+    );
+    const toast = root.querySelector<HTMLButtonElement>(
+      '.lobby-chat-toast-layer .lobby-chat-toast',
+    );
+    expect(toast).not.toBeNull();
+    expect(toast!.textContent).toContain('待機さん');
+    expect(toast!.textContent).toContain('少し待っててね！');
+    expect(
+      root.querySelector('.waiting-room-chat-btn .chat-unread-badge')?.textContent,
+    ).toBe('1');
+
+    // 一定時間（約4.2秒）後に上部の通知が自動で消える
+    await vi.advanceTimersByTimeAsync(4300);
+    expect(root.querySelector('.lobby-chat-toast')).toBeNull();
+
+    // トーストをクリックすると未読が消えてチャットが開くことも確認
+    connHandlers.data?.forEach((cb) =>
+      cb({ kind: 'CHAT', text: '準備OK！' }),
+    );
+    const toast2 = root.querySelector<HTMLButtonElement>(
+      '.lobby-chat-toast-layer .lobby-chat-toast',
+    );
+    expect(toast2).not.toBeNull();
+    toast2!.click();
+    expect(root.querySelector('.table-chat-modal')).not.toBeNull();
+    expect(root.querySelector('.waiting-room-chat-btn .chat-unread-badge')).toBeNull();
+
+    // チャットを開いたまま送信もでき、送信内容が履歴と上部トーストに反映される
+    const input = root.querySelector<HTMLInputElement>('.chat-input')!;
+    input.value = '大丈夫だよ〜';
+    input.dispatchEvent(new Event('input'));
+    root
+      .querySelector<HTMLFormElement>('.chat-input-row')!
+      .dispatchEvent(new Event('submit', { cancelable: true }));
+
+    const listText = root.querySelector('.chat-messages-list')?.textContent ?? '';
+    expect(listText).toContain('少し待っててね！');
+    expect(listText).toContain('準備OK！');
+    expect(listText).toContain('大丈夫だよ〜');
+    // 自分が送った時も上部トーストが一時表示される
+    expect(root.querySelector('.lobby-chat-toast')?.textContent).toContain(
+      '大丈夫だよ〜',
+    );
   });
 });

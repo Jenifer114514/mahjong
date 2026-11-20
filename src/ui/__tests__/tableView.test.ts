@@ -1208,5 +1208,125 @@ describe('renderGameTable（横画面レイアウト）', () => {
 
     playAgariSpy.mockRestore();
   });
+
+  it('チャット吹き出しが各席アイコン(.seat-card-top)内に出現し、.seat-header の子構造契約を保つ', () => {
+    const baseView = toStateView(state4, 'p0', 0);
+    const root = document.createElement('div');
+    renderGameTable(root, baseView, noopHandlers, {
+      riichiSelectingMode: false,
+      autoTsumogiriEnabled: true,
+      chatBubbles: {
+        p0: {
+          messageId: 'm0',
+          senderId: 'p0',
+          senderName: '自分',
+          text: 'よろしく！',
+          animate: true,
+        },
+        p1: {
+          messageId: 'm1',
+          senderId: 'p1',
+          senderName: '下家',
+          text: 'ポン！',
+          animate: false,
+        },
+        p2: {
+          messageId: 'm2',
+          senderId: 'p2',
+          senderName: '対面',
+          text: 'リーチだ',
+          animate: true,
+        },
+        p3: {
+          messageId: 'm3',
+          senderId: 'p3',
+          senderName: '上家',
+          text: 'お見事！',
+          animate: true,
+        },
+      },
+    });
+
+    const expectedBySide: Array<{
+      side: string;
+      text: string;
+      isSelf: boolean;
+      animate: boolean;
+    }> = [
+      { side: 'self', text: 'よろしく！', isSelf: true, animate: true },
+      { side: 'right', text: 'ポン！', isSelf: false, animate: false },
+      { side: 'top', text: 'リーチだ', isSelf: false, animate: true },
+      { side: 'left', text: 'お見事！', isSelf: false, animate: true },
+    ];
+
+    for (const item of expectedBySide) {
+      const header = root.querySelector(`.seat-orient-${item.side} > .seat-header`)!;
+      expect(header).not.toBeNull();
+      expect(header.classList.contains('has-chat-bubble')).toBe(true);
+
+      // .seat-header の直下の子順 [.seat-card-top, .seat-card-info] が維持されている
+      const headerChildren = Array.from(header.children);
+      expect(headerChildren[0]!.classList.contains('seat-card-top')).toBe(true);
+      expect(headerChildren[1]!.classList.contains('seat-card-info')).toBe(true);
+
+      const cardTop = headerChildren[0]!;
+      expect(cardTop.querySelector('.seat-avatar')).not.toBeNull();
+      const bubble = cardTop.querySelector('.seat-chat-bubble');
+      expect(bubble).not.toBeNull();
+      expect(bubble!.textContent).toBe(item.text);
+      expect(bubble!.classList.contains('is-self')).toBe(item.isSelf);
+      expect(bubble!.classList.contains('is-bubble-enter')).toBe(item.animate);
+    }
+  });
+
+  it('他家の河でもリーチ牌の有無に応じて .has-riichi-tile クラスが付与され、6枚折り返し整列が保たれる', () => {
+    const baseView = toStateView(state4, 'p0', 0);
+    const viewWithRiichi: StateView = {
+      ...baseView,
+      players: baseView.players.map((p, idx) => {
+        if (idx === 1) {
+          return {
+            ...p,
+            discards: [
+              {
+                tile: { id: 'd1-0', kind: '1m', isRed: false },
+                isTsumogiri: false,
+                isRiichiDeclaration: false,
+              },
+              {
+                tile: { id: 'd1-1', kind: '9p', isRed: false },
+                isTsumogiri: false,
+                isRiichiDeclaration: true,
+              },
+            ],
+          };
+        }
+        if (idx === 2) {
+          return {
+            ...p,
+            discards: [
+              {
+                tile: { id: 'd2-0', kind: '2s', isRed: false },
+                isTsumogiri: false,
+                isRiichiDeclaration: false,
+              },
+            ],
+          };
+        }
+        return p;
+      }),
+    };
+
+    const root = document.createElement('div');
+    renderGameTable(root, viewWithRiichi, noopHandlers);
+
+    const rightRiver = root.querySelector('.river-right .discard-river')!;
+    const topRiver = root.querySelector('.river-top .discard-river')!;
+    expect(rightRiver.classList.contains('has-riichi-tile')).toBe(true);
+    expect(rightRiver.querySelector('.mj-tile-riichi')).not.toBeNull();
+    expect(topRiver.classList.contains('has-riichi-tile')).toBe(false);
+  });
 });
+
+
 

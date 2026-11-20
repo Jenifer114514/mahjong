@@ -42,6 +42,7 @@ import {
   renderGameTable,
   type DiscardOriginSnapshot,
   type RoundEndStep,
+  type SeatChatBubble,
 } from './ui/tableView';
 import { soundEngine } from './ui/sound';
 import { prewarmTileSpriteSheet, waitForTileFonts } from './ui/tileTexture';
@@ -67,9 +68,23 @@ interface WakeLockSentinelLike {
   addEventListener?: (type: 'release', listener: () => void) => void;
 }
 
+const CHAT_BUBBLE_DURATION_MS = 4200;
+const LOBBY_CHAT_TOAST_DURATION_MS = 4200;
+
+interface ActiveChatBubbleEntry {
+  message: ChatMessage;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+interface LobbyChatToastEntry {
+  message: ChatMessage;
+  timer: ReturnType<typeof setTimeout>;
+}
+
 class MahjongApp {
   private readonly root: HTMLElement;
   private readonly mainLayer: HTMLElement;
+  private readonly chatToastLayer: HTMLElement;
   private readonly floatingLayer: HTMLElement;
   private activeSession: Session | null = null;
   private currentView: StateView | null = null;
@@ -89,6 +104,9 @@ class MahjongApp {
   private chatMessages: ChatMessage[] = [];
   private unreadChatCount = 0;
   private chatDraft = '';
+  private chatBubbles = new Map<string, ActiveChatBubbleEntry>();
+  private animatedBubbleIds = new Set<string>();
+  private lobbyChatToast: LobbyChatToastEntry | null = null;
   private fullscreenError: string | null = null;
   private autoTsumogiriEnabled = true;
   private autoAgariEnabled = false;
@@ -174,10 +192,12 @@ class MahjongApp {
     this.root = root;
     this.mainLayer = document.createElement('div');
     this.mainLayer.className = 'app-main-layer';
+    this.chatToastLayer = document.createElement('div');
+    this.chatToastLayer.className = 'lobby-chat-toast-layer';
     this.floatingLayer = document.createElement('div');
     this.floatingLayer.className = 'app-floating-layer';
     this.root.innerHTML = '';
-    this.root.append(this.mainLayer, this.floatingLayer);
+    this.root.append(this.mainLayer, this.chatToastLayer, this.floatingLayer);
 
     const params = new URLSearchParams(window.location.search);
     const roomFromUrl = params.get('room') ?? '';
@@ -703,6 +723,17 @@ class MahjongApp {
       this.roundEndStep = 'details';
     }
     this.currentView = view;
+    if (prevView?.phase === 'lobby' && view.phase !== 'lobby') {
+      this.clearLobbyChatToast();
+    } else if (
+      prevView &&
+      prevView.phase !== 'lobby' &&
+      view.phase === 'lobby'
+    ) {
+      this.clearChatBubbles();
+      this.settingsOpen = false;
+      this.renderFloating();
+    }
     if (
       view.phase === 'awaiting_responses' &&
       view.myCallOptions !== null &&
@@ -1016,6 +1047,7 @@ class MahjongApp {
     this.chatMessages = [];
     this.unreadChatCount = 0;
     this.chatDraft = '';
+    this.clearChatOverlays();
     this.fullscreenError = null;
     this.landscapeLockMessage = null;
     this.hostAway = false;
@@ -1027,9 +1059,135 @@ class MahjongApp {
     this.activeSession = null;
   }
 
+  private clearChatBubbles(): void {
+    for (const entry of this.chatBubbles.values()) {
+      clearTimeout(entry.timer);
+    }
+    this.chatBubbles.clear();
+    this.animatedBubbleIds.clear();
+  }
+
+  private clearLobbyChatToast(): void {
+    if (this.lobbyChatToast) {
+      clearTimeout(this.lobbyChatToast.timer);
+      this.lobbyChatToast = null;
+    }
+    this.renderChatToast();
+  }
+
+  private clearChatOverlays(): void {
+    this.clearChatBubbles();
+    this.clearLobbyChatToast();
+  }
+
+  private showSeatChatBubble(message: ChatMessage): void {
+    const existing = this.chatBubbles.get(message.senderId);
+    if (existing) {
+      clearTimeout(existing.timer);
+    }
+    const timer = setTimeout(() => {
+      const current = this.chatBubbles.get(message.senderId);
+      if (current && current.message.id === message.id) {
+        this.chatBubbles.delete(message.senderId);
+        if (this.currentView && this.currentView.phase !== 'lobby') {
+          this.render();
+        }
+      }
+    }, CHAT_BUBBLE_DURATION_MS);
+    this.chatBubbles.set(message.senderId, { message, timer });
+  }
+
+  private showLobbyChatToast(message: ChatMessage): void {
+    if (this.lobbyChatToast) {
+      clearTimeout(this.lobbyChatToast.timer);
+    }
+    const timer = setTimeout(() => {
+      if (this.lobbyChatToast?.message.id === message.id) {
+        this.lobbyChatToast = null;
+        this.renderChatToast();
+      }
+    }, LOBBY_CHAT_TOAST_DURATION_MS);
+    this.lobbyChatToast = { message, timer };
+    this.renderChatToast();
+  }
+
+  private buildActiveChatBubbles(): Record<string, SeatChatBubble> | undefined {
+    if (this.chatBubbles.size === 0) return undefined;
+    const record: Record<string, SeatChatBubble> = {};
+    for (const [senderId, entry] of this.chatBubbles.entries()) {
+      const animate = !this.animatedBubbleIds.has(entry.message.id);
+      this.animatedBubbleIds.add(entry.message.id);
+      record[senderId] = {
+        messageId: entry.message.id,
+        senderId,
+        senderName: entry.message.senderName,
+        text: entry.message.text,
+        animate,
+      };
+    }
+    return record;
+  }
+
+  private renderChatToast(): void {
+    this.chatToastLayer.innerHTML = '';
+    if (!this.lobbyChatToast || !this.currentView) return;
+
+    const { message } = this.lobbyChatToast;
+    const toast = document.createElement('button');
+    toast.type = 'button';
+    toast.className = 'lobby-chat-toast';
+    toast.setAttribute('role', 'status');
+    toast.setAttribute(
+      'aria-label',
+      `チャット ${message.senderName}: ${message.text}`,
+    );
+
+    const tag = document.createElement('span');
+    tag.className = 'lobby-chat-toast-tag';
+    tag.textContent = 'チャット';
+
+    const sender = document.createElement('span');
+    sender.className = 'lobby-chat-toast-sender';
+    sender.textContent = message.senderName;
+
+    const text = document.createElement('span');
+    text.className = 'lobby-chat-toast-text';
+    text.textContent = message.text;
+
+    toast.append(tag, sender, text);
+    toast.addEventListener('click', () => {
+      this.chatOpen = true;
+      this.settingsOpen = false;
+      this.clearLobbyChatToast();
+      if (this.unreadChatCount > 0) {
+        this.unreadChatCount = 0;
+        this.render();
+      }
+      this.renderFloating();
+    });
+    this.chatToastLayer.appendChild(toast);
+  }
+
   private handleIncomingChat(message: ChatMessage): void {
     if (this.chatMessages.some((m) => m.id === message.id)) return;
     this.chatMessages = [...this.chatMessages.slice(-49), message];
+
+    const view = this.currentView;
+    const isLobby = view?.phase === 'lobby';
+    const isInGame = Boolean(view && view.phase !== 'lobby');
+    const isSeatedPlayer = Boolean(
+      view?.players.some((p) => p.playerId === message.senderId),
+    );
+
+    if (isLobby) {
+      this.showLobbyChatToast(message);
+    } else if (isInGame && isSeatedPlayer) {
+      this.showSeatChatBubble(message);
+    } else if (isInGame) {
+      // 卓上に席を持たない観戦者の発言は上部のチャット通知に出す
+      this.showLobbyChatToast(message);
+    }
+
     if (this.chatOpen) {
       this.unreadChatCount = 0;
       const list = this.floatingLayer.querySelector<HTMLElement>('.chat-messages-list');
@@ -1037,6 +1195,9 @@ class MahjongApp {
         this.populateChatMessagesList(list);
       } else {
         this.renderFloating();
+      }
+      if (isInGame && isSeatedPlayer) {
+        this.render();
       }
       return;
     }
@@ -1397,6 +1558,15 @@ class MahjongApp {
       onRefreshRoomStatuses: () => {
         this.roomWatcher?.refreshNow();
       },
+      onOpenChat: () => {
+        this.chatOpen = !this.chatOpen;
+        this.settingsOpen = false;
+        if (this.chatOpen && this.unreadChatCount > 0) {
+          this.unreadChatCount = 0;
+          this.render();
+        }
+        this.renderFloating();
+      },
     };
 
     if (!view) {
@@ -1411,6 +1581,7 @@ class MahjongApp {
       this.lastRenderedGameView = null;
       renderWaitingRoom(content, view, lobbyHandlers, {
         landscapeLock: this.buildLandscapeLockUiState(),
+        unreadChatCount: this.unreadChatCount,
       });
     } else {
       renderGameTable(
@@ -1539,6 +1710,7 @@ class MahjongApp {
           prevView: this.lastRenderedGameView,
           prevPerspectiveSeatIndex: this.lastRenderedPerspectiveSeatIndex,
           discardOriginSnapshot,
+          chatBubbles: this.buildActiveChatBubbles(),
         },
       );
       this.lastRenderedGameView = view;
@@ -1554,14 +1726,18 @@ class MahjongApp {
 
   private renderFloating(): void {
     this.floatingLayer.innerHTML = '';
-    const inGame =
-      this.currentView !== null && this.currentView.phase !== 'lobby';
-    if (!inGame) return;
+    if (!this.currentView) return;
 
-    if (this.settingsOpen) {
+    const inGame = this.currentView.phase !== 'lobby';
+    if (this.settingsOpen && inGame) {
       this.floatingLayer.appendChild(this.renderSettingsModal());
     } else if (this.chatOpen) {
-      this.floatingLayer.appendChild(this.renderChatModal());
+      const modal = this.renderChatModal();
+      this.floatingLayer.appendChild(modal);
+      const list = modal.querySelector<HTMLElement>('.chat-messages-list');
+      if (list) {
+        this.scrollChatMessagesToBottom(list);
+      }
     }
   }
 
@@ -1825,7 +2001,21 @@ class MahjongApp {
       item.append(sender, text);
       list.appendChild(item);
     }
+    this.scrollChatMessagesToBottom(list);
+  }
+
+  private scrollChatMessagesToBottom(list: HTMLElement): void {
     list.scrollTop = list.scrollHeight;
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => {
+        if (!list.isConnected) return;
+        list.scrollTop = list.scrollHeight;
+        requestAnimationFrame(() => {
+          if (!list.isConnected) return;
+          list.scrollTop = list.scrollHeight;
+        });
+      });
+    }
   }
 }
 

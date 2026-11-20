@@ -43,6 +43,8 @@ export interface LobbyHandlers {
   onTransferHostAndLeave?: () => void;
   /** 常設ルームの参加状況を手動で再取得する */
   onRefreshRoomStatuses?: () => void;
+  /** 待機ロビーでチャットを開く */
+  onOpenChat?: () => void;
 }
 
 export interface LandscapeLockUiState {
@@ -63,6 +65,7 @@ export interface LobbyEntryOptions {
 
 export interface WaitingRoomOptions {
   landscapeLock?: LandscapeLockUiState;
+  unreadChatCount?: number;
 }
 
 export interface LobbyFormState {
@@ -635,7 +638,10 @@ export function renderWaitingRoom(
   const permRoom = getPermanentRoom(view.roomCode);
 
   const card = document.createElement('div');
-  card.className = 'card';
+  card.className = 'card waiting-room-card';
+
+  const headerRow = document.createElement('div');
+  headerRow.className = 'waiting-room-header';
 
   const title = document.createElement('h2');
   title.textContent = isLocalGame
@@ -647,7 +653,28 @@ export function renderWaitingRoom(
         : isSpectator
           ? '対局ロビー（観戦待機中）'
           : '対局ロビー（待機中）';
-  card.appendChild(title);
+  headerRow.appendChild(title);
+
+  if (handlers.onOpenChat) {
+    const unread = options.unreadChatCount ?? 0;
+    const chatBtn = document.createElement('button');
+    chatBtn.type = 'button';
+    chatBtn.className = `btn btn-secondary waiting-room-chat-btn${
+      unread > 0 ? ' has-unread' : ''
+    }`;
+    chatBtn.textContent = 'チャット';
+    chatBtn.title = 'ロビーチャットを開く';
+    if (unread > 0) {
+      const badge = document.createElement('span');
+      badge.className = 'chat-unread-badge';
+      badge.textContent = unread > 9 ? '9+' : String(unread);
+      chatBtn.appendChild(badge);
+    }
+    chatBtn.addEventListener('click', () => handlers.onOpenChat?.());
+    headerRow.appendChild(chatBtn);
+  }
+
+  card.appendChild(headerRow);
 
   if (isSpectator) {
     const specNotice = document.createElement('div');
