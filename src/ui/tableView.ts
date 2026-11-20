@@ -84,6 +84,14 @@ export interface DiscardOriginSnapshot {
   seatHands: Partial<Record<SeatSide, SeatHandOriginSnapshot>>;
 }
 
+export interface SeatChatBubble {
+  messageId: string;
+  senderId: string;
+  senderName: string;
+  text: string;
+  animate?: boolean;
+}
+
 export interface TableUiState {
   riichiSelectingMode: boolean;
   autoTsumogiriEnabled: boolean;
@@ -97,6 +105,8 @@ export interface TableUiState {
   prevView?: StateView | null;
   prevPerspectiveSeatIndex?: number;
   discardOriginSnapshot?: DiscardOriginSnapshot | null;
+  /** 対局中の各プレイヤーアイコンから出すチャット吹き出し（playerId キー） */
+  chatBubbles?: Record<string, SeatChatBubble>;
 }
 
 const DEFAULT_TABLE_UI_STATE: TableUiState = {
@@ -1062,6 +1072,7 @@ export function renderGameTable(
         rankByPlayerId.get(topPlayer.playerId),
         diff.newlyMeldedSides.get('top'),
         diff.newlyAddedKitaSides.has('top'),
+        uiState.chatBubbles?.[topPlayer.playerId],
       ),
     );
   } else {
@@ -1079,6 +1090,7 @@ export function renderGameTable(
         rankByPlayerId.get(leftPlayer.playerId),
         diff.newlyMeldedSides.get('left'),
         diff.newlyAddedKitaSides.has('left'),
+        uiState.chatBubbles?.[leftPlayer.playerId],
       ),
     );
   } else {
@@ -1098,6 +1110,7 @@ export function renderGameTable(
         rankByPlayerId.get(rightPlayer.playerId),
         diff.newlyMeldedSides.get('right'),
         diff.newlyAddedKitaSides.has('right'),
+        uiState.chatBubbles?.[rightPlayer.playerId],
       ),
     );
   } else {
@@ -1114,6 +1127,7 @@ export function renderGameTable(
             rankByPlayerId.get(selfPlayer.playerId),
             diff.newlyMeldedSides.get('self'),
             diff.newlyAddedKitaSides.has('self'),
+            uiState.chatBubbles?.[selfPlayer.playerId],
           )
         : renderSelfSeat(
             perspectiveView,
@@ -2280,15 +2294,35 @@ function renderSeatHeader(
   isSelfFuriten = false,
   rank?: number,
   isSelfTurnGlow = false,
+  chatBubble?: SeatChatBubble,
 ): HTMLElement {
   const header = document.createElement('div');
   header.className = `seat-header${player.isCurrentTurn ? ' is-turn' : ''}${
     isSelf && isSelfTurnGlow ? ' is-self-turn' : ''
-  }`;
+  }${chatBubble ? ' has-chat-bubble' : ''}`;
 
   const cardTop = document.createElement('div');
   cardTop.className = 'seat-card-top';
   cardTop.appendChild(createSeatAvatar(player, isSelf));
+  if (chatBubble) {
+    const bubble = document.createElement('div');
+    bubble.className = `seat-chat-bubble${chatBubble.animate ? ' is-bubble-enter' : ''}${
+      isSelf ? ' is-self' : ''
+    }`;
+    bubble.dataset.bubbleId = chatBubble.messageId;
+    bubble.dataset.senderId = chatBubble.senderId;
+    bubble.setAttribute('role', 'status');
+    bubble.setAttribute(
+      'aria-label',
+      `${chatBubble.senderName}: ${chatBubble.text}`,
+    );
+
+    const textEl = document.createElement('span');
+    textEl.className = 'seat-chat-bubble-text';
+    textEl.textContent = chatBubble.text;
+    bubble.appendChild(textEl);
+    cardTop.appendChild(bubble);
+  }
 
   const info = document.createElement('div');
   info.className = 'seat-card-info';
@@ -2384,9 +2418,12 @@ function renderDiscardRiver(
   }
 
   const river = document.createElement('div');
+  const hasRiichiTile = player.discards.some((entry) =>
+    Boolean(entry.isRiichiDeclaration),
+  );
   river.className = `discard-river river-${side} river-rows-6${
     options.compact ? ' is-compact' : ''
-  }`;
+  }${hasRiichiTile ? ' has-riichi-tile' : ''}`;
 
   const limit = options.limit ?? player.discards.length;
   const start =
@@ -2458,6 +2495,7 @@ function renderOpponentSeat(
   rank?: number,
   newlyMeldedIndices?: Set<number>,
   newlyAddedKita = false,
+  chatBubble?: SeatChatBubble,
 ): HTMLElement {
   const box = document.createElement('div');
   box.className = `seat-box ${SEAT_CLASS[side]} seat-orient-${side}${
@@ -2466,7 +2504,9 @@ function renderOpponentSeat(
   box.dataset.seat = side;
 
   // 席情報（名前・自風・持ち点）は卓の外周側に置く
-  box.appendChild(renderSeatHeader(player, false, false, rank, false));
+  box.appendChild(
+    renderSeatHeader(player, false, false, rank, false, chatBubble),
+  );
 
   // 外周（手牌）→ 副露 → 中央（河）の順に並べる入れ物
   const body = document.createElement('div');
@@ -2832,7 +2872,14 @@ function renderSelfSeat(
   box.dataset.seat = 'self';
 
   box.appendChild(
-    renderSeatHeader(player, true, view.isFuriten, rank, canDiscardNow),
+    renderSeatHeader(
+      player,
+      true,
+      view.isFuriten,
+      rank,
+      canDiscardNow,
+      uiState.chatBubbles?.[player.playerId],
+    ),
   );
 
   const canRiichiIds = view.mySelfActions?.canRiichiTileIds ?? [];
@@ -3013,6 +3060,7 @@ function renderSpectatedBottomSeat(
   rank?: number,
   newlyMeldedIndices?: Set<number>,
   newlyAddedKita = false,
+  chatBubble?: SeatChatBubble,
 ): HTMLElement {
   const box = document.createElement('div');
   box.className = `seat-box seat-self seat-orient-self is-spectated${
@@ -3020,7 +3068,9 @@ function renderSpectatedBottomSeat(
   }`;
   box.dataset.seat = 'self';
 
-  box.appendChild(renderSeatHeader(player, false, false, rank, false));
+  box.appendChild(
+    renderSeatHeader(player, false, false, rank, false, chatBubble),
+  );
 
   const controls = document.createElement('div');
   controls.className = 'self-controls';

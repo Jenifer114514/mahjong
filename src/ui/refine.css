@@ -40,6 +40,30 @@
     0 2px 0 var(--tile-back-c),
     0 3px 0 var(--tile-back-d),
     0 4px 4px -1px rgba(0, 0, 0, 0.55);
+
+  --tile-3d-sm-180:
+    inset 0 -1px 0 rgba(255, 255, 255, 1),
+    inset 0 1px 1px rgba(120, 100, 70, 0.14),
+    0 -1px 0 var(--tile-back-a),
+    0 -2px 0 var(--tile-back-c),
+    0 -3px 0 var(--tile-back-d),
+    0 -4px 4px -1px rgba(0, 0, 0, 0.55);
+
+  --tile-3d-sm-90:
+    inset 1px 0 0 rgba(255, 255, 255, 1),
+    inset -1px 0 1px rgba(120, 100, 70, 0.14),
+    1px 0 0 var(--tile-back-a),
+    2px 0 0 var(--tile-back-c),
+    3px 0 0 var(--tile-back-d),
+    4px 0 4px -1px rgba(0, 0, 0, 0.55);
+
+  --tile-3d-sm-neg90:
+    inset -1px 0 0 rgba(255, 255, 255, 1),
+    inset 1px 0 1px rgba(120, 100, 70, 0.14),
+    -1px 0 0 var(--tile-back-a),
+    -2px 0 0 var(--tile-back-c),
+    -3px 0 0 var(--tile-back-d),
+    -4px 0 4px -1px rgba(0, 0, 0, 0.55);
 }
 
 /* ---------- 牌（表） ---------- */
@@ -85,7 +109,78 @@
 .table-felt.is-landscape .dora-panel-tiles > .mj-tile,
 .table-felt.is-landscape .dora-panel-tiles > .mj-tile.mj-tile-sm {
   border-radius: 3px;
-  box-shadow: var(--tile-3d-sm);
+  --tile-shadow-current: var(--tile-3d-sm);
+  box-shadow: var(--tile-shadow-current);
+}
+
+/* 卓上の回転した河・副露の牌でも、常に「手前（画面下）」に厚み・影・左上の光沢を揃える */
+.table-felt.is-landscape .river-top .discard-river > .mj-tile:not(.mj-tile-riichi),
+.table-felt.is-landscape .river-right .discard-river > .mj-tile.mj-tile-riichi,
+.table-felt.is-landscape .meld-orient-top .meld-tiles > .mj-tile:not(.mj-tile-called):not(.mj-tile-back),
+.table-felt.is-landscape .meld-orient-right .meld-tiles > .mj-tile.mj-tile-called:not(.mj-tile-back) {
+  --tile-shadow-current: var(--tile-3d-sm-180);
+  border-bottom-color: var(--tile-hairline);
+  border-top-color: var(--tile-ivory-side);
+}
+
+.table-felt.is-landscape .river-top .discard-river > .mj-tile:not(.mj-tile-riichi)::after,
+.table-felt.is-landscape .river-right .discard-river > .mj-tile.mj-tile-riichi::after,
+.table-felt.is-landscape .meld-orient-top .meld-tiles > .mj-tile:not(.mj-tile-called):not(.mj-tile-back)::after,
+.table-felt.is-landscape .meld-orient-right .meld-tiles > .mj-tile.mj-tile-called:not(.mj-tile-back)::after {
+  background:
+    linear-gradient(
+      342deg,
+      rgba(255, 255, 255, 0.6) 0%,
+      rgba(255, 255, 255, 0.12) 26%,
+      rgba(255, 255, 255, 0) 52%,
+      rgba(96, 76, 44, 0.09) 100%
+    );
+}
+
+.table-felt.is-landscape .river-left .discard-river > .mj-tile:not(.mj-tile-riichi),
+.table-felt.is-landscape .river-top .discard-river > .mj-tile.mj-tile-riichi,
+.table-felt.is-landscape .meld-orient-left .meld-tiles > .mj-tile:not(.mj-tile-called):not(.mj-tile-back),
+.table-felt.is-landscape .meld-orient-top .meld-tiles > .mj-tile.mj-tile-called:not(.mj-tile-back) {
+  --tile-shadow-current: var(--tile-3d-sm-90);
+  border-bottom-color: var(--tile-hairline);
+  border-right-color: var(--tile-ivory-side);
+}
+
+.table-felt.is-landscape .river-left .discard-river > .mj-tile:not(.mj-tile-riichi)::after,
+.table-felt.is-landscape .river-top .discard-river > .mj-tile.mj-tile-riichi::after,
+.table-felt.is-landscape .meld-orient-left .meld-tiles > .mj-tile:not(.mj-tile-called):not(.mj-tile-back)::after,
+.table-felt.is-landscape .meld-orient-top .meld-tiles > .mj-tile.mj-tile-called:not(.mj-tile-back)::after {
+  background:
+    linear-gradient(
+      72deg,
+      rgba(255, 255, 255, 0.6) 0%,
+      rgba(255, 255, 255, 0.12) 26%,
+      rgba(255, 255, 255, 0) 52%,
+      rgba(96, 76, 44, 0.09) 100%
+    );
+}
+
+.table-felt.is-landscape .river-right .discard-river > .mj-tile:not(.mj-tile-riichi),
+.table-felt.is-landscape .river-self .discard-river > .mj-tile.mj-tile-riichi,
+.table-felt.is-landscape .meld-orient-right .meld-tiles > .mj-tile:not(.mj-tile-called):not(.mj-tile-back),
+.table-felt.is-landscape .meld-orient-self .meld-tiles > .mj-tile.mj-tile-called:not(.mj-tile-back) {
+  --tile-shadow-current: var(--tile-3d-sm-neg90);
+  border-bottom-color: var(--tile-hairline);
+  border-left-color: var(--tile-ivory-side);
+}
+
+.table-felt.is-landscape .river-right .discard-river > .mj-tile:not(.mj-tile-riichi)::after,
+.table-felt.is-landscape .river-self .discard-river > .mj-tile.mj-tile-riichi::after,
+.table-felt.is-landscape .meld-orient-right .meld-tiles > .mj-tile:not(.mj-tile-called):not(.mj-tile-back)::after,
+.table-felt.is-landscape .meld-orient-self .meld-tiles > .mj-tile.mj-tile-called:not(.mj-tile-back)::after {
+  background:
+    linear-gradient(
+      252deg,
+      rgba(255, 255, 255, 0.6) 0%,
+      rgba(255, 255, 255, 0.12) 26%,
+      rgba(255, 255, 255, 0) 52%,
+      rgba(96, 76, 44, 0.09) 100%
+    );
 }
 
 .table-felt.is-landscape .hand-area > .mj-tile {
@@ -103,14 +198,14 @@
   box-shadow:
     0 0 0 1.5px #63b3ff,
     0 0 10px rgba(99, 179, 255, 0.75),
-    var(--tile-3d-sm) !important;
+    var(--tile-shadow-current, var(--tile-3d-sm)) !important;
 }
 
 .mj-tile-called {
   outline: none;
   box-shadow:
     0 0 0 1.5px var(--accent-gold),
-    var(--tile-3d-sm) !important;
+    var(--tile-shadow-current, var(--tile-3d-sm)) !important;
 }
 
 .mj-tile-tsumogiri {
@@ -709,6 +804,8 @@
   .seat-header.is-turn.is-self-turn,
   .round-start-banner,
   .round-start-banner.is-leaving,
+  .seat-chat-bubble.is-bubble-enter,
+  .lobby-chat-toast,
   .overlay-backdrop-modal.is-agari-flash,
   .overlay-backdrop-modal.is-agari-flash > .round-end-panel {
     animation: none;

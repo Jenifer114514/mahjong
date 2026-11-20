@@ -605,4 +605,52 @@ describe('renderWaitingRoom（CPU の後入れ）', () => {
       .click();
     expect(onRefreshRoomStatuses).toHaveBeenCalledTimes(1);
   });
+
+  it('待機ロビーにチャットボタンと未読バッジが表示され、クリックでハンドラが呼ばれる', () => {
+    const { session, latest } = lobbySession(0);
+    session.start();
+
+    const onOpenChat = vi.fn();
+    const root = document.createElement('div');
+    renderWaitingRoom(
+      root,
+      latest(),
+      {
+        onCreateRoom: () => {},
+        onJoinRoom: () => {},
+        onStartLocalGame: () => {},
+        onLeaveLobby: () => {},
+        onOpenChat,
+      },
+      { unreadChatCount: 3 },
+    );
+
+    const chatBtn = root.querySelector<HTMLButtonElement>('.waiting-room-chat-btn')!;
+    expect(chatBtn).not.toBeNull();
+    expect(chatBtn.classList.contains('has-unread')).toBe(true);
+    expect(chatBtn.querySelector('.chat-unread-badge')?.textContent).toBe('3');
+
+    chatBtn.click();
+    expect(onOpenChat).toHaveBeenCalledTimes(1);
+
+    // 10件以上なら 9+ 表記
+    renderWaitingRoom(
+      root,
+      latest(),
+      {
+        onCreateRoom: () => {},
+        onJoinRoom: () => {},
+        onStartLocalGame: () => {},
+        onLeaveLobby: () => {},
+        onOpenChat,
+      },
+      { unreadChatCount: 12 },
+    );
+    expect(
+      root.querySelector('.waiting-room-chat-btn .chat-unread-badge')?.textContent,
+    ).toBe('9+');
+
+    session.destroy();
+  });
 });
+
