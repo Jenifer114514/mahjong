@@ -105,6 +105,7 @@ const OPP_SCALE = 1.04;
 const RIVER_SCALE = 0.88;
 const WALL_SCALE = 0.8;
 const MELD_SCALE = 0.84;
+const KITA_SCALE = 0.9;
 
 const deg = (d: number): number => (d * Math.PI) / 180;
 
@@ -405,7 +406,10 @@ void main() {
   }
 
   vec3 lit = base * (0.46 + 0.62 * diff1 + 0.16 * diff2);
-  if (uUseAtlas > 0.5) {
+  if (uUseConsole > 0.5 && vZone > 1.5) {
+    // 中央デジタルコンソール天面は照明の暗化や白飛びスペキュラを抑えて文字コントラストを最大化
+    lit = base;
+  } else if (uUseAtlas > 0.5) {
     lit += vec3(0.24, 0.23, 0.21) * spec + vec3(0.11, 0.12, 0.15) * rim;
   } else if (vZone < 4.5) {
     lit += vec3(0.14) * spec;
@@ -953,8 +957,8 @@ export class Mahjong3DScene {
 
     this.atlas = createTileAtlas({ size: 2048 });
     this.consoleCanvas = document.createElement('canvas');
-    this.consoleCanvas.width = 512;
-    this.consoleCanvas.height = 512;
+    this.consoleCanvas.width = 1024;
+    this.consoleCanvas.height = 1024;
     this.consoleCtx = this.consoleCanvas.getContext('2d')!;
 
     this.initGlResources();
@@ -1004,6 +1008,17 @@ export class Mahjong3DScene {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    const consoleAniso = gl.getExtension('EXT_texture_filter_anisotropic');
+    if (consoleAniso) {
+      const maxAniso = gl.getParameter(
+        consoleAniso.MAX_TEXTURE_MAX_ANISOTROPY_EXT,
+      ) as number;
+      gl.texParameterf(
+        gl.TEXTURE_2D,
+        consoleAniso.TEXTURE_MAX_ANISOTROPY_EXT,
+        Math.min(8, maxAniso),
+      );
+    }
 
     gl.enable(gl.DEPTH_TEST);
     gl.enable(gl.CULL_FACE);
@@ -1472,54 +1487,102 @@ export class Mahjong3DScene {
   }
 
   // ==================================================
-  // 中央デジタルコンソール（512×512 Canvas2D → GPU）
+  // 中央デジタルコンソール（1024×1024 Canvas2D → GPU）
   // ==================================================
   private updateConsoleTexture(): void {
     if (!this.consoleDirty || !this.params) return;
     this.consoleDirty = false;
     const { view } = this.params;
     const ctx = this.consoleCtx;
-    const W = 512;
-    const H = 512;
+    const W = this.consoleCanvas.width;
+    const H = this.consoleCanvas.height;
 
-    ctx.fillStyle = '#0c1626';
+    ctx.fillStyle = '#070e1c';
     ctx.fillRect(0, 0, W, H);
 
     // 外枠
-    ctx.strokeStyle = '#334d73';
-    ctx.lineWidth = 6;
-    ctx.strokeRect(10, 10, W - 20, H - 20);
+    ctx.strokeStyle = '#3f6294';
+    ctx.lineWidth = 10;
+    ctx.strokeRect(14, 14, W - 28, H - 28);
 
     // 内枠パネル
-    const grad = ctx.createRadialGradient(256, 256, 10, 256, 256, 128);
-    grad.addColorStop(0, '#162845');
-    grad.addColorStop(1, '#091220');
+    const grad = ctx.createRadialGradient(512, 512, 24, 512, 512, 260);
+    grad.addColorStop(0, '#132542');
+    grad.addColorStop(1, '#060c17');
     ctx.fillStyle = grad;
-    drawRoundRectPath(ctx, 148, 148, 216, 216, 22);
+    drawRoundRectPath(ctx, 276, 276, 472, 472, 38);
     ctx.fill();
-    ctx.strokeStyle = 'rgba(240, 201, 92, 0.45)';
-    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(255, 217, 102, 0.72)';
+    ctx.lineWidth = 6;
     ctx.stroke();
+
+    const drawCrispText = (
+      text: string,
+      x: number,
+      y: number,
+      font: string,
+      fillStyle: string,
+      strokeWidth: number,
+      maxWidth?: number,
+    ) => {
+      ctx.font = font;
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = strokeWidth;
+      ctx.strokeStyle = '#02060f';
+      if (maxWidth !== undefined) {
+        ctx.strokeText(text, x, y, maxWidth);
+        ctx.fillStyle = fillStyle;
+        ctx.fillText(text, x, y, maxWidth);
+      } else {
+        ctx.strokeText(text, x, y);
+        ctx.fillStyle = fillStyle;
+        ctx.fillText(text, x, y);
+      }
+    };
 
     const round = view.round;
     if (round) {
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
 
-      ctx.fillStyle = '#f0c95c';
-      ctx.font = 'bold 44px "Noto Sans JP", "Hiragino Sans", sans-serif';
-      ctx.fillText(`${windToJa(round.roundWind)}${round.kyokuNumber}局`, 256, 208);
+      drawCrispText(
+        `${windToJa(round.roundWind)}${round.kyokuNumber}局`,
+        512,
+        352,
+        '900 84px "Noto Sans JP", "Hiragino Sans", sans-serif',
+        '#ffe373',
+        10,
+        420,
+      );
 
-      ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 54px "Inter", "Noto Sans JP", monospace';
-      ctx.fillText(`${round.remainingWallCount}`, 256, 266);
+      drawCrispText(
+        '残り牌',
+        512,
+        436,
+        '700 32px "Noto Sans JP", "Hiragino Sans", sans-serif',
+        '#b8d4ff',
+        6,
+      );
 
-      ctx.fillStyle = '#9bb2d4';
-      ctx.font = 'bold 20px "Noto Sans JP", sans-serif';
-      ctx.fillText(
-        `残牌 / ${round.honba}本場・供託${view.kyotakuCount}`,
-        256,
-        320,
+      drawCrispText(
+        `${round.remainingWallCount}`,
+        512,
+        530,
+        '900 124px "Inter", "Noto Sans JP", monospace',
+        '#ffffff',
+        12,
+      );
+
+      const metaText = `${round.honba}本場 ・ 供託${view.kyotakuCount}`;
+      const hasSticks = round.honba > 0 || view.kyotakuCount > 0;
+      drawCrispText(
+        metaText,
+        512,
+        648,
+        '800 42px "Noto Sans JP", "Hiragino Sans", sans-serif',
+        hasSticks ? '#ffe373' : '#e0edff',
+        8,
+        430,
       );
     }
 
@@ -1537,38 +1600,60 @@ export class Mahjong3DScene {
       ctx.rotate(rot);
 
       if (p.isCurrentTurn) {
-        ctx.fillStyle = 'rgba(240, 201, 92, 0.22)';
-        ctx.strokeStyle = '#ffd562';
+        ctx.fillStyle = 'rgba(246, 206, 86, 0.28)';
+        ctx.strokeStyle = '#ffe169';
+        ctx.lineWidth = 6;
+        drawRoundRectPath(ctx, -250, -68, 500, 136, 20);
+        ctx.fill();
+        ctx.stroke();
+      } else {
+        ctx.fillStyle = 'rgba(13, 25, 48, 0.72)';
+        ctx.strokeStyle = 'rgba(128, 166, 232, 0.34)';
         ctx.lineWidth = 3;
-        drawRoundRectPath(ctx, -130, -44, 260, 88, 12);
+        drawRoundRectPath(ctx, -250, -68, 500, 136, 20);
         ctx.fill();
         ctx.stroke();
       }
 
       if (p.seatWind) {
-        ctx.fillStyle = p.isDealer ? '#d4382c' : '#2a436e';
-        drawRoundRectPath(ctx, -114, -26, 46, 52, 8);
+        ctx.fillStyle = p.isDealer ? '#e03c2f' : '#2a5699';
+        drawRoundRectPath(ctx, -230, -48, 86, 96, 16);
         ctx.fill();
-        ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 30px "Noto Sans JP", sans-serif';
+        ctx.strokeStyle = p.isDealer ? '#ffd166' : 'rgba(190, 218, 255, 0.45)';
+        ctx.lineWidth = 3;
+        ctx.stroke();
+
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(windToJa(p.seatWind), -91, 1);
+        drawCrispText(
+          windToJa(p.seatWind),
+          -187,
+          2,
+          '900 58px "Noto Sans JP", "Hiragino Sans", sans-serif',
+          '#ffffff',
+          7,
+        );
       }
 
-      ctx.fillStyle = p.isCurrentTurn ? '#ffdf85' : '#eaf2ff';
-      ctx.font = 'bold 36px "Inter", "Noto Sans JP", monospace';
       ctx.textAlign = 'left';
       ctx.textBaseline = 'middle';
-      ctx.fillText(p.score.toLocaleString(), -54, 1);
+      drawCrispText(
+        p.score.toLocaleString(),
+        p.seatWind ? -128 : -220,
+        3,
+        '900 84px "Inter", "Noto Sans JP", monospace',
+        p.isCurrentTurn ? '#ffea85' : '#ffffff',
+        10,
+        356,
+      );
 
       ctx.restore();
     };
 
-    drawSide('self', 256, 434, 0);
-    drawSide('right', 434, 256, -Math.PI / 2);
-    drawSide('top', 256, 78, Math.PI);
-    drawSide('left', 78, 256, Math.PI / 2);
+    drawSide('self', 512, 890, 0);
+    drawSide('right', 890, 512, -Math.PI / 2);
+    drawSide('top', 512, 134, Math.PI);
+    drawSide('left', 134, 512, Math.PI / 2);
 
     const gl = this.gl;
     gl.bindTexture(gl.TEXTURE_2D, this.consoleTex);
@@ -1833,8 +1918,8 @@ export class Mahjong3DScene {
     this.drawBox(mat4Compose(7.36, 0.05, 0, 0, 0, 0, 0.05, 0.1, 14.76), trimCol);
 
     // 中央コンソール
-    this.drawBox(mat4Compose(0, 0.03, 0, 0, 0, 0, 2.7, 0.08, 2.7), [0.16, 0.2, 0.28, 1]);
-    this.drawBox(mat4Compose(0, 0.05, 0, 0, 0, 0, 2.46, 0.09, 2.46), [1, 1, 1, 1], {
+    this.drawBox(mat4Compose(0, 0.03, 0, 0, 0, 0, 2.8, 0.08, 2.8), [0.16, 0.2, 0.28, 1]);
+    this.drawBox(mat4Compose(0, 0.05, 0, 0, 0, 0, 2.66, 0.09, 2.66), [1, 1, 1, 1], {
       useConsole: true,
     });
 
@@ -2252,23 +2337,54 @@ export class Mahjong3DScene {
       cursorX -= blockW + meldGap;
     }
 
-    // 三麻の抜北（kitaTiles）: 卓右奥方向へ縦に並べても手牌と被らない
+    // 三麻の抜北（kitaTiles）: 自分の河の右脇スペース（牌山・他家立牌に遮られない安全一等地）に専用台座付きで大きく整列
     if (player.kitaTiles.length > 0) {
-      const kitaBaseX = side === 'self' ? 6.68 : Math.min(cursorX - w * 0.5, 5.9);
-      let kitaZ = side === 'self' ? 4.35 : baseZ - h - 0.06;
-      for (const kitaTile of player.kitaTiles) {
-        const [wx, wz] = rotatePointXZ(kitaBaseX, kitaZ, ry);
+      const kSc = KITA_SCALE;
+      const kW = TILE_W * kSc;
+      const kH = TILE_H * kSc;
+      const colGap = 0.09;
+      const rowGap = 0.1;
+      const cols = Math.min(2, player.kitaTiles.length);
+      const rows = Math.ceil(player.kitaTiles.length / 2);
+
+      const firstColX = 2.42;
+      const firstRowZ = 2.44;
+      const trayW = cols * kW + (cols - 1) * colGap + 0.26;
+      const trayD = rows * kH + (rows - 1) * rowGap + 0.24;
+      const trayCx = firstColX + ((cols - 1) * (kW + colGap)) / 2;
+      const trayCz = firstRowZ + ((rows - 1) * (kH + rowGap)) / 2;
+      const [twx, twz] = rotatePointXZ(trayCx, trayCz, ry);
+
+      // 抜北専用の青系トレイ台座（位置を一目で識別できるようにする）
+      this.drawBox(
+        mat4Compose(twx, 0.02, twz, 0, ry, 0, trayW + 0.08, 0.035, trayD + 0.08),
+        [0.28, 0.62, 0.92, 1],
+        { emissive: 0.28 },
+      );
+      this.drawBox(
+        mat4Compose(twx, 0.032, twz, 0, ry, 0, trayW, 0.04, trayD),
+        [0.08, 0.2, 0.36, 1],
+      );
+
+      player.kitaTiles.forEach((kitaTile, idx) => {
+        const col = idx % 2;
+        const row = Math.floor(idx / 2);
+        const kx = firstColX + col * (kW + colGap);
+        const kz = firstRowZ + row * (kH + rowGap);
+        const [wx, wz] = rotatePointXZ(kx, kz, ry);
         this.drawTileWithShadow(
-          mat4Compose(wx, 0, wz, 0, ry, 0, sc, sc, sc),
+          mat4Compose(wx, 0.05, wz, 0, ry, 0, kSc, kSc, kSc),
           wx,
           wz,
           ry,
-          sc,
+          kSc,
           this.getTileUv(kitaTile.kind, kitaTile.isRed),
-          { doraGlow: this.isDoraTile(kitaTile) },
+          {
+            doraGlow: this.isDoraTile(kitaTile),
+            highlight: 0.25,
+          },
         );
-        kitaZ -= h + 0.03;
-      }
+      });
     }
   }
 

@@ -1147,3 +1147,100 @@
   color: #ffe8a3;
 }
 
+/* ---------- 試合外ページの右上設定ボタン ---------- */
+.top-bar-right {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.top-bar-settings-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 11px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  border-radius: 9px;
+  background: rgba(26, 44, 78, 0.72);
+  border-color: rgba(158, 194, 250, 0.34);
+  color: #e8f1ff;
+}
+
+.top-bar-settings-btn:hover {
+  background: rgba(42, 68, 114, 0.88);
+  border-color: rgba(240, 201, 92, 0.6);
+}
+
+.top-bar-settings-icon {
+  font-size: 0.92rem;
+  line-height: 1;
+  color: #ffd970;
+}
+
+/* ---------- 抜北バッジ（各席ネームプレート & 2D 卓） ---------- */
+.kita-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.64rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  padding: 1px 6px;
+  border-radius: 4px;
+  color: #e9f8ff;
+  background: linear-gradient(180deg, rgba(38, 132, 186, 0.92) 0%, rgba(20, 82, 126, 0.95) 100%);
+  border: 1px solid rgba(124, 212, 255, 0.78);
+  box-shadow: 0 0 8px rgba(72, 186, 255, 0.32);
+  white-space: nowrap;
+}
+
+.meld-group-kita {
+  border-color: rgba(120, 208, 255, 0.72);
+  background: linear-gradient(180deg, rgba(46, 134, 188, 0.28) 0%, rgba(16, 62, 98, 0.42) 100%);
+  box-shadow: 0 2px 10px rgba(48, 165, 235, 0.2);
+}
+
+.meld-group-kita .meld-label {
+  color: #a8e4ff;
+  font-size: 0.78rem;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
+}
+
+/* ---------- 2D 卓中央デジタルコンソールの視認性強化 ---------- */
+.console-core .round-label {
+  font-size: 1.05rem;
+  color: #ffe88a;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.95), 0 0 8px rgba(255, 214, 90, 0.48);
+}
+
+.console-core .wall-counter {
+  font-size: 0.92rem;
+  font-weight: 800;
+  color: #ffffff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.95);
+}
+
+.console-core .console-sticks-meta {
+  font-size: 0.66rem;
+  color: #d6e4ff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.95);
+}
+
+.console-scores .console-score {
+  font-size: 0.84rem;
+}
+
+.console-scores .console-score-val {
+  color: #ffffff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.98), 0 0 6px rgba(10, 20, 40, 0.9);
+}
+
+.console-scores .console-score.is-turn .console-score-val {
+  color: #ffea85;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.98), 0 0 10px rgba(255, 218, 92, 0.7);
+}
+
+
