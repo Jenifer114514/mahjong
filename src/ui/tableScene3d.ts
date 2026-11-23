@@ -354,37 +354,32 @@ void main() {
     base = texture(uConsoleTex, vUv).rgb;
   } else if (uUseAtlas > 0.5) {
     if (vZone < 0.5) {
-      // 天面: アトラス UV にマップし、角を丸く象牙面と馴染ませる
+      // 天面: アトラス UV にマップし、角丸の縁へ象牙面とシームレスに馴染ませる
       vec2 edge = min(vUv, 1.0 - vUv);
-      float minEdge = min(edge.x, edge.y);
-      float radius = 0.075;
+      float radius = 0.085;
       float cornerDist = length(max(vec2(radius) - edge, 0.0));
-      float faceMask = smoothstep(radius + 0.015, radius - 0.015, cornerDist);
+      float faceMask = smoothstep(radius + 0.02, radius - 0.02, cornerDist);
 
       vec2 atlasUv = mix(uUvRect.xy, uUvRect.zw, vUv);
       vec4 tex = texture(uAtlasTex, atlasUv);
-      vec3 ivory = vec3(0.96, 0.94, 0.89);
+      vec3 ivory = vec3(0.955, 0.935, 0.885);
       vec3 faceCol = mix(ivory, tex.rgb, tex.a);
-      base = mix(vec3(0.91, 0.87, 0.78), faceCol, faceMask);
-      if (minEdge < 0.025) {
-        base *= 0.96;
-      }
-      base *= uColor.rgb;
+      base = mix(ivory, faceCol, faceMask) * uColor.rgb;
     } else if (vZone < 1.5) {
-      // 側面・面取りベベル: 象牙色
-      base = vec3(0.92, 0.88, 0.78) * uColor.rgb;
-      if (vUv.y < 0.25) {
-        base = mix(base, vec3(0.84, 0.64, 0.28) * uColor.rgb, 0.45);
-      }
+      // 側面・上側丸みベベル: なめらかな象牙色グラデーション
+      float t = clamp(vUv.y, 0.0, 1.0);
+      vec3 ivoryTop = vec3(0.955, 0.935, 0.885);
+      vec3 ivoryBot = vec3(0.905, 0.865, 0.770);
+      base = mix(ivoryBot, ivoryTop, t) * uColor.rgb;
     } else {
-      // 背面（雀魂風 琥珀ゴールドグラデ）
-      float grad = clamp(vUv.y * 0.7 + 0.15, 0.0, 1.0);
-      vec3 goldTop = vec3(0.95, 0.72, 0.24);
+      // 背面・下側丸みベベル（雀魂風 琥珀ゴールド）
+      float grad = clamp(vUv.y * 0.65 + 0.22, 0.0, 1.0);
+      vec3 goldTop = vec3(0.96, 0.74, 0.26);
       vec3 goldBot = vec3(0.76, 0.48, 0.11);
       base = mix(goldBot, goldTop, grad) * uColor.rgb;
       float edgeFrame = min(min(vUv.x, 1.0 - vUv.x), min(vUv.y, 1.0 - vUv.y));
-      if (edgeFrame < 0.06) {
-        base *= 0.86;
+      if (edgeFrame < 0.08) {
+        base *= 0.89;
       }
       if (uBackTone > 0.5) {
         base *= 0.94;
@@ -544,141 +539,183 @@ function pushQuad(
   indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
 }
 
-/** 面取りベベル付き麻雀牌メッシュ（原点 = 牌底面中心、Y+ 上向き、Z+ 手前方向） */
+/** 角丸・ラウンドエッジ付き麻雀牌メッシュ（原点 = 牌底面中心、Y+ 上向き、Z+ 手前方向） */
 function buildBeveledTileMesh(gl: WebGL2RenderingContext): MeshBuffers {
   const hw = TILE_W * 0.5;
   const hd = TILE_H * 0.5;
   const h = TILE_D;
-  const b = 0.045;
-  const bh = 0.045;
+  const cornerR = 0.105; // XZ 四隅の丸み半径
+  const edgeR = 0.072;   // 上下縁の丸み半径
   const backSplitY = h * 0.34;
+
+  const innerW = hw - cornerR;
+  const innerD = hd - cornerR;
+  const cornerSegs = 5; // 各角の円弧分割数（滑らかな角丸）
+
+  // XZ 平面上・反時計回りの閉ループ外周ポイントを生成
+  // 角度 theta: (cos(theta), -sin(theta)) とすると:
+  //   theta = 0       -> (+1,  0) 右辺
+  //   theta = pi/2    -> ( 0, -1) 奥辺
+  //   theta = pi      -> (-1,  0) 左辺
+  //   theta = 3*pi/2  -> ( 0, +1) 手前辺
+  const profileSpecs: ReadonlyArray<{ cx: number; cz: number; t0: number; t1: number }> = [
+    { cx: innerW, cz: -innerD, t0: 0, t1: Math.PI / 2 },              // 右奥角 (theta: 0 -> pi/2)
+    { cx: -innerW, cz: -innerD, t0: Math.PI / 2, t1: Math.PI },       // 左奥角 (theta: pi/2 -> pi)
+    { cx: -innerW, cz: innerD, t0: Math.PI, t1: Math.PI * 1.5 },      // 左手前角 (theta: pi -> 3pi/2)
+    { cx: innerW, cz: innerD, t0: Math.PI * 1.5, t1: Math.PI * 2 },   // 右手前角 (theta: 3pi/2 -> 2pi)
+  ];
+
+  interface LoopSample {
+    cx: number;
+    cz: number;
+    nx: number;
+    nz: number;
+  }
+  const loop: LoopSample[] = [];
+  for (const spec of profileSpecs) {
+    for (let s = 0; s <= cornerSegs; s++) {
+      const th = spec.t0 + ((spec.t1 - spec.t0) * s) / cornerSegs;
+      loop.push({
+        cx: spec.cx,
+        cz: spec.cz,
+        nx: Math.cos(th),
+        nz: -Math.sin(th),
+      });
+    }
+  }
+  const ringLen = loop.length;
 
   const verts: number[] = [];
   const indices: number[] = [];
 
-  // 1. 天面 (zone=0)
-  pushQuad(
-    verts,
-    indices,
-    [-hw + b, h, -hd + b],
-    [-hw + b, h, hd - b],
-    [hw - b, h, hd - b],
-    [hw - b, h, -hd + b],
-    [0, 1, 0],
-    [0, 0],
-    [0, 1],
-    [1, 1],
-    [1, 0],
-    0,
-  );
+  interface SliceSpec {
+    y: number;
+    inset: number;
+    nr: number;
+    ny: number;
+    uvY: number;
+    zone: number;
+  }
 
-  // 2. 上面取りベベル (zone=1)
-  const ny = 0.707;
-  const nxz = 0.707;
-  pushQuad(
-    verts,
-    indices,
-    [-hw, h - bh, -hd],
-    [-hw + b, h, -hd + b],
-    [hw - b, h, -hd + b],
-    [hw, h - bh, -hd],
-    [0, ny, -nxz],
-    [0, 1], [0, 1], [1, 1], [1, 1],
-    1,
-  );
-  pushQuad(
-    verts,
-    indices,
-    [-hw + b, h, hd - b],
-    [-hw, h - bh, hd],
-    [hw, h - bh, hd],
-    [hw - b, h, hd - b],
-    [0, ny, nxz],
-    [0, 1], [0, 1], [1, 1], [1, 1],
-    1,
-  );
-  pushQuad(
-    verts,
-    indices,
-    [-hw, h - bh, -hd],
-    [-hw, h - bh, hd],
-    [-hw + b, h, hd - b],
-    [-hw + b, h, -hd + b],
-    [-nxz, ny, 0],
-    [0, 1], [0, 1], [1, 1], [1, 1],
-    1,
-  );
-  pushQuad(
-    verts,
-    indices,
-    [hw - b, h, -hd + b],
-    [hw - b, h, hd - b],
-    [hw, h - bh, hd],
-    [hw, h - bh, -hd],
-    [nxz, ny, 0],
-    [0, 1], [0, 1], [1, 1], [1, 1],
-    1,
-  );
+  // 下丸み(4段, zone=2) -> ゴールド上端(zone=2) / 象牙下端(zone=1) -> 上丸み(4段, zone=1)
+  const slices: SliceSpec[] = [];
+  const arcSteps = 4;
+  // 下側丸み: phi = -pi/2 -> 0
+  for (let s = 0; s <= arcSteps; s++) {
+    const phi = -Math.PI / 2 + ((Math.PI / 2) * s) / arcSteps;
+    const inset = edgeR * (1 - Math.cos(phi));
+    const y = edgeR * (1 + Math.sin(phi));
+    slices.push({
+      y,
+      inset,
+      nr: Math.cos(phi),
+      ny: Math.sin(phi),
+      uvY: 0.25 + (y / backSplitY) * 0.55,
+      zone: 2,
+    });
+  }
+  // ゴールド側面最上段（象牙境界の直下）
+  slices.push({
+    y: backSplitY,
+    inset: 0,
+    nr: 1,
+    ny: 0,
+    uvY: 0.85,
+    zone: 2,
+  });
+  // 象牙側面最下段（同座標で zone=1 に切り替え、境界のクッキリ 2 層を表現）
+  slices.push({
+    y: backSplitY,
+    inset: 0,
+    nr: 1,
+    ny: 0,
+    uvY: 0.0,
+    zone: 1,
+  });
+  // 上側丸み: phi = 0 -> pi/2
+  for (let s = 0; s <= arcSteps; s++) {
+    const phi = ((Math.PI / 2) * s) / arcSteps;
+    const inset = edgeR * (1 - Math.cos(phi));
+    const y = h - edgeR + edgeR * Math.sin(phi);
+    slices.push({
+      y,
+      inset,
+      nr: Math.cos(phi),
+      ny: Math.sin(phi),
+      uvY: (y - backSplitY) / Math.max(1e-4, h - backSplitY),
+      zone: 1,
+    });
+  }
 
-  // 3. 象牙側面 (zone=1)
-  const addSide = (
-    x0: number, z0: number,
-    x1: number, z1: number,
-    y0: number, y1: number,
-    nx: number, nz: number,
-    uvY0: number, uvY1: number,
-    zone: number,
-  ) => {
-    pushQuad(
-      verts,
-      indices,
-      [x0, y1, z0],
-      [x0, y0, z0],
-      [x1, y0, z1],
-      [x1, y1, z1],
-      [nx, 0, nz],
-      [0, uvY1], [0, uvY0], [1, uvY0], [1, uvY1],
-      zone,
-    );
-  };
+  // スライス頂点を積み上げて、同一 zone かつ隣接するスライス間をストリップで張る
+  const ringVertexOffsets: number[] = [];
+  for (const sl of slices) {
+    const startIdx = verts.length / 9;
+    ringVertexOffsets.push(startIdx);
+    const curR = Math.max(0.008, cornerR - sl.inset);
+    for (let i = 0; i < ringLen; i++) {
+      const pt = loop[i]!;
+      const px = pt.cx + pt.nx * curR;
+      const pz = pt.cz + pt.nz * curR;
+      const nx = pt.nx * sl.nr;
+      const ny = sl.ny;
+      const nz = pt.nz * sl.nr;
+      // 側面は周回継ぎ目の陰りが出ないよう uvX を中央 0.5 に固定する
+      const uvX = 0.5;
+      verts.push(px, sl.y, pz, nx, ny, nz, uvX, sl.uvY, sl.zone);
+    }
+  }
 
-  addSide(-hw, -hd, hw, -hd, backSplitY, h - bh, 0, -1, 0.35, 1.0, 1);
-  addSide(hw, hd, -hw, hd, backSplitY, h - bh, 0, 1, 0.35, 1.0, 1);
-  addSide(-hw, hd, -hw, -hd, backSplitY, h - bh, -1, 0, 0.35, 1.0, 1);
-  addSide(hw, -hd, hw, hd, backSplitY, h - bh, 1, 0, 0.35, 1.0, 1);
+  for (let k = 0; k < slices.length - 1; k++) {
+    if (slices[k]!.zone !== slices[k + 1]!.zone) continue;
+    const r0 = ringVertexOffsets[k]!;
+    const r1 = ringVertexOffsets[k + 1]!;
+    for (let i = 0; i < ringLen; i++) {
+      const next = (i + 1) % ringLen;
+      const a = r0 + i;
+      const b = r0 + next;
+      const c = r1 + next;
+      const d = r1 + i;
+      indices.push(a, b, c, a, c, d);
+    }
+  }
 
-  // 4. 背面ゴールド側面・下ベベル・底面 (zone=2)
-  addSide(-hw, -hd, hw, -hd, bh, backSplitY, 0, -1, 0.0, 0.35, 2);
-  addSide(hw, hd, -hw, hd, bh, backSplitY, 0, 1, 0.0, 0.35, 2);
-  addSide(-hw, hd, -hw, -hd, bh, backSplitY, -1, 0, 0.0, 0.35, 2);
-  addSide(hw, -hd, hw, hd, bh, backSplitY, 1, 0, 0.0, 0.35, 2);
+  // 天面キャップ (zone=0): 平らな上面へ文字テクスチャを歪みなく配置
+  const topR = Math.max(0.008, cornerR - edgeR);
+  const faceHalfW = hw - edgeR * 0.72;
+  const faceHalfH = hd - edgeR * 0.72;
+  const topCenterIdx = verts.length / 9;
+  verts.push(0, h, 0, 0, 1, 0, 0.5, 0.5, 0);
+  const topRingStart = verts.length / 9;
+  for (let i = 0; i < ringLen; i++) {
+    const pt = loop[i]!;
+    const px = pt.cx + pt.nx * topR;
+    const pz = pt.cz + pt.nz * topR;
+    const u = Math.max(0, Math.min(1, (px / faceHalfW) * 0.5 + 0.5));
+    const v = Math.max(0, Math.min(1, (pz / faceHalfH) * 0.5 + 0.5));
+    verts.push(px, h, pz, 0, 1, 0, u, v, 0);
+  }
+  for (let i = 0; i < ringLen; i++) {
+    const next = (i + 1) % ringLen;
+    indices.push(topCenterIdx, topRingStart + i, topRingStart + next);
+  }
 
-  pushQuad(
-    verts, indices,
-    [-hw + b, 0, -hd + b], [-hw, bh, -hd], [hw, bh, -hd], [hw - b, 0, -hd + b],
-    [0, -ny, -nxz], [0, 0], [0, 0.2], [1, 0.2], [1, 0], 2,
-  );
-  pushQuad(
-    verts, indices,
-    [-hw, bh, hd], [-hw + b, 0, hd - b], [hw - b, 0, hd - b], [hw, bh, hd],
-    [0, -ny, nxz], [0, 0.2], [0, 0], [1, 0], [1, 0.2], 2,
-  );
-  pushQuad(
-    verts, indices,
-    [-hw, bh, -hd], [-hw + b, 0, -hd + b], [-hw + b, 0, hd - b], [-hw, bh, hd],
-    [-nxz, -ny, 0], [0, 0.2], [0, 0], [1, 0], [1, 0.2], 2,
-  );
-  pushQuad(
-    verts, indices,
-    [hw - b, 0, -hd + b], [hw, bh, -hd], [hw, bh, hd], [hw - b, 0, hd - b],
-    [nxz, -ny, 0], [0, 0], [0, 0.2], [1, 0.2], [1, 0], 2,
-  );
-
-  pushQuad(
-    verts, indices,
-    [-hw + b, 0, hd - b], [-hw + b, 0, -hd + b], [hw - b, 0, -hd + b], [hw - b, 0, hd - b],
-    [0, -1, 0], [0, 0], [0, 1], [1, 1], [1, 0], 2,
-  );
+  // 底面キャップ (zone=2): 琥珀ゴールド裏面
+  const botCenterIdx = verts.length / 9;
+  verts.push(0, 0, 0, 0, -1, 0, 0.5, 0.5, 2);
+  const botRingStart = verts.length / 9;
+  for (let i = 0; i < ringLen; i++) {
+    const pt = loop[i]!;
+    const px = pt.cx + pt.nx * topR;
+    const pz = pt.cz + pt.nz * topR;
+    const u = Math.max(0, Math.min(1, (px / (hw - edgeR)) * 0.5 + 0.5));
+    const v = Math.max(0, Math.min(1, (pz / (hd - edgeR)) * 0.5 + 0.5));
+    verts.push(px, 0, pz, 0, -1, 0, u, v, 2);
+  }
+  for (let i = 0; i < ringLen; i++) {
+    const next = (i + 1) % ringLen;
+    indices.push(botCenterIdx, botRingStart + next, botRingStart + i);
+  }
 
   return uploadMesh(gl, verts, indices);
 }
@@ -1908,7 +1945,7 @@ export class Mahjong3DScene {
             wz,
             cfg.ry,
             ws,
-            this.getTileUv('1z'),
+            [0, 0, 0.001, 0.001],
             { backTone: 1, shadowAlpha: 0.34 },
           );
         }
@@ -1953,7 +1990,7 @@ export class Mahjong3DScene {
               { highlight: 0.45, doraGlow: this.isDoraTile(revealedTile) },
             );
           } else {
-            this.drawTile(m, this.getTileUv('1z'), { backTone: 0 });
+            this.drawTile(m, [0, 0, 0.001, 0.001], { backTone: 0 });
           }
         }
 
@@ -2139,7 +2176,7 @@ export class Mahjong3DScene {
           wz,
           tileRy,
           sc,
-          this.getTileUv(tile.kind, tile.isRed),
+          isFaceDown ? [0, 0, 0.001, 0.001] : this.getTileUv(tile.kind, tile.isRed),
           {
             doraGlow: !isFaceDown && this.isDoraTile(tile),
           },
@@ -2214,10 +2251,11 @@ export class Mahjong3DScene {
     for (let i = 0; i < handCount; i++) {
       const lx = startX + i * step;
       const [wx, wz] = rotatePointXZ(lx, standDist, ry);
-      const rotX = -deg(86);
+      // 表面(+Y)を相手側(外向き)へ、黄金背面(-Y)を卓中央・カメラ側へ向ける
+      const rotX = deg(94);
       this.drawTile(
-        mat4Compose(wx, (TILE_H * sc) / 2, wz, rotX, ry, 0, sc, sc, sc),
-        this.getTileUv('1z'),
+        mat4Compose(wx, (TILE_H * sc) * 0.5 + 0.025 * sc, wz, rotX, ry, 0, sc, sc, sc),
+        [0, 0, 0.001, 0.001],
       );
     }
     if (player.hasDrawnTile) {
@@ -2226,16 +2264,16 @@ export class Mahjong3DScene {
       this.drawTile(
         mat4Compose(
           wx,
-          (TILE_H * sc) / 2 + drawYOffset,
+          (TILE_H * sc) * 0.5 + 0.025 * sc + drawYOffset,
           wz,
-          -deg(86),
+          deg(94),
           ry,
           0,
           sc,
           sc,
           sc,
         ),
-        this.getTileUv('1z'),
+        [0, 0, 0.001, 0.001],
       );
     }
   }
@@ -2256,8 +2294,8 @@ export class Mahjong3DScene {
     for (let i = 0; i < handCount; i++) {
       const lx = startX + i * step;
       this.drawTile(
-        mat4Compose(lx, (TILE_H * sc) / 2, 5.5, -deg(72), 0, 0, sc, sc, sc),
-        this.getTileUv('1z'),
+        mat4Compose(lx, (TILE_H * sc) * 0.5 + 0.02 * sc, 5.5, -deg(92), 0, 0, sc, sc, sc),
+        [0, 0, 0.001, 0.001],
       );
     }
     if (player.hasDrawnTile) {
@@ -2265,16 +2303,16 @@ export class Mahjong3DScene {
       this.drawTile(
         mat4Compose(
           lx,
-          (TILE_H * sc) / 2 + drawYOffset,
+          (TILE_H * sc) * 0.5 + 0.02 * sc + drawYOffset,
           5.5,
-          -deg(72),
+          -deg(92),
           0,
           0,
           sc,
           sc,
           sc,
         ),
-        this.getTileUv('1z'),
+        [0, 0, 0.001, 0.001],
       );
     }
   }
