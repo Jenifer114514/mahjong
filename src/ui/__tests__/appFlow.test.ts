@@ -85,6 +85,7 @@ function clickByText(
 
 describe('アプリ起動とローカルCPU対局', () => {
   beforeEach(() => {
+    window.dispatchEvent(new Event('beforeunload'));
     vi.useRealTimers();
   });
 
@@ -813,5 +814,351 @@ describe('アプリ起動とローカルCPU対局', () => {
       .click();
     expect(localStorage.getItem('mahjong_3d_table_enabled')).toBe('1');
     expect(root.querySelector('.setting-camera-row')).not.toBeNull();
+  });
+
+  it('3Dモードで5巡以上連続打牌してもWebGL2コンテキストやcanvasを再作成せずホーム画面にも戻らず、退出時にloseContextで解放する', async () => {
+    localStorage.clear();
+
+    let webglCreateCount = 0;
+    let webglLoseCount = 0;
+    const noop = () => {};
+    const glProxy = new Proxy(
+      {
+        createShader: () => ({}),
+        createProgram: () => ({}),
+        createBuffer: () => ({}),
+        createVertexArray: () => ({}),
+        createTexture: () => ({}),
+        getShaderParameter: () => true,
+        getProgramParameter: () => true,
+        getUniformLocation: () => ({}),
+        getAttribLocation: () => 0,
+        getParameter: () => 1,
+        getExtension: (name: string) =>
+          name === 'WEBGL_lose_context'
+            ? { loseContext: () => webglLoseCount++ }
+            : null,
+      } as Record<string | symbol, unknown>,
+      {
+        get(target, prop) {
+          if (prop in target) return target[prop];
+          if (typeof prop === 'string' && prop === prop.toUpperCase()) return 1;
+          return noop;
+        },
+      },
+    ) as unknown as WebGL2RenderingContext;
+
+    const grad = { addColorStop: noop };
+    const ctx2d = new Proxy(
+      {
+        measureText: () => ({ width: 20 }),
+        createLinearGradient: () => grad,
+        createRadialGradient: () => grad,
+      } as Record<string | symbol, unknown>,
+      {
+        get(target, prop) {
+          if (prop in target) return target[prop];
+          return noop;
+        },
+      },
+    ) as unknown as CanvasRenderingContext2D;
+
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation(() => 1);
+    vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => {});
+    vi.spyOn(HTMLCanvasElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      width: 1280,
+      height: 720,
+      top: 0,
+      left: 0,
+      right: 1280,
+      bottom: 720,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    });
+    const getCtxSpy = vi
+      .spyOn(HTMLCanvasElement.prototype, 'getContext')
+      .mockImplementation(
+        function (this: HTMLCanvasElement, kind: string) {
+          if (kind === 'webgl2') {
+            webglCreateCount++;
+            return glProxy;
+          }
+          if (kind === '2d') return ctx2d;
+          return null;
+        } as unknown as HTMLCanvasElement['getContext'],
+      );
+
+    try {
+      bootApp();
+      await loadMain();
+
+      const root = document.getElementById('app') as HTMLElement;
+      expect(clickByText(root, 'button', 'CPU対局をはじめる')).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 40));
+
+      const initialFelt = root.querySelector('.table-felt.is-3d-table');
+      const initialCanvas = root.querySelector<HTMLCanvasElement>('.table-3d-canvas');
+      expect(initialFelt).not.toBeNull();
+      expect(initialCanvas).not.toBeNull();
+      expect(webglCreateCount).toBe(1);
+      expect(webglLoseCount).toBe(0);
+
+      let discardsDone = 0;
+      for (let step = 0; step < 650 && discardsDone < 5; step++) {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+
+        // 強制的にホーム画面に戻っていないことを毎フレーム確認
+        expect(root.querySelector('.lobby-wrap')).toBeNull();
+        expect(webglCreateCount).toBe(1);
+        expect(webglLoseCount).toBe(0);
+
+        if (root.querySelector('.round-end-modal')) {
+          clickByText(root, '.round-end-modal button', '次へ');
+          clickByText(root, '.round-end-modal button', '次の局へ');
+          continue;
+        }
+
+        const felt = root.querySelector('.table-felt.is-3d-table');
+        if (felt) {
+          expect(root.querySelector('.table-3d-canvas')).toBe(initialCanvas);
+        }
+
+        clickByText(root, '.call-action-bar button', 'スルー');
+        const clickable = root.querySelectorAll<HTMLElement>(
+          '.seat-self .hand-area .mj-tile-clickable',
+        );
+        if (clickable.length > 0) {
+          const beforeRiver = root.querySelectorAll('.seat-self .discard-river .mj-tile').length;
+          const tile = clickable[clickable.length - 1]!;
+          tile.click();
+          tile.click();
+          const afterRiver = root.querySelectorAll('.seat-self .discard-river .mj-tile').length;
+          if (afterRiver > beforeRiver) {
+            discardsDone++;
+          } else {
+            // 非同期反映が1マイクロタスク遅れた場合に備えて1ティック待機し確認
+            await new Promise((resolve) => setTimeout(resolve, 10));
+            if (root.querySelectorAll('.seat-self .discard-river .mj-tile').length > beforeRiver) {
+              discardsDone++;
+            }
+          }
+        }
+      }
+
+      expect(discardsDone).toBeGreaterThanOrEqual(5);
+      expect(root.querySelector('.table-3d-canvas')).toBe(initialCanvas);
+      expect(webglCreateCount).toBe(1);
+      expect(webglLoseCount).toBe(0);
+
+      // 設定モーダルで視点リセットしてもコンテキストが増えない
+      root.querySelector<HTMLButtonElement>('.table-chrome-settings')!.click();
+      expect(clickByText(root, '.table-settings-panel button', '視点リセット')).toBe(true);
+      root.querySelector<HTMLButtonElement>('.table-modal-close-btn')!.click();
+      expect(webglCreateCount).toBe(1);
+
+      // 対局を離れてロビーに戻ると WebGL2 コンテキストを確実に解放する
+      root.querySelector<HTMLButtonElement>('.table-chrome-leave')!.click();
+      expect(clickByText(root, '.leave-confirm-modal button', 'ロビーに戻る')).toBe(true);
+      expect(root.querySelector('.lobby-wrap')).not.toBeNull();
+      expect(root.querySelector('.table-stage')).toBeNull();
+      expect(webglCreateCount).toBe(1);
+      expect(webglLoseCount).toBe(1);
+    } finally {
+      getCtxSpy.mockRestore();
+      vi.restoreAllMocks();
+    }
+  }, 40000);
+
+  it('ホスト移譲(onHostSelfDemoted)後に旧HostSessionが遅延でonStatusChange("closed")を呼んでも新ClientSessionの接続状態が未接続に上書きされない', async () => {
+    vi.resetModules();
+    const { createInitialGameState, reduce } = await import('../../engine/reducer');
+    const { toStateView } = await import('../../engine/projection');
+    let lobbyState = createInitialGameState({
+      roomCode: 'DEMO01',
+      hostPlayerId: 'p0',
+      hostName: '旧ホスト',
+      ruleConfig: { playerCount: 4, gameLength: 'tonpuu' },
+    });
+    lobbyState = reduce(lobbyState, {
+      type: 'JOIN_PLAYER',
+      playerId: 'p1',
+      name: '次期ホスト',
+    });
+    const lobbyView = toStateView(lobbyState, 'p0', 0);
+
+    let capturedHostCallbacks: Record<string, (...args: any[]) => void> | null = null;
+    let clientStatusTextObserved = false;
+
+    vi.doMock('../../net/host', () => {
+      class MockHostSession {
+        private readonly cb: Record<string, (...args: any[]) => void>;
+        constructor(
+          _name: string,
+          _rule: unknown,
+          callbacks: Record<string, (...args: any[]) => void>,
+        ) {
+          this.cb = callbacks;
+          capturedHostCallbacks = callbacks;
+        }
+        start() {
+          this.cb.onStatusChange?.('ready');
+          this.cb.onViewChange?.(lobbyView);
+        }
+        getRoomCode() {
+          return 'DEMO01';
+        }
+        isOffline() {
+          return false;
+        }
+        getConnectedRemoteHumanIds() {
+          return ['p1'];
+        }
+        transferHost() {
+          this.cb.onHostSelfDemoted?.(
+            { roomCode: 'DEMO01', hostEpoch: 1, newHostPeerId: 'peer-p1' },
+            'tok-p0',
+            'p0',
+          );
+          setTimeout(() => {
+            this.cb.onStatusChange?.('closed');
+          }, 20);
+          return true;
+        }
+        destroy() {}
+      }
+      return { HostSession: MockHostSession };
+    });
+
+    vi.doMock('../../net/client', () => {
+      class MockClientSession {
+        private readonly cb: Record<string, (...args: any[]) => void>;
+        constructor(
+          _roomCode: string,
+          _name: string,
+          callbacks: Record<string, (...args: any[]) => void>,
+        ) {
+          this.cb = callbacks;
+        }
+        connect() {
+          this.cb.onStatusChange?.('connected');
+          clientStatusTextObserved = true;
+        }
+        destroy() {}
+      }
+      return { ClientSession: MockClientSession };
+    });
+
+    try {
+      document.body.innerHTML = '<div id="app"></div>';
+      await loadMain();
+      const root = document.getElementById('app') as HTMLElement;
+
+      expect(clickByText(root, 'button', '部屋を作成')).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(capturedHostCallbacks).not.toBeNull();
+
+      // ホスト移譲を実行（内部で新 ClientSession に移行し、20ms 後に旧ホストが 'closed' を発火する）
+      expect(clickByText(root, 'button', 'ホストを譲る')).toBe(true);
+      expect(clientStatusTextObserved).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 60));
+
+      const statusPill = root.querySelector('.status-pill');
+      expect(statusPill?.textContent).toContain('DEMO01');
+      expect(statusPill?.textContent).toContain('接続中');
+      expect(statusPill?.textContent).not.toContain('未接続');
+    } finally {
+      window.dispatchEvent(new Event('beforeunload'));
+      vi.doUnmock('../../net/host');
+      vi.doUnmock('../../net/client');
+      vi.resetModules();
+    }
+  });
+
+  it('対局中に離脱確認モーダルを開いた状態でロビーへ戻されたあと、次の対局開始時にモーダルが誤表示されない', async () => {
+    vi.resetModules();
+    const { createInitialGameState, reduce } = await import('../../engine/reducer');
+    const { deriveRules } = await import('../../engine/rules');
+    const { toStateView } = await import('../../engine/projection');
+    const { buildSeededTestDeck } = await import('../../engine/__tests__/testHelpers');
+
+    const ruleConfig = { playerCount: 4 as const, gameLength: 'tonpuu' as const };
+    const rules = deriveRules(ruleConfig);
+    let lobbyState = createInitialGameState({
+      roomCode: 'GAME01',
+      hostPlayerId: 'p0',
+      hostName: 'P0',
+      ruleConfig,
+    });
+    for (let i = 1; i < 4; i++) {
+      lobbyState = reduce(lobbyState, {
+        type: 'JOIN_PLAYER',
+        playerId: `p${i}`,
+        name: `P${i}`,
+      });
+    }
+    const lobbyView = toStateView(lobbyState, 'p0', 0);
+    const playingState = reduce(lobbyState, {
+      type: 'START_GAME',
+      shuffledDeck: buildSeededTestDeck(rules, 9999),
+    });
+    const playingView = toStateView(playingState, 'p0', 0);
+
+    let emitView: ((view: typeof playingView) => void) | null = null;
+
+    vi.doMock('../../net/host', () => {
+      class MockHostSession {
+        private readonly cb: Record<string, (...args: any[]) => void>;
+        constructor(
+          _name: string,
+          _rule: unknown,
+          callbacks: Record<string, (...args: any[]) => void>,
+        ) {
+          this.cb = callbacks;
+          emitView = (v) => this.cb.onViewChange?.(v);
+        }
+        start() {
+          this.cb.onStatusChange?.('ready');
+          this.cb.onViewChange?.(playingView);
+        }
+        getRoomCode() {
+          return 'GAME01';
+        }
+        isOffline() {
+          return true;
+        }
+        getConnectedRemoteHumanIds() {
+          return [];
+        }
+        destroy() {}
+      }
+      return { HostSession: MockHostSession };
+    });
+
+    try {
+      document.body.innerHTML = '<div id="app"></div>';
+      await loadMain();
+      const root = document.getElementById('app') as HTMLElement;
+
+      expect(clickByText(root, 'button', 'CPU対局をはじめる')).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      // 離脱ボタンを開いた状態で残す
+      root.querySelector<HTMLButtonElement>('.table-chrome-leave')!.click();
+      expect(root.querySelector('.leave-confirm-modal')).not.toBeNull();
+
+      // ロビー状態へ遷移し、続いて再び対局開始する
+      emitView!(lobbyView);
+      expect(root.querySelector('.table-stage')).toBeNull();
+      expect(root.querySelector('.lobby-settings-panel')).not.toBeNull();
+
+      emitView!(playingView);
+      expect(root.querySelector('.table-stage')).not.toBeNull();
+      expect(root.querySelector('.leave-confirm-modal')).toBeNull();
+    } finally {
+      window.dispatchEvent(new Event('beforeunload'));
+      vi.doUnmock('../../net/host');
+      vi.resetModules();
+    }
   });
 });

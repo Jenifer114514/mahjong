@@ -134,14 +134,27 @@ const DEFAULT_TABLE_UI_STATE: TableUiState = {
 };
 
 const table3dScenes = new WeakMap<HTMLElement, Mahjong3DScene>();
+const table3dContainers = new Set<HTMLElement>();
+const feltVoidClickCallbacks = new WeakMap<HTMLElement, () => void>();
 
 /** コンテナに紐づく 3D 卓カメラ視点を標準位置へリセットする */
 export function resetTable3DCamera(container: HTMLElement): void {
   table3dScenes.get(container)?.resetCamera();
 }
 
+/** DOM から切り離された孤児コンテナの 3D シーン（WebGL2 コンテキスト）を自動回収する */
+function cleanupDetached3dScenes(activeContainer: HTMLElement): void {
+  for (const tracked of Array.from(table3dContainers)) {
+    if (tracked === activeContainer) continue;
+    if (!tracked.isConnected) {
+      destroyTable3DScene(tracked);
+    }
+  }
+}
+
 /** コンテナに 3D 卓がアタッチされているか（または破棄する） */
 export function destroyTable3DScene(container: HTMLElement): void {
+  table3dContainers.delete(container);
   const existing = table3dScenes.get(container);
   if (existing) {
     existing.destroy();
@@ -882,10 +895,14 @@ function updateAndRenderRoundBanner(
   view: StateView,
 ): boolean {
   const existing = activeRoundBanners.get(container) ?? null;
+  const existingBannerEls = Array.from(felt.children).filter((el): el is HTMLElement =>
+    el.classList.contains('round-start-banner'),
+  );
 
   if (view.phase !== 'playing' || !view.round) {
     if (existing?.timer) clearTimeout(existing.timer);
     activeRoundBanners.delete(container);
+    for (const el of existingBannerEls) el.remove();
     return false;
   }
 
@@ -926,11 +943,23 @@ function updateAndRenderRoundBanner(
       if (bannerState.timer) clearTimeout(bannerState.timer);
       activeRoundBanners.delete(container);
     }
+    for (const el of existingBannerEls) el.remove();
+    return false;
+  }
+
+  const reusable = existingBannerEls.find(
+    (el) => el.dataset.roundKey === bannerState.key,
+  );
+  for (const el of existingBannerEls) {
+    if (el !== reusable) el.remove();
+  }
+  if (reusable) {
     return false;
   }
 
   const bannerEl = document.createElement('div');
   bannerEl.className = 'round-start-banner';
+  bannerEl.dataset.roundKey = bannerState.key;
   bannerEl.setAttribute('role', 'status');
 
   const titleEl = document.createElement('div');
@@ -1003,14 +1032,13 @@ export function renderGameTable(
       ? captureDiscardOriginSnapshot(container)
       : null;
 
-  container.innerHTML = '';
-
   const playerCount = view.players.length;
   const isSpectator = Boolean(view.isSpectator);
   const isHost = !isSpectator && view.viewerPlayerId === view.hostPlayerId;
 
   if (view.phase === 'finished') {
     table3dScenes.get(container)?.pause();
+    container.innerHTML = '';
     const isFreshFinish = prevView !== null && prevView.phase !== 'finished';
     if (
       isFreshFinish &&
@@ -1025,6 +1053,72 @@ export function renderGameTable(
     });
     renderFinishedScreen(container, view, handlers);
     return;
+  }
+
+  // 3D WebGL2 麻雀卓の取得・再利用（DOM を切り離さずに維持してチラつき・コンテキストリークを防止）
+  const want3d = uiState.enable3dTable !== false;
+  let scene3d: Mahjong3DScene | null = null;
+  if (want3d) {
+    scene3d = table3dScenes.get(container) ?? null;
+    if (!scene3d) {
+      cleanupDetached3dScenes(container);
+      scene3d = Mahjong3DScene.tryCreate();
+      if (scene3d) {
+        table3dScenes.set(container, scene3d);
+        table3dContainers.add(container);
+      }
+    }
+  } else {
+    table3dScenes.get(container)?.pause();
+  }
+
+  const existingStage = Array.from(container.children).find((el): el is HTMLElement =>
+    el.classList.contains('table-stage'),
+  );
+  const existingFelt = existingStage
+    ? Array.from(existingStage.children).find((el): el is HTMLElement =>
+        el.classList.contains('table-felt'),
+      )
+    : undefined;
+  const canReuse3dDom = Boolean(
+    scene3d && existingStage && existingFelt && scene3d.canvas.parentElement === existingFelt,
+  );
+
+  let wrapper: HTMLElement;
+  let felt: HTMLElement;
+  if (canReuse3dDom && existingStage && existingFelt) {
+    wrapper = existingStage;
+    felt = existingFelt;
+    for (const child of Array.from(container.children)) {
+      if (child !== wrapper) child.remove();
+    }
+    for (const child of Array.from(felt.children)) {
+      if (
+        child !== scene3d!.canvas &&
+        !child.classList.contains('round-start-banner')
+      ) {
+        child.remove();
+      }
+    }
+  } else {
+    container.innerHTML = '';
+    wrapper = document.createElement('div');
+    wrapper.className = 'table-stage';
+    applyOrientationClass(wrapper);
+
+    felt = document.createElement('div');
+    felt.className = 'table-felt';
+    applyOrientationClass(felt);
+
+    felt.addEventListener('click', (event) => {
+      if (
+        event.target instanceof Element &&
+        event.target.closest('.hand-area, button, .table-3d-canvas')
+      ) {
+        return;
+      }
+      feltVoidClickCallbacks.get(felt)?.();
+    });
   }
 
   const activeSeatIndex = resolveActiveSeatIndex(
@@ -1059,14 +1153,6 @@ export function renderGameTable(
     activeSeatIndex === view.viewerSeatIndex
       ? view
       : { ...view, viewerSeatIndex: activeSeatIndex };
-
-  const wrapper = document.createElement('div');
-  wrapper.className = 'table-stage';
-  applyOrientationClass(wrapper);
-
-  const felt = document.createElement('div');
-  felt.className = 'table-felt';
-  applyOrientationClass(felt);
 
   // 相対座席の割り当て（下:自分または視点席、右:下家、上:対面(4人のみ)、左:上家）
   const selfPlayer = perspectiveView.players.find(
@@ -1209,13 +1295,7 @@ export function renderGameTable(
     view,
   );
 
-  felt.addEventListener('click', (event) => {
-    if (
-      event.target instanceof Element &&
-      event.target.closest('.hand-area, button, .table-3d-canvas')
-    ) {
-      return;
-    }
+  feltVoidClickCallbacks.set(felt, () => {
     if (selfSeatController) {
       selfSeatController.clearSelection();
       return;
@@ -1231,33 +1311,24 @@ export function renderGameTable(
     handlers.onSelectTile?.(null);
   });
 
-  // 3D WebGL2 麻雀卓の統合（非対応環境や設定 OFF 時は自動的に 2D DOM 卓へフォールバック）
-  const want3d = uiState.enable3dTable !== false;
-  let scene3d: Mahjong3DScene | null = null;
-  if (want3d) {
-    scene3d = table3dScenes.get(container) ?? null;
-    if (!scene3d) {
-      scene3d = Mahjong3DScene.tryCreate();
-      if (scene3d) {
-        table3dScenes.set(container, scene3d);
-      }
-    }
-  } else {
-    table3dScenes.get(container)?.pause();
-  }
-
   if (scene3d) {
     felt.classList.add('is-3d-table');
-    felt.prepend(scene3d.canvas);
+    if (scene3d.canvas.parentElement !== felt) {
+      felt.prepend(scene3d.canvas);
+    }
     selfSeatController?.setSceneRef(scene3d);
     scene3d.setCallbacks({
       onClickHandTile: (tileId) => selfSeatController?.tapTileById(tileId),
       onClickTableVoid: () => selfSeatController?.clearSelection(),
     });
+  } else {
+    felt.classList.remove('is-3d-table');
   }
 
-  wrapper.appendChild(felt);
-  container.appendChild(wrapper);
+  if (!canReuse3dDom) {
+    wrapper.appendChild(felt);
+    container.appendChild(wrapper);
+  }
 
   if (scene3d) {
     const canDiscardNow = Boolean(selfSeatController?.canDiscardNow);

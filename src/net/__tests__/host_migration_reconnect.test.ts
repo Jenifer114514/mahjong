@@ -592,4 +592,113 @@ describe('HostSession / ClientSession: 観戦・再接続・ホスト引き継�
 
     host.destroy();
   });
+
+  it('stayAsClient: true でホスト権限譲渡した旧ホストの遅延クローズで onStatusChange("closed") を発火しない', async () => {
+    peerClassHolder.FakePeer.registry.clear();
+    peerClassHolder.FakePeer.seq = 0;
+
+    const oldHostStatuses: string[] = [];
+    let demotedInfo: {
+      roomCode: string;
+      localToken: string;
+      localPlayerId: string;
+      hostEpoch: number;
+      newHostPeerId: string;
+    } | null = null;
+
+    const host = new HostSession(
+      '旧ホスト',
+      { playerCount: 3, gameLength: 'tonpuu' },
+      {
+        onViewChange: () => {},
+        onStatusChange: (s) => {
+          oldHostStatuses.push(s);
+        },
+        onError: () => {},
+        onHostSelfDemoted: (migration, localToken, localPlayerId) => {
+          demotedInfo = {
+            roomCode: migration.roomCode,
+            localToken,
+            localPlayerId,
+            hostEpoch: migration.hostEpoch,
+            newHostPeerId: migration.newHostPeerId,
+          };
+        },
+      },
+      { fixedRoomCode: 'GOLD', cpuCount: 0, cpuDelayMs: 0, cpuScheduler: () => {} },
+    );
+    host.start();
+    await flush();
+
+    let g1View: StateView | null = null;
+    let promotedHost: InstanceType<typeof HostSession> | null = null;
+    const g1 = new ClientSession(
+      'GOLD',
+      '次期ホスト',
+      {
+        onViewChange: (v) => {
+          g1View = v;
+        },
+        onStatusChange: () => {},
+        onError: () => {},
+        onHostHandover: (snap) => {
+          promotedHost = new HostSession(
+            '次期ホスト',
+            snap.state.ruleConfig,
+            {
+              onViewChange: () => {},
+              onStatusChange: () => {},
+              onError: () => {},
+            },
+            { initialSnapshot: snap, cpuDelayMs: 0, cpuScheduler: () => {} },
+          );
+          promotedHost.start();
+        },
+      },
+      { migrateDelayMs: 10 },
+    );
+    g1.connect();
+    await flush(50);
+
+    oldHostStatuses.length = 0;
+    expect(
+      host.transferHost(g1View!.viewerPlayerId, {
+        stayAsClient: true,
+        destroyDelayMs: 30,
+      }),
+    ).toBe(true);
+    expect(demotedInfo).not.toBeNull();
+
+    // 遅延クローズ期間経過後も旧ホストが 'closed' を通知しない
+    await flush(80);
+    expect(oldHostStatuses).not.toContain('closed');
+
+    // 元のホストが新ホストへクライアントとして合流できること
+    let rejoinedView: StateView | null = null;
+    const demoted = demotedInfo!;
+    const demotedClient = new ClientSession(
+      demoted.roomCode,
+      '旧ホスト',
+      {
+        onViewChange: (v) => {
+          rejoinedView = v;
+        },
+        onStatusChange: () => {},
+        onError: () => {},
+      },
+      {
+        reconnectToken: demoted.localToken,
+        initialHostEpoch: demoted.hostEpoch,
+        initialHostPeerId: demoted.newHostPeerId,
+      },
+    );
+    demotedClient.connect();
+    await flush(50);
+    expect(rejoinedView).not.toBeNull();
+    expect(rejoinedView!.hostPlayerId).toBe(g1View!.viewerPlayerId);
+
+    demotedClient.destroy();
+    (promotedHost as InstanceType<typeof HostSession> | null)?.destroy();
+    host.destroy();
+  });
 });

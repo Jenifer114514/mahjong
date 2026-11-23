@@ -863,7 +863,10 @@
 }
 
 .table-felt.is-3d-table .hand-area {
-  min-height: clamp(68px, 14vh, 108px);
+  flex-wrap: nowrap;
+  overflow: hidden;
+  height: clamp(68px, 14vh, 108px);
+  min-height: 0;
   padding: 6px 0 0;
 }
 
@@ -962,7 +965,10 @@
 
 @media (max-height: 540px), (max-width: 900px) {
   .table-felt.is-3d-table .hand-area {
-    min-height: clamp(50px, 13vh, 76px);
+    flex-wrap: nowrap;
+    overflow: hidden;
+    height: clamp(50px, 13vh, 76px);
+    min-height: 0;
   }
 
   .table-felt.is-3d-table .seat-orient-top > .seat-header {
