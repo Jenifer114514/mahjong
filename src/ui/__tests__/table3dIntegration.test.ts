@@ -110,6 +110,7 @@ interface MockGlTracker {
   drawCalls: number;
   texUploads: number;
   shaderCompiles: number;
+  loseContextCount: number;
   tileVerts: number[] | null;
   tileIndices: number[] | null;
   drawnTiles: DrawnTileRecord[];
@@ -200,7 +201,10 @@ function createFakeWebGL2Context(tracker: MockGlTracker): WebGL2RenderingContext
     texParameteri: noop,
     texParameterf: noop,
     activeTexture: noop,
-    getExtension: () => null,
+    getExtension: (name: string) =>
+      name === 'WEBGL_lose_context'
+        ? { loseContext: () => tracker.loseContextCount++ }
+        : null,
     getParameter: () => 1,
     enable: noop,
     disable: noop,
@@ -267,6 +271,7 @@ describe('3D麻雀卓とフォールバック統合', () => {
       drawCalls: 0,
       texUploads: 0,
       shaderCompiles: 0,
+      loseContextCount: 0,
       tileVerts: null,
       tileIndices: null,
       drawnTiles: [],
@@ -561,6 +566,283 @@ describe('3D麻雀卓とフォールバック統合', () => {
       enable3dTable: true,
     });
     expect(container.querySelector('.finished-panel')).not.toBeNull();
+
+    container.remove();
+  });
+
+  it('連続打牌更新でもcanvasをデタッチせず再利用し、0x0レイアウト計測で1x1に縮まず、孤児シーンをWEBGL_lose_contextで回収する', () => {
+    const tracker: MockGlTracker = {
+      drawCalls: 0,
+      texUploads: 0,
+      shaderCompiles: 0,
+      loseContextCount: 0,
+      tileVerts: null,
+      tileIndices: null,
+      drawnTiles: [],
+    };
+    const gl = createFakeWebGL2Context(tracker);
+    const ctx2d = createFake2dContext();
+    let getContextCalls = 0;
+
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation(() => 1);
+    vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => {});
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(
+      function (this: HTMLCanvasElement, kind: string) {
+        if (kind === 'webgl2') {
+          getContextCalls++;
+          return gl;
+        }
+        if (kind === '2d') return ctx2d;
+        return null;
+      } as unknown as HTMLCanvasElement['getContext'],
+    );
+
+    let mockWidth = 1280;
+    let mockHeight = 720;
+    vi.spyOn(HTMLCanvasElement.prototype, 'getBoundingClientRect').mockImplementation(
+      () => ({
+        width: mockWidth,
+        height: mockHeight,
+        top: 0,
+        left: 0,
+        right: mockWidth,
+        bottom: mockHeight,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      }),
+    );
+
+    const container1 = document.createElement('div');
+    document.body.appendChild(container1);
+    containers.push(container1);
+
+    const handlers = makeHandlers();
+    const view = makeView(4, 1234);
+    renderGameTable(container1, view, handlers, {
+      riichiSelectingMode: false,
+      autoTsumogiriEnabled: true,
+      enable3dTable: true,
+    });
+
+    const initialFelt = container1.querySelector('.table-felt')!;
+    const initialCanvas = container1.querySelector<HTMLCanvasElement>('.table-3d-canvas')!;
+    expect(getContextCalls).toBe(1);
+    expect(initialCanvas.width).toBeGreaterThan(100);
+    expect(initialCanvas.height).toBeGreaterThan(100);
+
+    // 連続 24 回の状態更新（3巡相当の打牌・ツモ更新）でも同一 canvas/felt がデタッチされない
+    const removeSpy = vi.spyOn(initialCanvas, 'remove');
+    for (let turn = 0; turn < 24; turn++) {
+      const seat = turn % 4;
+      view.players[seat]!.discards.push({
+        tile: t(`discard-${turn}`, '1m'),
+        isTsumogiri: false,
+        isRiichiDeclaration: false,
+      });
+      view.round!.currentTurnIndex = (seat + 1) % 4;
+      renderGameTable(container1, view, handlers, {
+        riichiSelectingMode: false,
+        autoTsumogiriEnabled: true,
+        enable3dTable: true,
+      });
+      expect(container1.querySelector('.table-felt')).toBe(initialFelt);
+      expect(container1.querySelector('.table-3d-canvas')).toBe(initialCanvas);
+    }
+    expect(removeSpy).not.toHaveBeenCalled();
+    expect(getContextCalls).toBe(1);
+    expect(tracker.loseContextCount).toBe(0);
+
+    // レイアウト移行中の瞬間 0x0 計測でも canvas バッファが 1x1 に破壊されない
+    const wBefore = initialCanvas.width;
+    const hBefore = initialCanvas.height;
+    mockWidth = 0;
+    mockHeight = 0;
+    renderGameTable(container1, view, handlers, {
+      riichiSelectingMode: false,
+      autoTsumogiriEnabled: true,
+      enable3dTable: true,
+    });
+    expect(initialCanvas.width).toBe(wBefore);
+    expect(initialCanvas.height).toBe(hBefore);
+
+    // 古いコンテナを DOM から切り離して新コンテナへ描画すると孤児 WebGL コンテキストを自動回収する
+    mockWidth = 1280;
+    mockHeight = 720;
+    container1.remove();
+    const container2 = document.createElement('div');
+    document.body.appendChild(container2);
+    containers.push(container2);
+    renderGameTable(container2, makeView(4, 5678), handlers, {
+      riichiSelectingMode: false,
+      autoTsumogiriEnabled: true,
+      enable3dTable: true,
+    });
+    expect(getContextCalls).toBe(2);
+    expect(tracker.loseContextCount).toBe(1);
+
+    destroyTable3DScene(container2);
+    expect(tracker.loseContextCount).toBe(2);
+    container2.remove();
+  });
+
+  it('実エンジン形式の加槓(4枚配列+addedTile)を4枚のみ描画し、3D手牌OBBの上下端判定とコンテキストロスト復帰が機能する', () => {
+    const tracker: MockGlTracker = {
+      drawCalls: 0,
+      texUploads: 0,
+      shaderCompiles: 0,
+      loseContextCount: 0,
+      tileVerts: null,
+      tileIndices: null,
+      drawnTiles: [],
+    };
+    const gl = createFakeWebGL2Context(tracker);
+    const ctx2d = createFake2dContext();
+    let rafCallback: FrameRequestCallback | null = null;
+
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+      rafCallback = cb;
+      return 1;
+    });
+    vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => {});
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(
+      function (this: HTMLCanvasElement, kind: string) {
+        if (kind === 'webgl2') return gl;
+        if (kind === '2d') return ctx2d;
+        return null;
+      } as unknown as HTMLCanvasElement['getContext'],
+    );
+    vi.spyOn(HTMLCanvasElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      width: 1280,
+      height: 720,
+      top: 0,
+      left: 0,
+      right: 1280,
+      bottom: 720,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    });
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    containers.push(container);
+
+    // 1. 加槓の枚数検証: 副露なし時の描画枚数と加槓追加時の描画枚数の差分がちょうど +4 枚であること
+    const baseView = makeView(4, 2468);
+    baseView.players[0]!.melds = [];
+    const handlers = makeHandlers();
+    renderGameTable(container, baseView, handlers, {
+      riichiSelectingMode: false,
+      autoTsumogiriEnabled: true,
+      enable3dTable: true,
+      cameraPreset: 'standard',
+    });
+    expect(rafCallback).not.toBeNull();
+    rafCallback!(performance.now());
+    const countWithoutMeld = tracker.drawnTiles.length;
+
+    const kakanView = makeView(4, 2468);
+    kakanView.players[0]!.melds = [
+      {
+        type: 'kakan',
+        // 実エンジン(reducerResolution.ts)と同じく addedTile を含む4枚配列
+        tiles: [t('s8a', '8s'), t('s8b', '8s'), t('s8c', '8s'), t('s8d', '8s')],
+        calledTile: t('s8b', '8s'),
+        fromSeatIndex: 1,
+        addedTile: t('s8d', '8s'),
+      },
+    ];
+    tracker.drawnTiles.length = 0;
+    renderGameTable(container, kakanView, handlers, {
+      riichiSelectingMode: false,
+      autoTsumogiriEnabled: true,
+      enable3dTable: true,
+      cameraPreset: 'standard',
+    });
+    rafCallback!(performance.now() + 16);
+    const countWithKakan = tracker.drawnTiles.length;
+    expect(countWithKakan - countWithoutMeld).toBe(4);
+
+    // 2. 3D手牌の立ち牌(+48度傾き)の上端側・下端側がいずれも正しく同じ牌へヒットすること
+    const canvas = container.querySelector<HTMLCanvasElement>('.table-3d-canvas')!;
+    const hitView = makeView(4, 2468);
+    renderGameTable(container, hitView, handlers, {
+      riichiSelectingMode: false,
+      autoTsumogiriEnabled: true,
+      enable3dTable: true,
+      cameraPreset: 'standard',
+    });
+    for (let f = 1; f <= 30; f++) {
+      rafCallback!(performance.now() + f * 30);
+    }
+
+    const makePtr = (type: string, clientX: number, clientY: number) => {
+      if (typeof PointerEvent !== 'undefined') {
+        return new PointerEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          clientX,
+          clientY,
+          button: 0,
+          pointerType: 'mouse',
+          pointerId: 1,
+        });
+      }
+      const ev = new MouseEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        clientX,
+        clientY,
+        button: 0,
+      });
+      Object.defineProperty(ev, 'pointerType', { value: 'mouse' });
+      Object.defineProperty(ev, 'pointerId', { value: 1 });
+      return ev;
+    };
+
+    const hitYs: number[] = [];
+    for (let y = 350; y <= 715; y += 2) {
+      canvas.dispatchEvent(makePtr('pointermove', 640, y));
+      if (canvas.style.cursor === 'pointer') {
+        hitYs.push(y);
+      }
+    }
+    expect(hitYs.length).toBeGreaterThanOrEqual(20);
+    const topEdgeY = hitYs[1]!;
+    const bottomEdgeY = hitYs[hitYs.length - 2]!;
+    expect(bottomEdgeY - topEdgeY).toBeGreaterThanOrEqual(35);
+
+    // 上端側タップで選択され、下端側タップでも同一牌が選択済みとして確定打牌されること
+    canvas.dispatchEvent(makePtr('pointerdown', 640, topEdgeY));
+    canvas.dispatchEvent(makePtr('pointerup', 640, topEdgeY));
+    const selectMock = handlers.onSelectTile as ReturnType<typeof vi.fn>;
+    expect(selectMock).toHaveBeenCalledTimes(1);
+    const selectedId = selectMock.mock.calls[0]![0] as string;
+
+    canvas.dispatchEvent(makePtr('pointerdown', 640, bottomEdgeY));
+    canvas.dispatchEvent(makePtr('pointerup', 640, bottomEdgeY));
+    expect(handlers.onDiscardTile).toHaveBeenCalledWith(selectedId);
+
+    // 3. webglcontextlost → webglcontextrestored でシェーダ・テクスチャが再構築され描画が継続すること
+    const shadersBeforeRestore = tracker.shaderCompiles;
+    const texUploadsBeforeRestore = tracker.texUploads;
+    const drawCallsBeforeRestore = tracker.drawCalls;
+
+    const lostEvent = new Event('webglcontextlost', { cancelable: true });
+    canvas.dispatchEvent(lostEvent);
+    expect(lostEvent.defaultPrevented).toBe(true);
+
+    // contextLost 中は描画しない
+    rafCallback!(performance.now() + 1000);
+    expect(tracker.drawCalls).toBe(drawCallsBeforeRestore);
+
+    canvas.dispatchEvent(new Event('webglcontextrestored'));
+    expect(tracker.shaderCompiles).toBe(shadersBeforeRestore + 2);
+    expect(tracker.texUploads).toBeGreaterThan(texUploadsBeforeRestore);
+
+    rafCallback!(performance.now() + 1016);
+    expect(tracker.drawCalls).toBeGreaterThan(drawCallsBeforeRestore);
 
     container.remove();
   });

@@ -39,6 +39,7 @@ import {
 } from './ui/lobbyView';
 import {
   captureDiscardOriginSnapshot,
+  destroyTable3DScene,
   renderGameTable,
   resetTable3DCamera,
   type DiscardOriginSnapshot,
@@ -126,6 +127,10 @@ class MahjongApp {
   private readonly mainLayer: HTMLElement;
   private readonly chatToastLayer: HTMLElement;
   private readonly floatingLayer: HTMLElement;
+  private gameShell: HTMLElement | null = null;
+  private gameContent: HTMLElement | null = null;
+  private cleaningUpSession = false;
+  private sessionSeq = 0;
   private activeSession: Session | null = null;
   private currentView: StateView | null = null;
   private lastRenderedGameView: StateView | null = null;
@@ -292,15 +297,18 @@ class MahjongApp {
 
   private buildHostCallbacks(
     getHost: () => HostSession,
+    sessionSeq: number,
     options: { fixedRoomCode?: string } = {},
   ): HostSessionCallbacks {
     return {
       onViewChange: (view) => {
+        if (sessionSeq !== this.sessionSeq) return;
         this.busy = false;
         this.actionInFlight = false;
         this.applyStateView(view);
       },
       onStatusChange: (status, detail) => {
+        if (this.cleaningUpSession || sessionSeq !== this.sessionSeq) return;
         const host = getHost();
         if (status === 'ready') {
           this.busy = false;
@@ -324,15 +332,19 @@ class MahjongApp {
         this.render();
       },
       onError: (err) => {
+        if (sessionSeq !== this.sessionSeq) return;
         this.handleGameError(err);
       },
       onChatMessage: (message) => {
+        if (sessionSeq !== this.sessionSeq) return;
         this.handleIncomingChat(message);
       },
       onChatHistory: (messages) => {
+        if (sessionSeq !== this.sessionSeq) return;
         this.handleChatHistory(messages);
       },
       onWelcome: (welcome) => {
+        if (sessionSeq !== this.sessionSeq) return;
         const host = getHost();
         if (host.isOffline()) return;
         const record: SavedSessionRecord = {
@@ -349,11 +361,13 @@ class MahjongApp {
         saveSessionRecord(record);
       },
       onPermanentRoomClaimConflict: (roomCode) => {
+        if (sessionSeq !== this.sessionSeq) return;
         if (options.fixedRoomCode && roomCode === options.fixedRoomCode) {
           this.joinRoom(roomCode, this.formState.playerName);
         }
       },
       onHostSelfDemoted: (migration, localToken, localPlayerId) => {
+        if (sessionSeq !== this.sessionSeq) return;
         this.transitionToClientAfterHandover(
           migration.roomCode,
           this.currentView?.players.find((p) => p.playerId === localPlayerId)
@@ -366,15 +380,20 @@ class MahjongApp {
     };
   }
 
-  private buildClientCallbacks(roomCode: string): ClientSessionCallbacks {
+  private buildClientCallbacks(
+    roomCode: string,
+    sessionSeq: number,
+  ): ClientSessionCallbacks {
     const label = formatRoomDisplayName(roomCode);
     return {
       onViewChange: (view) => {
+        if (sessionSeq !== this.sessionSeq) return;
         this.busy = false;
         this.actionInFlight = false;
         this.applyStateView(view);
       },
       onStatusChange: (status, detail) => {
+        if (this.cleaningUpSession || sessionSeq !== this.sessionSeq) return;
         if (status === 'connected') {
           this.busy = false;
           this.statusKind = 'ok';
@@ -393,15 +412,19 @@ class MahjongApp {
         this.render();
       },
       onError: (err) => {
+        if (sessionSeq !== this.sessionSeq) return;
         this.handleGameError(err);
       },
       onChatMessage: (message) => {
+        if (sessionSeq !== this.sessionSeq) return;
         this.handleIncomingChat(message);
       },
       onChatHistory: (messages) => {
+        if (sessionSeq !== this.sessionSeq) return;
         this.handleChatHistory(messages);
       },
       onWelcome: (welcome) => {
+        if (sessionSeq !== this.sessionSeq) return;
         const record: SavedSessionRecord = {
           roomCode: welcome.roomCode,
           hostPeerId: welcome.hostPeerId,
@@ -416,6 +439,7 @@ class MahjongApp {
         saveSessionRecord(record);
       },
       onMigrated: (migration) => {
+        if (sessionSeq !== this.sessionSeq) return;
         if (this.savedSession && this.savedSession.roomCode === migration.roomCode) {
           this.savedSession = {
             ...this.savedSession,
@@ -427,12 +451,15 @@ class MahjongApp {
         }
       },
       onHostHandover: (snapshot) => {
+        if (sessionSeq !== this.sessionSeq) return;
         this.promoteToHostFromSnapshot(snapshot);
       },
       onPromoteFromCheckpoint: (params) => {
+        if (sessionSeq !== this.sessionSeq) return;
         this.promoteToHostFromCheckpoint(params);
       },
       onHostAwayChange: (away) => {
+        if (sessionSeq !== this.sessionSeq) return;
         if (this.hostAway !== away) {
           this.hostAway = away;
           this.render();
@@ -459,11 +486,12 @@ class MahjongApp {
     this.statusKind = 'normal';
     this.render();
 
+    const sessionSeq = ++this.sessionSeq;
     let host!: HostSession;
     host = new HostSession(
       playerName,
       ruleConfig,
-      this.buildHostCallbacks(() => host, { fixedRoomCode }),
+      this.buildHostCallbacks(() => host, sessionSeq, { fixedRoomCode }),
       {
         cpuCount,
         cpuDelayMs: 650,
@@ -495,13 +523,15 @@ class MahjongApp {
     this.statusKind = 'normal';
     this.render();
 
-    const baseCallbacks = this.buildClientCallbacks(roomId);
+    const sessionSeq = ++this.sessionSeq;
+    const baseCallbacks = this.buildClientCallbacks(roomId, sessionSeq);
     const client = new ClientSession(
       roomId,
       playerName,
       {
         ...baseCallbacks,
         onNoHostAvailable: () => {
+          if (sessionSeq !== this.sessionSeq) return;
           this.createRoom(
             playerName,
             { ...def.defaultRuleConfig },
@@ -556,11 +586,12 @@ class MahjongApp {
         (p) => p.playerId === snapshot.state.hostPlayerId,
       )?.name ?? 'ホスト';
 
+    const sessionSeq = ++this.sessionSeq;
     let host!: HostSession;
     host = new HostSession(
       hostName,
       snapshot.state.ruleConfig,
-      this.buildHostCallbacks(() => host),
+      this.buildHostCallbacks(() => host, sessionSeq),
       {
         cpuDelayMs: 650,
         initialSnapshot: snapshot,
@@ -581,11 +612,12 @@ class MahjongApp {
       params.latestView.players.find((p) => p.playerId === params.myPlayerId)
         ?.name ?? 'ホスト';
 
+    const sessionSeq = ++this.sessionSeq;
     let host!: HostSession;
     host = new HostSession(
       hostName,
       params.latestView.ruleConfig,
-      this.buildHostCallbacks(() => host),
+      this.buildHostCallbacks(() => host, sessionSeq),
       {
         cpuDelayMs: 650,
         pendingTakeover: {
@@ -620,10 +652,11 @@ class MahjongApp {
   ): void {
     this.activeSession = null;
     this.busy = true;
+    const sessionSeq = ++this.sessionSeq;
     const client = new ClientSession(
       roomCode,
       playerName,
-      this.buildClientCallbacks(roomCode),
+      this.buildClientCallbacks(roomCode, sessionSeq),
       {
         reconnectToken,
         initialHostEpoch: hostEpoch,
@@ -732,10 +765,11 @@ class MahjongApp {
     this.statusKind = 'normal';
     this.render();
 
+    const sessionSeq = ++this.sessionSeq;
     const client = new ClientSession(
       normalized,
       playerName,
-      this.buildClientCallbacks(normalized),
+      this.buildClientCallbacks(normalized, sessionSeq),
       overrides ??
         (matchingSaved
           ? {
@@ -767,14 +801,13 @@ class MahjongApp {
     this.currentView = view;
     if (prevView?.phase === 'lobby' && view.phase !== 'lobby') {
       this.clearLobbyChatToast();
-    } else if (
-      prevView &&
-      prevView.phase !== 'lobby' &&
-      view.phase === 'lobby'
-    ) {
-      this.clearChatBubbles();
-      this.settingsOpen = false;
-      this.renderFloating();
+    } else if (view.phase === 'lobby') {
+      this.leaveConfirmPending = false;
+      if (prevView && prevView.phase !== 'lobby') {
+        this.clearChatBubbles();
+        this.settingsOpen = false;
+        this.renderFloating();
+      }
     }
     if (
       view.phase === 'awaiting_responses' &&
@@ -951,8 +984,8 @@ class MahjongApp {
     }
     clearSavedSessionRecord();
     this.savedSession = null;
-    this.cleanupSession();
     this.currentView = null;
+    this.cleanupSession();
     this.busy = false;
     this.actionInFlight = false;
     this.riichiSelectingMode = false;
@@ -1078,27 +1111,40 @@ class MahjongApp {
   }
 
   private cleanupSession(): void {
-    this.stopRoomWatcher();
-    this.lastRenderedGameView = null;
-    this.lastRenderedPerspectiveSeatIndex = 0;
-    this.stopAutoTsumogiriTimer();
-    this.stopAutoAssistTimer();
-    this.stopCountdownTicker();
-    this.settingsOpen = false;
-    this.chatOpen = false;
-    this.chatMessages = [];
-    this.unreadChatCount = 0;
-    this.chatDraft = '';
-    this.clearChatOverlays();
-    this.fullscreenError = null;
-    this.landscapeLockMessage = null;
-    this.hostAway = false;
-    this.hostTabWarning = false;
-    void this.releaseWakeLock();
-    this.renderFloating();
-    if (!this.activeSession) return;
-    this.activeSession.session.destroy();
-    this.activeSession = null;
+    if (this.cleaningUpSession) return;
+    this.cleaningUpSession = true;
+    this.sessionSeq++;
+    try {
+      this.stopRoomWatcher();
+      if (this.gameContent) {
+        destroyTable3DScene(this.gameContent);
+        this.gameContent = null;
+      }
+      this.gameShell = null;
+      this.lastRenderedGameView = null;
+      this.lastRenderedPerspectiveSeatIndex = 0;
+      this.stopAutoTsumogiriTimer();
+      this.stopAutoAssistTimer();
+      this.stopCountdownTicker();
+      this.leaveConfirmPending = false;
+      this.settingsOpen = false;
+      this.chatOpen = false;
+      this.chatMessages = [];
+      this.unreadChatCount = 0;
+      this.chatDraft = '';
+      this.clearChatOverlays();
+      this.fullscreenError = null;
+      this.landscapeLockMessage = null;
+      this.hostAway = false;
+      this.hostTabWarning = false;
+      void this.releaseWakeLock();
+      this.renderFloating();
+      const sessionToDestroy = this.activeSession;
+      this.activeSession = null;
+      sessionToDestroy?.session.destroy();
+    } finally {
+      this.cleaningUpSession = false;
+    }
   }
 
   private clearChatBubbles(): void {
@@ -1464,26 +1510,7 @@ class MahjongApp {
     }
   }
 
-  private render(): void {
-    const discardOriginSnapshot: DiscardOriginSnapshot | null =
-      this.currentView !== null &&
-      this.currentView.phase !== 'lobby' &&
-      this.currentView.phase !== 'finished' &&
-      this.lastRenderedGameView !== null &&
-      this.lastRenderedGameView !== this.currentView
-        ? captureDiscardOriginSnapshot(this.mainLayer)
-        : null;
-
-    this.mainLayer.innerHTML = '';
-
-    // 対局中は「雀卓だけ」を表示する（トップバーやサイドパネルを出さない）
-    const inGame =
-      this.currentView !== null && this.currentView.phase !== 'lobby';
-
-    const shell = document.createElement('div');
-    shell.className = inGame ? 'app-shell app-shell-table-only' : 'app-shell';
-
-    // Top bar（対局中は出さない）
+  private buildTopBar(inGame: boolean): HTMLElement {
     const topBar = document.createElement('header');
     topBar.className = inGame ? 'top-bar is-hidden-in-game' : 'top-bar';
 
@@ -1539,43 +1566,131 @@ class MahjongApp {
     rotateHint.textContent = '横画面推奨';
 
     topBar.append(title, rotateHint, rightControls);
-    shell.appendChild(topBar);
+    return topBar;
+  }
 
-    // Error banner
-    if (this.errorBanner) {
-      const banner = document.createElement('div');
-      banner.className = 'error-banner';
+  private buildErrorBanner(): HTMLElement {
+    const banner = document.createElement('div');
+    banner.className = 'error-banner';
 
-      const msg = document.createElement('span');
-      msg.textContent = this.errorBanner;
+    const msg = document.createElement('span');
+    msg.textContent = this.errorBanner ?? '';
 
-      const close = document.createElement('button');
-      close.type = 'button';
-      close.className = 'btn btn-secondary';
-      close.style.padding = '4px 10px';
-      close.textContent = '閉じる';
-      close.addEventListener('click', () => {
-        this.errorBanner = null;
-        this.render();
-      });
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'btn btn-secondary';
+    close.style.padding = '4px 10px';
+    close.textContent = '閉じる';
+    close.addEventListener('click', () => {
+      this.errorBanner = null;
+      this.render();
+    });
 
-      banner.append(msg, close);
-      shell.appendChild(banner);
+    banner.append(msg, close);
+    return banner;
+  }
+
+  private render(): void {
+    if (!this.root.isConnected) {
+      this.cleanupSession();
+      return;
     }
+
+    // 対局中は「雀卓だけ」を表示する（トップバーやサイドパネルを出さない）
+    const inGame =
+      this.currentView !== null && this.currentView.phase !== 'lobby';
+
+    const discardOriginSnapshot: DiscardOriginSnapshot | null =
+      inGame &&
+      this.currentView!.phase !== 'finished' &&
+      this.lastRenderedGameView !== null &&
+      this.lastRenderedGameView !== this.currentView &&
+      this.gameContent
+        ? captureDiscardOriginSnapshot(this.gameContent)
+        : null;
 
     const hostStatusBannerText = this.getHostStatusBannerText();
-    if (!inGame && hostStatusBannerText) {
-      const awayBanner = document.createElement('div');
-      awayBanner.className = 'host-away-banner';
-      awayBanner.setAttribute('role', 'alert');
-      awayBanner.textContent = hostStatusBannerText;
-      shell.appendChild(awayBanner);
-    }
+    let content: HTMLElement;
 
-    const content = document.createElement('main');
-    if (inGame) content.className = 'table-only-main';
-    shell.appendChild(content);
-    this.mainLayer.appendChild(shell);
+    if (!inGame) {
+      if (this.gameContent) {
+        destroyTable3DScene(this.gameContent);
+        this.gameContent = null;
+      }
+      this.gameShell = null;
+      this.mainLayer.innerHTML = '';
+
+      const shell = document.createElement('div');
+      shell.className = 'app-shell';
+      shell.appendChild(this.buildTopBar(false));
+
+      if (this.errorBanner) {
+        shell.appendChild(this.buildErrorBanner());
+      }
+      if (hostStatusBannerText) {
+        const awayBanner = document.createElement('div');
+        awayBanner.className = 'host-away-banner';
+        awayBanner.setAttribute('role', 'alert');
+        awayBanner.textContent = hostStatusBannerText;
+        shell.appendChild(awayBanner);
+      }
+
+      content = document.createElement('main');
+      shell.appendChild(content);
+      this.mainLayer.appendChild(shell);
+    } else {
+      const canReuseGameShell = Boolean(
+        this.gameShell &&
+          this.gameContent &&
+          this.gameShell.isConnected &&
+          this.gameShell.parentElement === this.mainLayer,
+      );
+
+      if (!canReuseGameShell || !this.gameShell || !this.gameContent) {
+        if (this.gameContent) {
+          destroyTable3DScene(this.gameContent);
+        }
+        this.mainLayer.innerHTML = '';
+        const shell = document.createElement('div');
+        shell.className = 'app-shell app-shell-table-only';
+        shell.appendChild(this.buildTopBar(true));
+
+        content = document.createElement('main');
+        content.className = 'table-only-main';
+        shell.appendChild(content);
+        this.mainLayer.appendChild(shell);
+
+        this.gameShell = shell;
+        this.gameContent = content;
+      } else {
+        content = this.gameContent;
+        const existingTopBar = Array.from(this.gameShell.children).find((el) =>
+          el.classList.contains('top-bar'),
+        );
+        const nextTopBar = this.buildTopBar(true);
+        if (existingTopBar) {
+          existingTopBar.replaceWith(nextTopBar);
+        } else {
+          this.gameShell.insertBefore(nextTopBar, content);
+        }
+      }
+
+      // 対局中は 3D 卓 DOM (this.gameContent) を保持したままエラーバナーのみ差分更新
+      for (const oldBanner of Array.from(
+        this.gameShell.querySelectorAll('.error-banner'),
+      )) {
+        oldBanner.remove();
+      }
+      if (this.errorBanner) {
+        this.gameShell.insertBefore(this.buildErrorBanner(), content);
+      }
+
+      for (const oldLeave of Array.from(
+        this.mainLayer.querySelectorAll('.leave-confirm-modal'),
+      )) {
+        oldLeave.remove();
+      }
+    }
 
     const view = this.currentView;
     const lobbyHandlers = {
@@ -1955,7 +2070,7 @@ class MahjongApp {
         b.addEventListener('click', () => {
           this.table3dCameraPreset = preset.id;
           save3dCameraPreference(preset.id);
-          resetTable3DCamera(this.mainLayer);
+          resetTable3DCamera(this.gameContent ?? this.mainLayer);
           soundEngine.playSelect();
           this.render();
           this.renderFloating();
@@ -1968,7 +2083,7 @@ class MahjongApp {
       resetBtn.className = 'btn btn-secondary setting-camera-reset-btn';
       resetBtn.textContent = '視点リセット';
       resetBtn.addEventListener('click', () => {
-        resetTable3DCamera(this.mainLayer);
+        resetTable3DCamera(this.gameContent ?? this.mainLayer);
         soundEngine.playSelect();
       });
       cameraBtns.appendChild(resetBtn);

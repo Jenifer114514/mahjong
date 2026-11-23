@@ -120,6 +120,7 @@ export class HostSession {
   private idRetryCount = 0;
   private responseTimerId: ReturnType<typeof setTimeout> | null = null;
   private disconnectTurnTimerId: ReturnType<typeof setTimeout> | null = null;
+  private transferDestroyTimerId: ReturnType<typeof setTimeout> | null = null;
 
   private readonly offline: boolean;
   private readonly autoStart: boolean;
@@ -532,7 +533,11 @@ export class HostSession {
       this.cpuToken++;
       this.clearResponseTimer();
       this.clearDisconnectTurnTimer();
-      setTimeout(() => {
+      if (this.transferDestroyTimerId !== null) {
+        clearTimeout(this.transferDestroyTimerId);
+      }
+      this.transferDestroyTimerId = setTimeout(() => {
+        this.transferDestroyTimerId = null;
         for (const conn of this.participantConns.values()) {
           conn.close();
         }
@@ -546,7 +551,9 @@ export class HostSession {
           this.peer.destroy();
         }
         this.peer = null;
-        this.callbacks.onStatusChange('closed');
+        if (!stayAsClient) {
+          this.callbacks.onStatusChange('closed');
+        }
       }, destroyDelay);
     }
 
@@ -2194,6 +2201,10 @@ export class HostSession {
     if (this.reconnectPeerTimerId !== null) {
       clearTimeout(this.reconnectPeerTimerId);
       this.reconnectPeerTimerId = null;
+    }
+    if (this.transferDestroyTimerId !== null) {
+      clearTimeout(this.transferDestroyTimerId);
+      this.transferDestroyTimerId = null;
     }
     for (const conn of this.participantConns.values()) {
       conn.close();

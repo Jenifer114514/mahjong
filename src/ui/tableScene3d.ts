@@ -823,37 +823,37 @@ function drawRoundRectPath(
 export class Mahjong3DScene {
   readonly canvas: HTMLCanvasElement;
   private readonly gl: WebGL2RenderingContext;
-  private readonly prog: WebGLProgram;
+  private prog!: WebGLProgram;
 
-  private readonly uViewProj: WebGLUniformLocation;
-  private readonly uModel: WebGLUniformLocation;
-  private readonly uColor: WebGLUniformLocation;
-  private readonly uUvRect: WebGLUniformLocation;
-  private readonly uUseAtlas: WebGLUniformLocation;
-  private readonly uUseConsole: WebGLUniformLocation;
-  private readonly uBackTone: WebGLUniformLocation;
-  private readonly uHighlight: WebGLUniformLocation;
-  private readonly uEmissive: WebGLUniformLocation;
-  private readonly uDoraGlow: WebGLUniformLocation;
-  private readonly uTime: WebGLUniformLocation;
-  private readonly uCamPos: WebGLUniformLocation;
-  private readonly uAtlasTex: WebGLUniformLocation;
-  private readonly uConsoleTex: WebGLUniformLocation;
+  private uViewProj!: WebGLUniformLocation;
+  private uModel!: WebGLUniformLocation;
+  private uColor!: WebGLUniformLocation;
+  private uUvRect!: WebGLUniformLocation;
+  private uUseAtlas!: WebGLUniformLocation;
+  private uUseConsole!: WebGLUniformLocation;
+  private uBackTone!: WebGLUniformLocation;
+  private uHighlight!: WebGLUniformLocation;
+  private uEmissive!: WebGLUniformLocation;
+  private uDoraGlow!: WebGLUniformLocation;
+  private uTime!: WebGLUniformLocation;
+  private uCamPos!: WebGLUniformLocation;
+  private uAtlasTex!: WebGLUniformLocation;
+  private uConsoleTex!: WebGLUniformLocation;
 
-  private readonly tileMesh: MeshBuffers;
-  private readonly boxMesh: MeshBuffers;
-  private readonly consoleDeckMesh: MeshBuffers;
-  private readonly feltMesh: MeshBuffers;
-  private readonly shadowMesh: MeshBuffers;
-  private readonly markerMesh: MeshBuffers;
+  private tileMesh!: MeshBuffers;
+  private boxMesh!: MeshBuffers;
+  private consoleDeckMesh!: MeshBuffers;
+  private feltMesh!: MeshBuffers;
+  private shadowMesh!: MeshBuffers;
+  private markerMesh!: MeshBuffers;
 
   private atlas: TileAtlas;
   private readonly atlasUvMap = new Map<string, TileFaceUv>();
-  private atlasTex: WebGLTexture;
+  private atlasTex!: WebGLTexture;
 
   private readonly consoleCanvas: HTMLCanvasElement;
   private readonly consoleCtx: CanvasRenderingContext2D;
-  private readonly consoleTex: WebGLTexture;
+  private consoleTex!: WebGLTexture;
   private consoleDirty = true;
 
   private params: Table3DSyncParams | null = null;
@@ -888,10 +888,12 @@ export class Mahjong3DScene {
   private dragStartPitch = 0;
   private lastDiscardTarget: { playerId: string; tileId: string } | null = null;
   private lastRoundKey: string | null = null;
+  private hasSyncedCamera = false;
+  private lastSelfTilePos = new Map<string, [number, number, number]>();
 
   private resizeObserver: ResizeObserver | null = null;
   private rafId: number | null = null;
-  private paused = false;
+  private paused = true;
   private destroyed = false;
   private contextLost = false;
   private lastTickTime = 0;
@@ -912,8 +914,9 @@ export class Mahjong3DScene {
     this.contextLost = true;
   };
   private readonly onContextRestoredBound = () => {
+    if (this.destroyed) return;
     this.contextLost = false;
-    this.uploadAtlasTexture();
+    this.initGlResources();
     this.consoleDirty = true;
   };
 
@@ -948,6 +951,27 @@ export class Mahjong3DScene {
     this.gl = gl;
     this.callbacks = callbacks;
 
+    this.atlas = createTileAtlas({ size: 2048 });
+    this.consoleCanvas = document.createElement('canvas');
+    this.consoleCanvas.width = 512;
+    this.consoleCanvas.height = 512;
+    this.consoleCtx = this.consoleCanvas.getContext('2d')!;
+
+    this.initGlResources();
+
+    // Webフォント読み込み完了後に、もしフォントが新しく入っていたら高精細アトラスを貼り直す
+    void waitForTileFonts().then(() => {
+      if (this.destroyed || this.contextLost) return;
+      this.atlas.dispose();
+      this.atlas = createTileAtlas({ size: 2048 });
+      this.uploadAtlasTexture();
+    });
+
+    this.bindEvents();
+  }
+
+  private initGlResources(): void {
+    const gl = this.gl;
     this.prog = createProgram(gl, VERT_SRC, FRAG_SRC);
     this.uViewProj = gl.getUniformLocation(this.prog, 'uViewProj')!;
     this.uModel = gl.getUniformLocation(this.prog, 'uModel')!;
@@ -971,22 +995,9 @@ export class Mahjong3DScene {
     this.shadowMesh = buildQuadPlaneMesh(gl, 6);
     this.markerMesh = buildDiamondMarkerMesh(gl);
 
-    this.atlas = createTileAtlas({ size: 2048 });
     this.atlasTex = gl.createTexture()!;
     this.uploadAtlasTexture();
 
-    // Webフォント読み込み完了後に、もしフォントが新しく入っていたら高精細アトラスを貼り直す
-    void waitForTileFonts().then(() => {
-      if (this.destroyed || this.contextLost) return;
-      this.atlas.dispose();
-      this.atlas = createTileAtlas({ size: 2048 });
-      this.uploadAtlasTexture();
-    });
-
-    this.consoleCanvas = document.createElement('canvas');
-    this.consoleCanvas.width = 512;
-    this.consoleCanvas.height = 512;
-    this.consoleCtx = this.consoleCanvas.getContext('2d')!;
     this.consoleTex = gl.createTexture()!;
     gl.bindTexture(gl.TEXTURE_2D, this.consoleTex);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
@@ -997,9 +1008,6 @@ export class Mahjong3DScene {
     gl.enable(gl.DEPTH_TEST);
     gl.enable(gl.CULL_FACE);
     gl.cullFace(gl.BACK);
-
-    this.bindEvents();
-    this.startLoop();
   }
 
   private uploadAtlasTexture(): void {
@@ -1116,6 +1124,9 @@ export class Mahjong3DScene {
       this.throwAnims.length = 0;
       this.drawAnims.length = 0;
       this.doraFlipAnims.length = 0;
+      this.selectProgress.clear();
+      this.hoverProgress.clear();
+      this.lastSelfTilePos.clear();
     }
 
     // 直前の鳴き・副露で最後の捨て牌が既に回収された場合を考慮して存在チェック
@@ -1146,16 +1157,19 @@ export class Mahjong3DScene {
         const player = bySide.get(side);
         if (!player || player.discards.length === 0) continue;
         const discardIndex = player.discards.length - 1;
+        const discardedTileId = player.discards[discardIndex]!.tile.id;
         this.lastDiscardTarget = {
           playerId: player.playerId,
-          tileId: player.discards[discardIndex]!.tile.id,
+          tileId: discardedTileId,
         };
+        const selfSavedPos =
+          side === 'self' ? this.lastSelfTilePos.get(discardedTileId) : undefined;
         this.throwAnims.push({
           side,
           discardIndex,
           startTime: now,
           duration: 0.28,
-          from: this.getHandOriginForSide(side),
+          from: selfSavedPos ?? this.getHandOriginForSide(side),
         });
       }
     }
@@ -1197,6 +1211,31 @@ export class Mahjong3DScene {
     }
 
     this.syncCanvasSize();
+
+    if (!this.hasSyncedCamera && this.canvas.width > 0 && this.canvas.height > 0) {
+      this.hasSyncedCamera = true;
+      const basePitch =
+        this.cameraPreset === 'high'
+          ? deg(60)
+          : this.cameraPreset === 'low'
+            ? deg(38)
+            : deg(47);
+      this.currentPitch = Math.max(
+        deg(31),
+        Math.min(deg(68), basePitch + this.userPitchOffset),
+      );
+      this.currentYaw = this.userYawOffset;
+      const aspect = this.canvas.width / this.canvas.height;
+      const aspectZoom =
+        aspect < 1.5 ? 1.5 / Math.max(0.85, aspect) : Math.max(0.96, 1.0 + (aspect - 1.78) * 0.04);
+      const presetZoom =
+        this.cameraPreset === 'high'
+          ? 1.06
+          : this.cameraPreset === 'low'
+            ? 0.94
+            : 1.0;
+      this.currentZoom = aspectZoom * presetZoom;
+    }
   }
 
   private getHandOriginForSide(side: SeatSide3D): [number, number, number] {
@@ -1228,6 +1267,7 @@ export class Mahjong3DScene {
   private syncCanvasSize(): void {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const rect = this.canvas.getBoundingClientRect();
+    if (rect.width < 1 || rect.height < 1) return;
     const w = Math.max(1, Math.round(rect.width * dpr));
     const h = Math.max(1, Math.round(rect.height * dpr));
     if (this.canvas.width !== w || this.canvas.height !== h) {
@@ -2101,11 +2141,16 @@ export class Mahjong3DScene {
     meld: Meld,
     seatIndex: number,
     playerCount: number,
+    rowTiles: readonly Tile[],
   ): number {
-    if (meld.fromSeatIndex === null) return -1;
+    if (meld.type === 'ankan' || meld.fromSeatIndex === null) return -1;
+    if (meld.calledTile) {
+      const exactIdx = rowTiles.findIndex((t) => t.id === meld.calledTile!.id);
+      if (exactIdx !== -1) return exactIdx;
+    }
     const rel = ((meld.fromSeatIndex - seatIndex) % playerCount + playerCount) % playerCount;
-    if (rel === 1) return meld.tiles.length - 1; // 下家
-    if (playerCount === 4 && rel === 2) return 1; // 対面
+    if (rel === 1) return rowTiles.length - 1; // 下家
+    if (playerCount === 4 && rel === 2) return Math.min(1, rowTiles.length - 1); // 対面
     return 0; // 上家
   }
 
@@ -2136,23 +2181,28 @@ export class Mahjong3DScene {
 
     // 自分の手前副露から順に右→左へ並べる
     for (const meld of player.melds) {
+      const rowTiles =
+        meld.type === 'kakan' && meld.addedTile && meld.fromSeatIndex !== null
+          ? meld.tiles.filter((t) => t.id !== meld.addedTile!.id)
+          : meld.tiles;
+
       const calledIdx =
         meld.type === 'ankan'
           ? -1
-          : this.getCalledIndexForMeld(meld, player.seatIndex, playerCount);
+          : this.getCalledIndexForMeld(meld, player.seatIndex, playerCount, rowTiles);
 
       // まずこのブロックの幅を計算
       let blockW = 0;
-      for (let i = 0; i < meld.tiles.length; i++) {
+      for (let i = 0; i < rowTiles.length; i++) {
         blockW += (i === calledIdx ? h : w) + gap;
       }
       let localX = cursorX - blockW;
 
-      for (let i = 0; i < meld.tiles.length; i++) {
-        const tile = meld.tiles[i]!;
+      for (let i = 0; i < rowTiles.length; i++) {
+        const tile = rowTiles[i]!;
         const isSideways = i === calledIdx;
         const isFaceDown =
-          meld.type === 'ankan' && (i === 0 || i === meld.tiles.length - 1);
+          meld.type === 'ankan' && (i === 0 || i === rowTiles.length - 1);
         const span = isSideways ? h : w;
         const cx = localX + span / 2;
         const cz = isSideways ? baseZ + (h - w) * 0.45 : baseZ;
@@ -2405,6 +2455,7 @@ export class Mahjong3DScene {
     }
 
     const lerpRate = Math.min(1, dt * 16);
+    this.lastSelfTilePos.clear();
 
     for (const entry of entries) {
       const { tile, x, isDrawn } = entry;
@@ -2445,6 +2496,7 @@ export class Mahjong3DScene {
       // 牌の立ち面方向（Y軸に傾いた牌を自分の目線へ向けて浮き上がらせる）
       const ty = baseY + lift * sinP;
       const tz = baseZ - lift * cosP;
+      this.lastSelfTilePos.set(tile.id, [x, ty + 0.2, tz]);
 
       const tint: [number, number, number, number] = blocked
         ? [0.58, 0.6, 0.66, 1]
@@ -2477,8 +2529,8 @@ export class Mahjong3DScene {
         clickable,
         center: [cx, cy, cz],
         axisX: [1, 0, 0],
-        axisY: [0, cosP, -sinP],
-        axisZ: [0, sinP, cosP],
+        axisY: [0, cosP, sinP],
+        axisZ: [0, -sinP, cosP],
         halfX: w * 0.5,
         halfY: halfD,
         halfZ: h * 0.5,
@@ -2521,5 +2573,10 @@ export class Mahjong3DScene {
     gl.deleteTexture(this.atlasTex);
     gl.deleteTexture(this.consoleTex);
     gl.deleteProgram(this.prog);
+    try {
+      gl.getExtension('WEBGL_lose_context')?.loseContext();
+    } catch {
+      // ignore if unsupported
+    }
   }
 }
