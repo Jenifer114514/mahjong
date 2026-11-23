@@ -101,15 +101,27 @@ function createFake2dContext(): CanvasRenderingContext2D {
   } as unknown as CanvasRenderingContext2D;
 }
 
+interface DrawnTileRecord {
+  model: number[];
+  uvRect: number[];
+}
+
 interface MockGlTracker {
   drawCalls: number;
   texUploads: number;
   shaderCompiles: number;
+  tileVerts: number[] | null;
+  tileIndices: number[] | null;
+  drawnTiles: DrawnTileRecord[];
 }
 
 function createFakeWebGL2Context(tracker: MockGlTracker): WebGL2RenderingContext {
   const noop = () => {};
   let nextId = 1;
+  let currentModel: number[] = [];
+  let currentUvRect: number[] = [0, 0, 0, 0];
+  let currentUseAtlas = 0;
+
   return {
     VERTEX_SHADER: 0x8b31,
     FRAGMENT_SHADER: 0x8b30,
@@ -163,7 +175,17 @@ function createFakeWebGL2Context(tracker: MockGlTracker): WebGL2RenderingContext
     deleteVertexArray: noop,
     createBuffer: () => ({ id: nextId++ }),
     bindBuffer: noop,
-    bufferData: noop,
+    bufferData: (target: number, data: ArrayBufferView) => {
+      if (target === 0x8892 && tracker.tileVerts === null && data instanceof Float32Array) {
+        tracker.tileVerts = Array.from(data);
+      } else if (
+        target === 0x8893 &&
+        tracker.tileIndices === null &&
+        data instanceof Uint16Array
+      ) {
+        tracker.tileIndices = Array.from(data);
+      }
+    },
     deleteBuffer: noop,
     enableVertexAttribArray: noop,
     vertexAttribPointer: noop,
@@ -188,13 +210,31 @@ function createFakeWebGL2Context(tracker: MockGlTracker): WebGL2RenderingContext
     viewport: noop,
     clearColor: noop,
     clear: noop,
-    uniformMatrix4fv: noop,
-    uniform4fv: noop,
+    uniformMatrix4fv: (loc: { name?: string }, _t: boolean, val: Float32Array) => {
+      if (loc?.name === 'uModel') {
+        currentModel = Array.from(val);
+      }
+    },
+    uniform4fv: (loc: { name?: string }, val: number[] | Float32Array) => {
+      if (loc?.name === 'uUvRect') {
+        currentUvRect = Array.from(val);
+      }
+    },
     uniform3fv: noop,
-    uniform1f: noop,
+    uniform1f: (loc: { name?: string }, val: number) => {
+      if (loc?.name === 'uUseAtlas') {
+        currentUseAtlas = val;
+      }
+    },
     uniform1i: noop,
     drawElements: () => {
       tracker.drawCalls++;
+      if (currentUseAtlas > 0.5) {
+        tracker.drawnTiles.push({
+          model: currentModel,
+          uvRect: currentUvRect,
+        });
+      }
     },
   } as unknown as WebGL2RenderingContext;
 }
@@ -227,6 +267,9 @@ describe('3D麻雀卓とフォールバック統合', () => {
       drawCalls: 0,
       texUploads: 0,
       shaderCompiles: 0,
+      tileVerts: null,
+      tileIndices: null,
+      drawnTiles: [],
     };
     const gl = createFakeWebGL2Context(tracker);
     const ctx2d = createFake2dContext();
@@ -313,6 +356,67 @@ describe('3D麻雀卓とフォールバック統合', () => {
     expect(rafCallback).not.toBeNull();
     rafCallback!(performance.now());
     expect(tracker.drawCalls).toBeGreaterThan(40);
+
+    // 3D牌メッシュの角丸形状 & 全三角形の巻き順(外向き法線一致で側面カリング穴ゼロ)を検証
+    const verts = tracker.tileVerts!;
+    const indices = tracker.tileIndices!;
+    expect(verts).not.toBeNull();
+    expect(indices).not.toBeNull();
+    expect(indices.length % 3).toBe(0);
+    let sharpCorners = 0;
+    for (let v = 0; v < verts.length; v += 9) {
+      const px = Math.abs(verts[v]!);
+      const pz = Math.abs(verts[v + 2]!);
+      if (px > 0.27 && pz > 0.37) {
+        sharpCorners++;
+      }
+    }
+    expect(sharpCorners).toBe(0);
+
+    let checkedTriangles = 0;
+    for (let tIdx = 0; tIdx < indices.length; tIdx += 3) {
+      const i0 = indices[tIdx]! * 9;
+      const i1 = indices[tIdx + 1]! * 9;
+      const i2 = indices[tIdx + 2]! * 9;
+      const p0x = verts[i0]!, p0y = verts[i0 + 1]!, p0z = verts[i0 + 2]!;
+      const p1x = verts[i1]!, p1y = verts[i1 + 1]!, p1z = verts[i1 + 2]!;
+      const p2x = verts[i2]!, p2y = verts[i2 + 1]!, p2z = verts[i2 + 2]!;
+      const e1x = p1x - p0x, e1y = p1y - p0y, e1z = p1z - p0z;
+      const e2x = p2x - p0x, e2y = p2y - p0y, e2z = p2z - p0z;
+      const cx = e1y * e2z - e1z * e2y;
+      const cy = e1z * e2x - e1x * e2z;
+      const cz = e1x * e2y - e1y * e2x;
+      const len = Math.hypot(cx, cy, cz);
+      if (len < 1e-8) continue;
+      const nx = verts[i0 + 3]! + verts[i1 + 3]! + verts[i2 + 3]!;
+      const ny = verts[i0 + 4]! + verts[i1 + 4]! + verts[i2 + 4]!;
+      const nz = verts[i0 + 5]! + verts[i1 + 5]! + verts[i2 + 5]!;
+      const dot = cx * nx + cy * ny + cz * nz;
+      expect(dot).toBeGreaterThan(0);
+      checkedTriangles++;
+    }
+    expect(checkedTriangles).toBeGreaterThan(200);
+
+    // 他家(top/left/right, standDist=6.08付近)の伏せ立牌は「東」のUVを出さず、背面(-Y_local)が卓中心向き・表面が外向きになっていること
+    const oppStandingTiles = tracker.drawnTiles.filter((dt) => {
+      const tx = dt.model[12]!;
+      const tz = dt.model[14]!;
+      return (
+        (Math.abs(tz + 6.08) < 0.2 && Math.abs(tx) < 5.0) ||
+        (Math.abs(tx - 6.08) < 0.2 && Math.abs(tz) < 5.0) ||
+        (Math.abs(tx + 6.08) < 0.2 && Math.abs(tz) < 5.0)
+      );
+    });
+    expect(oppStandingTiles.length).toBe(39);
+    for (const tile of oppStandingTiles) {
+      expect(tile.uvRect[2]!).toBeLessThanOrEqual(0.01);
+      const tx = tile.model[12]!;
+      const tz = tile.model[14]!;
+      const faceNx = tile.model[4]!;
+      const faceNz = tile.model[6]!;
+      // 表面法線が卓外側(> 0)、よって黄金背面が卓中心・カメラ側を向いている
+      expect(faceNx * tx + faceNz * tz).toBeGreaterThan(0);
+    }
 
     // 2. 聴牌手牌状態(2副露: 手牌7枚+ツモ1枚、7zを切れば3s/6s待ち)にして1タップ目→聴牌ガイド更新、2タップ目→打牌をテスト
     const handlers = makeHandlers();
