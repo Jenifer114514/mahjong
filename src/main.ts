@@ -40,9 +40,11 @@ import {
 import {
   captureDiscardOriginSnapshot,
   renderGameTable,
+  resetTable3DCamera,
   type DiscardOriginSnapshot,
   type RoundEndStep,
   type SeatChatBubble,
+  type Table3DCameraPreset,
 } from './ui/tableView';
 import { soundEngine } from './ui/sound';
 import { prewarmTileSpriteSheet, waitForTileFonts } from './ui/tileTexture';
@@ -70,6 +72,44 @@ interface WakeLockSentinelLike {
 
 const CHAT_BUBBLE_DURATION_MS = 4200;
 const LOBBY_CHAT_TOAST_DURATION_MS = 4200;
+const PREF_3D_TABLE_KEY = 'mahjong_3d_table_enabled';
+const PREF_3D_CAMERA_KEY = 'mahjong_3d_camera_preset';
+
+function load3dTablePreference(): boolean {
+  try {
+    const raw = localStorage.getItem(PREF_3D_TABLE_KEY);
+    if (raw === '0' || raw === 'false') return false;
+    return true;
+  } catch {
+    return true;
+  }
+}
+
+function save3dTablePreference(enabled: boolean): void {
+  try {
+    localStorage.setItem(PREF_3D_TABLE_KEY, enabled ? '1' : '0');
+  } catch {
+    // ignore storage errors
+  }
+}
+
+function load3dCameraPreference(): Table3DCameraPreset {
+  try {
+    const raw = localStorage.getItem(PREF_3D_CAMERA_KEY);
+    if (raw === 'high' || raw === 'low' || raw === 'standard') return raw;
+    return 'standard';
+  } catch {
+    return 'standard';
+  }
+}
+
+function save3dCameraPreference(preset: Table3DCameraPreset): void {
+  try {
+    localStorage.setItem(PREF_3D_CAMERA_KEY, preset);
+  } catch {
+    // ignore storage errors
+  }
+}
 
 interface ActiveChatBubbleEntry {
   message: ChatMessage;
@@ -111,6 +151,8 @@ class MahjongApp {
   private autoTsumogiriEnabled = true;
   private autoAgariEnabled = false;
   private autoNoCallEnabled = false;
+  private table3dEnabled = load3dTablePreference();
+  private table3dCameraPreset: Table3DCameraPreset = load3dCameraPreference();
   private autoTsumogiriTimerId: ReturnType<typeof setTimeout> | null = null;
   private autoAssistTimerId: ReturnType<typeof setTimeout> | null = null;
   private countdownDeadline: number | null = null;
@@ -1711,6 +1753,8 @@ class MahjongApp {
           prevPerspectiveSeatIndex: this.lastRenderedPerspectiveSeatIndex,
           discardOriginSnapshot,
           chatBubbles: this.buildActiveChatBubbles(),
+          enable3dTable: this.table3dEnabled,
+          cameraPreset: this.table3dCameraPreset,
         },
       );
       this.lastRenderedGameView = view;
@@ -1844,7 +1888,94 @@ class MahjongApp {
     });
 
     soundRow.append(soundLabel, soundToggleBtn);
-    panel.append(header, row, soundRow);
+
+    const table3dRow = document.createElement('div');
+    table3dRow.className = 'setting-toggle-row';
+
+    const table3dLabel = document.createElement('div');
+    table3dLabel.className = 'setting-toggle-label';
+    table3dLabel.innerHTML =
+      '<strong>3D 麻雀卓（立体ビュー）</strong><span class="hub-sub">立牌・河・牌山を立体表示します（非対応環境では自動で2D表示になります）</span>';
+
+    const table3dActive = this.table3dEnabled;
+    const table3dBtn = document.createElement('button');
+    table3dBtn.type = 'button';
+    table3dBtn.className = `toggle-switch setting-toggle-3d-table${table3dActive ? ' is-on' : ''}`;
+    table3dBtn.setAttribute('role', 'switch');
+    table3dBtn.setAttribute('aria-checked', table3dActive ? 'true' : 'false');
+    table3dBtn.setAttribute('aria-label', '3D 麻雀卓');
+
+    const table3dTrack = document.createElement('span');
+    table3dTrack.className = 'toggle-track';
+    table3dTrack.setAttribute('aria-hidden', 'true');
+    const table3dThumb = document.createElement('span');
+    table3dThumb.className = 'toggle-thumb';
+    table3dTrack.appendChild(table3dThumb);
+
+    const table3dStateText = document.createElement('span');
+    table3dStateText.className = 'toggle-state-text';
+    table3dStateText.textContent = table3dActive ? 'ON' : 'OFF';
+
+    table3dBtn.append(table3dTrack, table3dStateText);
+    table3dBtn.addEventListener('click', () => {
+      this.table3dEnabled = !this.table3dEnabled;
+      save3dTablePreference(this.table3dEnabled);
+      soundEngine.playSelect();
+      this.render();
+      this.renderFloating();
+    });
+
+    table3dRow.append(table3dLabel, table3dBtn);
+
+    panel.append(header, row, soundRow, table3dRow);
+
+    if (this.table3dEnabled) {
+      const cameraRow = document.createElement('div');
+      cameraRow.className = 'setting-camera-row';
+
+      const cameraLabel = document.createElement('div');
+      cameraLabel.className = 'setting-toggle-label';
+      cameraLabel.innerHTML =
+        '<strong>3D 視点アングル</strong><span class="hub-sub">卓をドラッグして見渡すこともできます（ダブルクリックで正面に戻ります）</span>';
+
+      const cameraBtns = document.createElement('div');
+      cameraBtns.className = 'setting-camera-btns';
+      const presets: Array<{ id: Table3DCameraPreset; label: string }> = [
+        { id: 'standard', label: '標準' },
+        { id: 'high', label: '見下ろし' },
+        { id: 'low', label: '迫力' },
+      ];
+      for (const preset of presets) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = `btn btn-secondary setting-camera-btn${
+          this.table3dCameraPreset === preset.id ? ' is-active' : ''
+        }`;
+        b.textContent = preset.label;
+        b.addEventListener('click', () => {
+          this.table3dCameraPreset = preset.id;
+          save3dCameraPreference(preset.id);
+          resetTable3DCamera(this.mainLayer);
+          soundEngine.playSelect();
+          this.render();
+          this.renderFloating();
+        });
+        cameraBtns.appendChild(b);
+      }
+
+      const resetBtn = document.createElement('button');
+      resetBtn.type = 'button';
+      resetBtn.className = 'btn btn-secondary setting-camera-reset-btn';
+      resetBtn.textContent = '視点リセット';
+      resetBtn.addEventListener('click', () => {
+        resetTable3DCamera(this.mainLayer);
+        soundEngine.playSelect();
+      });
+      cameraBtns.appendChild(resetBtn);
+
+      cameraRow.append(cameraLabel, cameraBtns);
+      panel.appendChild(cameraRow);
+    }
 
     if (
       this.activeSession?.role === 'host' &&
