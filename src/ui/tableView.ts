@@ -22,6 +22,13 @@ import {
   windToJa,
 } from './tileView';
 import { soundEngine } from './sound';
+import {
+  Mahjong3DScene,
+  type Table3DCameraPreset,
+} from './tableScene3d';
+import { computeSelfTenpaiGuide } from './tenpaiGuide';
+
+export type { Table3DCameraPreset } from './tableScene3d';
 
 /** 卓を囲む4方向（下=自分から見た相対位置） */
 export type SeatSide = 'self' | 'top' | 'left' | 'right';
@@ -107,6 +114,10 @@ export interface TableUiState {
   discardOriginSnapshot?: DiscardOriginSnapshot | null;
   /** 対局中の各プレイヤーアイコンから出すチャット吹き出し（playerId キー） */
   chatBubbles?: Record<string, SeatChatBubble>;
+  /** 3D WebGL2 麻雀卓を使うか（既定 true、非対応環境は自動 2D フォールバック） */
+  enable3dTable?: boolean;
+  /** 3D 卓カメラ視点プリセット */
+  cameraPreset?: Table3DCameraPreset;
 }
 
 const DEFAULT_TABLE_UI_STATE: TableUiState = {
@@ -118,7 +129,25 @@ const DEFAULT_TABLE_UI_STATE: TableUiState = {
   roundEndStep: 'details',
   unreadChatCount: 0,
   hostStatusBanner: null,
+  enable3dTable: true,
+  cameraPreset: 'standard',
 };
+
+const table3dScenes = new WeakMap<HTMLElement, Mahjong3DScene>();
+
+/** コンテナに紐づく 3D 卓カメラ視点を標準位置へリセットする */
+export function resetTable3DCamera(container: HTMLElement): void {
+  table3dScenes.get(container)?.resetCamera();
+}
+
+/** コンテナに 3D 卓がアタッチされているか（または破棄する） */
+export function destroyTable3DScene(container: HTMLElement): void {
+  const existing = table3dScenes.get(container);
+  if (existing) {
+    existing.destroy();
+    table3dScenes.delete(container);
+  }
+}
 
 const MELD_TYPE_LABELS: Record<Meld['type'], string> = {
   pon: 'ポン',
@@ -981,6 +1010,7 @@ export function renderGameTable(
   const isHost = !isSpectator && view.viewerPlayerId === view.hostPlayerId;
 
   if (view.phase === 'finished') {
+    table3dScenes.get(container)?.pause();
     const isFreshFinish = prevView !== null && prevView.phase !== 'finished';
     if (
       isFreshFinish &&
@@ -1119,26 +1149,30 @@ export function renderGameTable(
     felt.appendChild(emptyRight);
   }
 
+  let selfSeatController: SelfSeatController | null = null;
   if (selfPlayer) {
-    felt.appendChild(
-      isSpectator
-        ? renderSpectatedBottomSeat(
-            selfPlayer,
-            rankByPlayerId.get(selfPlayer.playerId),
-            diff.newlyMeldedSides.get('self'),
-            diff.newlyAddedKitaSides.has('self'),
-            uiState.chatBubbles?.[selfPlayer.playerId],
-          )
-        : renderSelfSeat(
-            perspectiveView,
-            selfPlayer,
-            handlers,
-            uiState,
-            rankByPlayerId.get(selfPlayer.playerId),
-            diff.newlyMeldedSides.get('self'),
-            diff.newlyAddedKitaSides.has('self'),
-          ),
-    );
+    if (isSpectator) {
+      felt.appendChild(
+        renderSpectatedBottomSeat(
+          selfPlayer,
+          rankByPlayerId.get(selfPlayer.playerId),
+          diff.newlyMeldedSides.get('self'),
+          diff.newlyAddedKitaSides.has('self'),
+          uiState.chatBubbles?.[selfPlayer.playerId],
+        ),
+      );
+    } else {
+      selfSeatController = renderSelfSeat(
+        perspectiveView,
+        selfPlayer,
+        handlers,
+        uiState,
+        rankByPlayerId.get(selfPlayer.playerId),
+        diff.newlyMeldedSides.get('self'),
+        diff.newlyAddedKitaSides.has('self'),
+      );
+      felt.appendChild(selfSeatController.box);
+    }
   }
 
   // 対局中は雀卓だけを表示する（チャット・設定・退出ボタンは右上に集約）
@@ -1178,8 +1212,12 @@ export function renderGameTable(
   felt.addEventListener('click', (event) => {
     if (
       event.target instanceof Element &&
-      event.target.closest('.hand-area, button')
+      event.target.closest('.hand-area, button, .table-3d-canvas')
     ) {
+      return;
+    }
+    if (selfSeatController) {
+      selfSeatController.clearSelection();
       return;
     }
     const selected = felt.querySelectorAll<HTMLElement>(
@@ -1193,21 +1231,66 @@ export function renderGameTable(
     handlers.onSelectTile?.(null);
   });
 
+  // 3D WebGL2 麻雀卓の統合（非対応環境や設定 OFF 時は自動的に 2D DOM 卓へフォールバック）
+  const want3d = uiState.enable3dTable !== false;
+  let scene3d: Mahjong3DScene | null = null;
+  if (want3d) {
+    scene3d = table3dScenes.get(container) ?? null;
+    if (!scene3d) {
+      scene3d = Mahjong3DScene.tryCreate();
+      if (scene3d) {
+        table3dScenes.set(container, scene3d);
+      }
+    }
+  } else {
+    table3dScenes.get(container)?.pause();
+  }
+
+  if (scene3d) {
+    felt.classList.add('is-3d-table');
+    felt.prepend(scene3d.canvas);
+    selfSeatController?.setSceneRef(scene3d);
+    scene3d.setCallbacks({
+      onClickHandTile: (tileId) => selfSeatController?.tapTileById(tileId),
+      onClickTableVoid: () => selfSeatController?.clearSelection(),
+    });
+  }
+
   wrapper.appendChild(felt);
   container.appendChild(wrapper);
 
-  if (discardTargets.length > 0) {
-    applyDiscardThrowAnimations(
-      felt,
-      discardTargets,
-      originSnapshot,
+  if (scene3d) {
+    const canDiscardNow = Boolean(selfSeatController?.canDiscardNow);
+    const newlyDiscardedSides = new Set(discardTargets.map((t) => t.side));
+    const newlyDrawnSides = new Set(drawTargets.map((t) => t.side));
+    scene3d.syncView({
+      view: perspectiveView,
       isSpectator,
-    );
-  }
+      canDiscardNow,
+      selectedTileId: canDiscardNow ? (uiState.selectedTileId ?? null) : null,
+      riichiSelectingMode: uiState.riichiSelectingMode,
+      canRiichiTileIds: perspectiveView.mySelfActions?.canRiichiTileIds ?? [],
+      kuikaeForbiddenKinds: perspectiveView.kuikaeForbiddenKinds,
+      cameraPreset: uiState.cameraPreset ?? 'standard',
+      newlyDiscardedSides,
+      newlyDrawnSides,
+      newlyRevealedDoraIndices: diff.newlyRevealedDoraIndices,
+    });
+    scene3d.resume();
+  } else {
+    if (discardTargets.length > 0) {
+      applyDiscardThrowAnimations(
+        felt,
+        discardTargets,
+        originSnapshot,
+        isSpectator,
+      );
+    }
 
-  if (drawTargets.length > 0) {
-    const drawDelayMs = discardTargets.length > 0 ? 150 : 0;
-    applyDrawSlideAnimations(felt, drawTargets, drawDelayMs, isSpectator);
+    if (drawTargets.length > 0) {
+      const drawDelayMs = discardTargets.length > 0 ? 150 : 0;
+      applyDrawSlideAnimations(felt, drawTargets, drawDelayMs, isSpectator);
+    }
   }
 
   // 各種効果音をアニメーションタイミングに合わせて再生
@@ -2852,6 +2935,74 @@ function buildTurnPrompt(view: StateView, canDiscardNow: boolean): HTMLElement {
   return prompt;
 }
 
+interface SelfSeatController {
+  box: HTMLElement;
+  canDiscardNow: boolean;
+  tapTileById: (tileId: string) => void;
+  clearSelection: () => void;
+  setSceneRef: (scene: Mahjong3DScene | null) => void;
+}
+
+function updateTenpaiGuideElement(
+  guideEl: HTMLElement,
+  view: StateView,
+  selectedTileId: string | null,
+): void {
+  const info = computeSelfTenpaiGuide(view, selectedTileId);
+  guideEl.innerHTML = '';
+  if (!info) {
+    guideEl.hidden = true;
+    guideEl.classList.remove('is-visible', 'is-furiten-risk');
+    return;
+  }
+
+  guideEl.hidden = false;
+  guideEl.classList.add('is-visible');
+  guideEl.classList.toggle('is-furiten-risk', info.hasFuritenWait);
+
+  const label = document.createElement('span');
+  label.className = 'tenpai-guide-label';
+  if (info.mode === 'discard_preview' && info.discardTile) {
+    label.textContent = `打 ${formatTileLabel(info.discardTile.kind)} で聴牌`;
+  } else {
+    label.textContent = '聴牌待ち';
+  }
+  guideEl.appendChild(label);
+
+  const waitsRow = document.createElement('div');
+  waitsRow.className = 'tenpai-guide-waits';
+  for (const w of info.waits) {
+    const item = document.createElement('span');
+    item.className = `tenpai-guide-item${w.isDora ? ' is-dora' : ''}${
+      w.isFuriten ? ' is-furiten' : ''
+    }${w.remainingCount === 0 ? ' is-empty' : ''}`;
+    item.appendChild(
+      createTileElement(
+        { id: `tenpai-wait-${w.kind}`, kind: w.kind, isRed: false },
+        { small: true },
+      ),
+    );
+    const rem = document.createElement('span');
+    rem.className = 'tenpai-guide-rem';
+    rem.textContent = `残${w.remainingCount}`;
+    item.appendChild(rem);
+    waitsRow.appendChild(item);
+  }
+  guideEl.appendChild(waitsRow);
+
+  const totalBadge = document.createElement('span');
+  totalBadge.className = 'tenpai-guide-total';
+  totalBadge.textContent = `計${info.totalRemainingCount}枚`;
+  guideEl.appendChild(totalBadge);
+
+  if (info.hasFuritenWait) {
+    const furitenBadge = document.createElement('span');
+    furitenBadge.className = 'tenpai-guide-furiten';
+    furitenBadge.textContent = 'フリテン';
+    guideEl.appendChild(furitenBadge);
+  }
+}
+
 function renderSelfSeat(
   view: StateView,
   player: PublicPlayerView,
@@ -2860,7 +3011,7 @@ function renderSelfSeat(
   rank?: number,
   newlyMeldedIndices?: Set<number>,
   newlyAddedKita = false,
-): HTMLElement {
+): SelfSeatController {
   const isMyTurn = view.phase === 'playing' && player.isCurrentTurn;
   const canDiscardNow =
     isMyTurn && (view.myDrawnTile !== null || view.myHand.length % 3 === 2);
@@ -2892,6 +3043,11 @@ function renderSelfSeat(
 
   const topBar = document.createElement('div');
   topBar.className = 'self-top-bar';
+
+  const tenpaiGuideEl = document.createElement('div');
+  tenpaiGuideEl.className = 'tenpai-wait-guide';
+  tenpaiGuideEl.setAttribute('aria-live', 'polite');
+  topBar.appendChild(tenpaiGuideEl);
 
   const actionDock = document.createElement('div');
   actionDock.className = 'self-action-dock';
@@ -2932,6 +3088,10 @@ function renderSelfSeat(
   const handArea = document.createElement('div');
   handArea.className = `hand-area${canDiscardNow ? ' is-my-turn-hand' : ''}`;
   const initialSelectedId = canDiscardNow ? (uiState.selectedTileId ?? null) : null;
+  updateTenpaiGuideElement(tenpaiGuideEl, view, initialSelectedId);
+
+  let sceneRef: Mahjong3DScene | null = null;
+  const tapHandlers = new Map<string, () => void>();
 
   const setSelectedTileInDom = (nextId: string | null): void => {
     const buttons = handArea.querySelectorAll<HTMLElement>('.mj-tile-clickable');
@@ -2940,6 +3100,8 @@ function renderSelfSeat(
       btn.classList.toggle('mj-tile-selected', isSelected);
       btn.setAttribute('aria-pressed', isSelected ? 'true' : 'false');
     }
+    updateTenpaiGuideElement(tenpaiGuideEl, view, nextId);
+    sceneRef?.setSelectedTileId(nextId);
     handlers.onSelectTile?.(nextId);
   };
 
@@ -2959,6 +3121,9 @@ function renderSelfSeat(
   for (const tile of view.myHand) {
     if (inRiichiMode) {
       const isCandidate = riichiCandidateSet.has(tile.id);
+      const onTap = () =>
+        handleTileTap(tile.id, () => handlers.onDeclareRiichi(tile.id));
+      if (isCandidate) tapHandlers.set(tile.id, onTap);
       handArea.appendChild(
         createTileElement(tile, {
           clickable: isCandidate,
@@ -2968,7 +3133,7 @@ function renderSelfSeat(
           disabledReason: isCandidate
             ? undefined
             : 'この牌を切っても聴牌にならないためリーチできません',
-          onClick: () => handleTileTap(tile.id, () => handlers.onDeclareRiichi(tile.id)),
+          onClick: onTap,
         }),
       );
     } else {
@@ -2976,6 +3141,9 @@ function renderSelfSeat(
       const blockedByKuikae = forbiddenSet.has(tile.kind);
       const blocked = lockedByRiichi || blockedByKuikae;
       const canTap = canDiscardNow && !blocked;
+      const onTap = () =>
+        handleTileTap(tile.id, () => handlers.onDiscardTile(tile.id));
+      if (canTap) tapHandlers.set(tile.id, onTap);
       handArea.appendChild(
         createTileElement(tile, {
           clickable: canTap,
@@ -2986,7 +3154,7 @@ function renderSelfSeat(
             : blockedByKuikae
               ? '喰い替え禁止のため切れません'
               : undefined,
-          onClick: () => handleTileTap(tile.id, () => handlers.onDiscardTile(tile.id)),
+          onClick: onTap,
         }),
       );
     }
@@ -2999,6 +3167,9 @@ function renderSelfSeat(
     handArea.appendChild(gap);
     if (inRiichiMode) {
       const isCandidate = riichiCandidateSet.has(drawn.id);
+      const onTap = () =>
+        handleTileTap(drawn.id, () => handlers.onDeclareRiichi(drawn.id));
+      if (isCandidate) tapHandlers.set(drawn.id, onTap);
       const drawnEl = createTileElement(drawn, {
         clickable: isCandidate,
         selected: isCandidate && initialSelectedId === drawn.id,
@@ -3007,20 +3178,22 @@ function renderSelfSeat(
         disabledReason: isCandidate
           ? undefined
           : 'この牌を切っても聴牌にならないためリーチできません',
-        onClick: () =>
-          handleTileTap(drawn.id, () => handlers.onDeclareRiichi(drawn.id)),
+        onClick: onTap,
       });
       drawnEl.classList.add('mj-tile-drawn');
       handArea.appendChild(drawnEl);
     } else {
       const blocked = forbiddenSet.has(drawn.kind);
       const canTap = canDiscardNow && !blocked;
+      const onTap = () =>
+        handleTileTap(drawn.id, () => handlers.onDiscardTile(drawn.id));
+      if (canTap) tapHandlers.set(drawn.id, onTap);
       const drawnEl = createTileElement(drawn, {
         clickable: canTap,
         selected: canTap && initialSelectedId === drawn.id,
         disabled: canDiscardNow && blocked,
         disabledReason: blocked ? '喰い替え禁止のため切れません' : undefined,
-        onClick: () => handleTileTap(drawn.id, () => handlers.onDiscardTile(drawn.id)),
+        onClick: onTap,
       });
       drawnEl.classList.add('mj-tile-drawn');
       handArea.appendChild(drawnEl);
@@ -3052,7 +3225,21 @@ function renderSelfSeat(
 
   // 自分の河は手牌より中央側（卓の内側）に置き、実物と同じ並びにする
   box.appendChild(renderDiscardRiver(player, { side: 'self' }));
-  return box;
+  return {
+    box,
+    canDiscardNow,
+    tapTileById: (tileId) => {
+      tapHandlers.get(tileId)?.();
+    },
+    clearSelection: () => {
+      if (handArea.querySelector('.mj-tile-selected')) {
+        setSelectedTileInDom(null);
+      }
+    },
+    setSceneRef: (scene) => {
+      sceneRef = scene;
+    },
+  };
 }
 
 function renderSpectatedBottomSeat(

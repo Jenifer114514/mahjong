@@ -764,4 +764,54 @@ describe('アプリ起動とローカルCPU対局', () => {
       '大丈夫だよ〜',
     );
   });
+
+  it('設定モーダルで3D麻雀卓表示ON/OFFと3D視点アングルを切り替え・保存できる', async () => {
+    localStorage.clear();
+
+    bootApp();
+    await loadMain();
+
+    const root = document.getElementById('app') as HTMLElement;
+    expect(clickByText(root, 'button', 'CPU対局をはじめる')).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    root.querySelector<HTMLButtonElement>('.table-chrome-settings')!.click();
+    const panel = root.querySelector<HTMLElement>('.table-settings-panel');
+    expect(panel).not.toBeNull();
+
+    const toggle3d = panel!.querySelector<HTMLButtonElement>(
+      'button[aria-label="3D 麻雀卓"]',
+    )!;
+    expect(toggle3d).not.toBeNull();
+    expect(toggle3d.getAttribute('aria-checked')).toBe('true');
+
+    // 視点アングルボタンが表示されていること
+    expect(clickByText(panel!, 'button', '見下ろし')).toBe(true);
+    expect(localStorage.getItem('mahjong_3d_camera_preset')).toBe('high');
+    expect(
+      root
+        .querySelector('.table-settings-panel .setting-camera-btn.is-active')
+        ?.textContent?.trim(),
+    ).toBe('見下ろし');
+
+    // 3D OFF へ切り替え
+    root
+      .querySelector<HTMLButtonElement>('.table-settings-panel button[aria-label="3D 麻雀卓"]')!
+      .click();
+    expect(localStorage.getItem('mahjong_3d_table_enabled')).toBe('0');
+    expect(
+      root
+        .querySelector<HTMLButtonElement>('.table-settings-panel button[aria-label="3D 麻雀卓"]')!
+        .getAttribute('aria-checked'),
+    ).toBe('false');
+    // OFF の間は視点アングル行は隠れる
+    expect(root.querySelector('.setting-camera-row')).toBeNull();
+
+    // 再び ON に戻す
+    root
+      .querySelector<HTMLButtonElement>('.table-settings-panel button[aria-label="3D 麻雀卓"]')!
+      .click();
+    expect(localStorage.getItem('mahjong_3d_table_enabled')).toBe('1');
+    expect(root.querySelector('.setting-camera-row')).not.toBeNull();
+  });
 });
