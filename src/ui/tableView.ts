@@ -2516,6 +2516,15 @@ function renderSeatHeader(
     identity.appendChild(riichiTag);
   }
 
+  if (player.kitaTiles.length > 0) {
+    const kitaBadge = document.createElement('span');
+    kitaBadge.className = 'kita-badge';
+    kitaBadge.title = `抜北 ${player.kitaTiles.length}枚`;
+    kitaBadge.setAttribute('aria-label', `抜北 ${player.kitaTiles.length}枚`);
+    kitaBadge.textContent = `北×${player.kitaTiles.length}`;
+    identity.appendChild(kitaBadge);
+  }
+
   if (player.isCurrentTurn) {
     const turn = document.createElement('span');
     turn.className = 'turn-tag';

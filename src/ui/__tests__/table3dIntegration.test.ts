@@ -114,6 +114,7 @@ interface MockGlTracker {
   tileVerts: number[] | null;
   tileIndices: number[] | null;
   drawnTiles: DrawnTileRecord[];
+  uploadedCanvasSizes?: Array<{ width: number; height: number }>;
 }
 
 function createFakeWebGL2Context(tracker: MockGlTracker): WebGL2RenderingContext {
@@ -194,8 +195,21 @@ function createFakeWebGL2Context(tracker: MockGlTracker): WebGL2RenderingContext
     bindTexture: noop,
     deleteTexture: noop,
     pixelStorei: noop,
-    texImage2D: () => {
+    texImage2D: (
+      _target: number,
+      _level: number,
+      _internalformat: number,
+      _format: number,
+      _type: number,
+      source?: { width?: number; height?: number },
+    ) => {
       tracker.texUploads++;
+      if (source && typeof source.width === 'number' && typeof source.height === 'number') {
+        tracker.uploadedCanvasSizes?.push({
+          width: source.width,
+          height: source.height,
+        });
+      }
     },
     generateMipmap: noop,
     texParameteri: noop,
@@ -843,6 +857,102 @@ describe('3D麻雀卓とフォールバック統合', () => {
 
     rafCallback!(performance.now() + 1016);
     expect(tracker.drawCalls).toBeGreaterThan(drawCallsBeforeRestore);
+
+    container.remove();
+  });
+
+  it('3D三麻で抜北牌を河の右脇の安全エリアに大きく配置し、中央コンソールを1024x1024高解像度で描く', () => {
+    const tracker: MockGlTracker = {
+      drawCalls: 0,
+      texUploads: 0,
+      shaderCompiles: 0,
+      loseContextCount: 0,
+      tileVerts: null,
+      tileIndices: null,
+      drawnTiles: [],
+      uploadedCanvasSizes: [],
+    };
+    const gl = createFakeWebGL2Context(tracker);
+    const ctx2d = createFake2dContext();
+    let rafCallback: FrameRequestCallback | null = null;
+
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+      rafCallback = cb;
+      return 1;
+    });
+    vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => {});
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(
+      function (this: HTMLCanvasElement, kind: string) {
+        if (kind === 'webgl2') return gl;
+        if (kind === '2d') return ctx2d;
+        return null;
+      } as unknown as HTMLCanvasElement['getContext'],
+    );
+    vi.spyOn(HTMLCanvasElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      width: 1280,
+      height: 720,
+      top: 0,
+      left: 0,
+      right: 1280,
+      bottom: 720,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    });
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    containers.push(container);
+
+    const handlers = makeHandlers();
+    const baseView3 = makeView(3, 9191);
+    renderGameTable(container, baseView3, handlers, {
+      riichiSelectingMode: false,
+      autoTsumogiriEnabled: true,
+      enable3dTable: true,
+      cameraPreset: 'standard',
+    });
+    rafCallback!(performance.now());
+    const baseCount = tracker.drawnTiles.length;
+
+    // 1024x1024 の高精細コンソールテクスチャがアップロードされていること
+    expect(
+      tracker.uploadedCanvasSizes!.some((s) => s.width === 1024 && s.height === 1024),
+    ).toBe(true);
+
+    // 自席に抜北4枚を追加して描画差分・位置・スケールを検証する
+    const viewWithKita = makeView(3, 9191);
+    viewWithKita.players[0]!.kitaTiles = [
+      t('k0', '4z'),
+      t('k1', '4z'),
+      t('k2', '4z'),
+      t('k3', '4z'),
+    ];
+    tracker.drawnTiles.length = 0;
+    renderGameTable(container, viewWithKita, handlers, {
+      riichiSelectingMode: false,
+      autoTsumogiriEnabled: true,
+      enable3dTable: true,
+      cameraPreset: 'standard',
+    });
+    rafCallback!(performance.now() + 16);
+    expect(tracker.drawnTiles.length - baseCount).toBe(4);
+
+    // 抜北4枚が専用台座高さ y=0.05、KITA_SCALE=0.90、河の右脇安全帯 (x∈[2.0,3.5], z∈[2.1,3.6]) に収まっていること
+    const kitaDrawn = tracker.drawnTiles.filter((d) => {
+      const y = d.model[13]!;
+      const scaleX = Math.hypot(d.model[0]!, d.model[1]!, d.model[2]!);
+      return Math.abs(y - 0.05) < 0.005 && Math.abs(scaleX - 0.9) < 0.01;
+    });
+    expect(kitaDrawn).toHaveLength(4);
+    for (const d of kitaDrawn) {
+      const tx = d.model[12]!;
+      const tz = d.model[14]!;
+      expect(tx).toBeGreaterThan(2.0);
+      expect(tx).toBeLessThan(3.5);
+      expect(tz).toBeGreaterThan(2.1);
+      expect(tz).toBeLessThan(3.6);
+    }
 
     container.remove();
   });

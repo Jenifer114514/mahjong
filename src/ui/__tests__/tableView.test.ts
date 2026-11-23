@@ -1326,6 +1326,46 @@ describe('renderGameTable（横画面レイアウト）', () => {
     expect(rightRiver.querySelector('.mj-tile-riichi')).not.toBeNull();
     expect(topRiver.classList.contains('has-riichi-tile')).toBe(false);
   });
+
+  it('三麻の抜北がある席のネームプレート(.seat-header)に抜北バッジを表示し子構造を維持する', () => {
+    const baseView = toStateView(state3, 'p0', 0);
+    const viewWithKita: StateView = {
+      ...baseView,
+      players: baseView.players.map((p, idx) => {
+        if (idx === 0) {
+          return {
+            ...p,
+            kitaTiles: [
+              { id: 'k4z-0', kind: '4z', isRed: false },
+              { id: 'k4z-1', kind: '4z', isRed: false },
+            ],
+          };
+        }
+        if (idx === 1) {
+          return {
+            ...p,
+            kitaTiles: [{ id: 'k4z-2', kind: '4z', isRed: false }],
+          };
+        }
+        return p;
+      }),
+    };
+
+    const root = document.createElement('div');
+    renderGameTable(root, viewWithKita, noopHandlers);
+
+    const selfHeader = root.querySelector('.seat-orient-self > .seat-header')!;
+    const rightHeader = root.querySelector('.seat-orient-right > .seat-header')!;
+    const leftHeader = root.querySelector('.seat-orient-left > .seat-header')!;
+
+    expect(Array.from(selfHeader.children).map((el) => el.className)).toEqual([
+      expect.stringContaining('seat-card-top'),
+      expect.stringContaining('seat-card-info'),
+    ]);
+    expect(selfHeader.querySelector('.kita-badge')?.textContent).toBe('北×2');
+    expect(rightHeader.querySelector('.kita-badge')?.textContent).toBe('北×1');
+    expect(leftHeader.querySelector('.kita-badge')).toBeNull();
+  });
 });
 
 

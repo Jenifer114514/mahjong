@@ -1161,4 +1161,63 @@ describe('アプリ起動とローカルCPU対局', () => {
       vi.resetModules();
     }
   });
+
+  it('ホーム画面や待機ロビー（試合以外のページ）の右上に設定ボタンが表示され、開いて設定変更できる', async () => {
+    bootApp();
+    await loadMain();
+
+    const root = document.getElementById('app') as HTMLElement;
+    const homeSettingsBtn = root.querySelector<HTMLButtonElement>(
+      '.top-bar .top-bar-right .top-bar-settings-btn',
+    );
+    expect(homeSettingsBtn).not.toBeNull();
+    expect(homeSettingsBtn!.textContent).toContain('設定');
+
+    // ホーム画面のまま右上設定ボタンからモーダルを開ける（試合外では視点リセットは出ない）
+    homeSettingsBtn!.click();
+    const homeModal = document.querySelector('.table-settings-modal');
+    expect(homeModal).not.toBeNull();
+    expect(homeModal!.querySelector('button[aria-label="効果音"]')).not.toBeNull();
+    expect(homeModal!.querySelector('button[aria-label="3D 麻雀卓"]')).not.toBeNull();
+    expect(homeModal!.querySelector('.setting-camera-reset-btn')).toBeNull();
+
+    // 3D表示をOFFに切り替えて閉じる
+    const toggle3d = homeModal!.querySelector<HTMLButtonElement>(
+      'button[aria-label="3D 麻雀卓"]',
+    )!;
+    expect(toggle3d.getAttribute('aria-checked')).toBe('true');
+    toggle3d.click();
+    expect(
+      document
+        .querySelector('.table-settings-modal button[aria-label="3D 麻雀卓"]')!
+        .getAttribute('aria-checked'),
+    ).toBe('false');
+    expect(clickByText(document.body, '.table-settings-modal button', '閉じる')).toBe(
+      true,
+    );
+    expect(document.querySelector('.table-settings-modal')).toBeNull();
+
+    // 「部屋を作成」で待機ロビーに遷移しても右上の設定ボタンからモーダルを開ける
+    expect(clickByText(root, 'button', '部屋を作成')).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(root.querySelector('.lobby-settings-panel')).not.toBeNull();
+    const lobbySettingsBtn = root.querySelector<HTMLButtonElement>(
+      '.top-bar .top-bar-right .top-bar-settings-btn',
+    );
+    expect(lobbySettingsBtn).not.toBeNull();
+    lobbySettingsBtn!.click();
+    const lobbyModal = document.querySelector('.table-settings-modal');
+    expect(lobbyModal).not.toBeNull();
+
+    // 3D表示を再びONに戻しておく
+    lobbyModal!
+      .querySelector<HTMLButtonElement>('button[aria-label="3D 麻雀卓"]')!
+      .click();
+    expect(
+      document
+        .querySelector('.table-settings-modal button[aria-label="3D 麻雀卓"]')!
+        .getAttribute('aria-checked'),
+    ).toBe('true');
+  });
 });

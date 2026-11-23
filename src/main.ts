@@ -1519,9 +1519,7 @@ class MahjongApp {
     title.textContent = 'PeerJS 対戦リーチ麻雀';
 
     const rightControls = document.createElement('div');
-    rightControls.style.display = 'flex';
-    rightControls.style.alignItems = 'center';
-    rightControls.style.gap = '8px';
+    rightControls.className = 'top-bar-right';
 
     const statusPill = document.createElement('div');
     statusPill.className = `status-pill${
@@ -1559,6 +1557,24 @@ class MahjongApp {
       resetBtn.textContent = 'ロビーに戻る';
       resetBtn.addEventListener('click', () => this.returnToLobby());
       rightControls.appendChild(resetBtn);
+    }
+
+    if (!inGame) {
+      const settingsBtn = document.createElement('button');
+      settingsBtn.type = 'button';
+      settingsBtn.className = 'btn btn-secondary top-bar-settings-btn';
+      settingsBtn.setAttribute('aria-label', '設定');
+      settingsBtn.title = '表示・音声設定を開く';
+      settingsBtn.innerHTML =
+        '<span class="top-bar-settings-icon" aria-hidden="true">⚙</span><span>設定</span>';
+      settingsBtn.addEventListener('click', () => {
+        this.settingsOpen = !this.settingsOpen;
+        if (this.settingsOpen) {
+          this.chatOpen = false;
+        }
+        this.renderFloating();
+      });
+      rightControls.appendChild(settingsBtn);
     }
 
     const rotateHint = document.createElement('div');
@@ -1885,12 +1901,15 @@ class MahjongApp {
 
   private renderFloating(): void {
     this.floatingLayer.innerHTML = '';
+
+    if (this.settingsOpen) {
+      this.floatingLayer.appendChild(this.renderSettingsModal());
+      return;
+    }
+
     if (!this.currentView) return;
 
-    const inGame = this.currentView.phase !== 'lobby';
-    if (this.settingsOpen && inGame) {
-      this.floatingLayer.appendChild(this.renderSettingsModal());
-    } else if (this.chatOpen) {
+    if (this.chatOpen) {
       const modal = this.renderChatModal();
       this.floatingLayer.appendChild(modal);
       const list = modal.querySelector<HTMLElement>('.chat-messages-list');
@@ -2078,15 +2097,19 @@ class MahjongApp {
         cameraBtns.appendChild(b);
       }
 
-      const resetBtn = document.createElement('button');
-      resetBtn.type = 'button';
-      resetBtn.className = 'btn btn-secondary setting-camera-reset-btn';
-      resetBtn.textContent = '視点リセット';
-      resetBtn.addEventListener('click', () => {
-        resetTable3DCamera(this.gameContent ?? this.mainLayer);
-        soundEngine.playSelect();
-      });
-      cameraBtns.appendChild(resetBtn);
+      const inGame =
+        this.currentView !== null && this.currentView.phase !== 'lobby';
+      if (inGame) {
+        const resetBtn = document.createElement('button');
+        resetBtn.type = 'button';
+        resetBtn.className = 'btn btn-secondary setting-camera-reset-btn';
+        resetBtn.textContent = '視点リセット';
+        resetBtn.addEventListener('click', () => {
+          resetTable3DCamera(this.gameContent ?? this.mainLayer);
+          soundEngine.playSelect();
+        });
+        cameraBtns.appendChild(resetBtn);
+      }
 
       cameraRow.append(cameraLabel, cameraBtns);
       panel.appendChild(cameraRow);
