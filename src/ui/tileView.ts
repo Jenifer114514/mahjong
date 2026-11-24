@@ -63,6 +63,8 @@ export interface TileElementOptions {
   riichiCandidate?: boolean;
   called?: boolean;
   small?: boolean;
+  /** ドラ牌（表ドラ・裏ドラ等）として光るオーラを表示する */
+  dora?: boolean;
   onClick?: () => void;
 }
 
@@ -160,12 +162,25 @@ export function createTileElement(
   el.dataset.tileId = tile.id;
   el.dataset.tileKind = tile.kind;
   if (tile.isRed) el.classList.add('mj-tile-red');
+  if (options.dora) el.classList.add('mj-tile-dora');
+
+  const appendDoraDecorations = (): void => {
+    if (!tile.isRed && !options.dora) return;
+    const aura = document.createElement('span');
+    aura.className = 'mj-tile-dora-aura';
+    aura.setAttribute('aria-hidden', 'true');
+    const sheen = document.createElement('span');
+    sheen.className = 'mj-tile-dora-sheen';
+    sheen.setAttribute('aria-hidden', 'true');
+    el.append(aura, sheen);
+  };
 
   if (applyTileFaceImage(el, tile)) {
     const face = document.createElement('span');
     face.className = 'mj-tile-face-alt';
     face.textContent = formatTileLabel(tile.kind);
     el.appendChild(face);
+    appendDoraDecorations();
 
     if (options.clickable && !options.disabled && options.onClick) {
       el.addEventListener('click', options.onClick);
@@ -208,6 +223,8 @@ export function createTileElement(
 
     el.append(top, bottom);
   }
+
+  appendDoraDecorations();
 
   if (options.clickable && !options.disabled && options.onClick) {
     el.addEventListener('click', options.onClick);

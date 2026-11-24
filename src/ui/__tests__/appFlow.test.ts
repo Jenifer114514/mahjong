@@ -1022,6 +1022,7 @@ describe('アプリ起動とローカルCPU対局', () => {
           );
           setTimeout(() => {
             this.cb.onStatusChange?.('closed');
+            this.cb.onStatusChange?.('error', '旧ホストの遅延エラー');
           }, 20);
           return true;
         }
@@ -1058,15 +1059,14 @@ describe('アプリ起動とローカルCPU対局', () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
       expect(capturedHostCallbacks).not.toBeNull();
 
-      // ホスト移譲を実行（内部で新 ClientSession に移行し、20ms 後に旧ホストが 'closed' を発火する）
+      // ホスト移譲を実行（内部で新 ClientSession に移行し、20ms 後に旧ホストが 'closed' / 'error' を発火する）
       expect(clickByText(root, 'button', 'ホストを譲る')).toBe(true);
       expect(clientStatusTextObserved).toBe(true);
       await new Promise((resolve) => setTimeout(resolve, 60));
 
-      const statusPill = root.querySelector('.status-pill');
-      expect(statusPill?.textContent).toContain('DEMO01');
-      expect(statusPill?.textContent).toContain('接続中');
-      expect(statusPill?.textContent).not.toContain('未接続');
+      expect(root.querySelector('.error-banner')).toBeNull();
+      expect(root.querySelector('.lobby-settings-panel')).not.toBeNull();
+      expect(root.querySelector('.status-pill')).toBeNull();
     } finally {
       window.dispatchEvent(new Event('beforeunload'));
       vi.doUnmock('../../net/host');
@@ -1167,6 +1167,9 @@ describe('アプリ起動とローカルCPU対局', () => {
     await loadMain();
 
     const root = document.getElementById('app') as HTMLElement;
+    expect(root.querySelector('.top-bar .status-pill')).toBeNull();
+    expect(root.querySelector('.top-bar .rotate-hint')).toBeNull();
+    expect(root.querySelectorAll('.top-bar .top-bar-right > *')).toHaveLength(1);
     const homeSettingsBtn = root.querySelector<HTMLButtonElement>(
       '.top-bar .top-bar-right .top-bar-settings-btn',
     );
@@ -1202,6 +1205,9 @@ describe('アプリ起動とローカルCPU対局', () => {
     await new Promise((resolve) => setTimeout(resolve, 30));
 
     expect(root.querySelector('.lobby-settings-panel')).not.toBeNull();
+    expect(root.querySelector('.top-bar .status-pill')).toBeNull();
+    expect(root.querySelector('.top-bar .rotate-hint')).toBeNull();
+    expect(root.querySelectorAll('.top-bar .top-bar-right > *')).toHaveLength(1);
     const lobbySettingsBtn = root.querySelector<HTMLButtonElement>(
       '.top-bar .top-bar-right .top-bar-settings-btn',
     );

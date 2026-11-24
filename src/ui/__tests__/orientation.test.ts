@@ -119,7 +119,36 @@ describe('強制横画面', () => {
     expect(root.querySelector('.table-felt.is-landscape')).not.toBeNull();
   });
 
-  it('ホーム画面で横画面固定を有効化すると requestFullscreen と screen.orientation.lock("landscape") を呼び、OFF で解除する', async () => {
+  it('ホーム画面・待機ロビー・回転オーバーレイにフルスクリーンボタンを出さず、対局開始で自動フルスクリーン化しない', async () => {
+    setViewport(390, 844, true);
+    localStorage.setItem('arena-mahjong:landscape-lock:v1', 'true');
+
+    let fsEl: Element | null = null;
+    Object.defineProperty(document, 'fullscreenElement', {
+      configurable: true,
+      get: () => fsEl,
+    });
+    const reqFs = vi.fn(async () => {
+      fsEl = document.documentElement;
+      document.dispatchEvent(new Event('fullscreenchange'));
+    });
+    document.documentElement.requestFullscreen = reqFs;
+
+    const root = await boot();
+    expect(root.querySelector('.landscape-lock-card')).toBeNull();
+    expect(root.querySelector('.landscape-lock-switch')).toBeNull();
+    expect(root.querySelector('.landscape-lock-apply-btn')).toBeNull();
+
+    expect(clickText(root, 'button', 'CPU対局をはじめる')).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    expect(reqFs).not.toHaveBeenCalled();
+    const overlay = document.querySelector('.rotate-overlay');
+    expect(overlay).not.toBeNull();
+    expect(overlay!.querySelector('.rotate-overlay-lock-btn')).toBeNull();
+  });
+
+  it('設定モーダルのフル画面表示スイッチでのみ requestFullscreen / screen.orientation.lock("landscape") を切り替え、OFF で解除する', async () => {
     setViewport(390, 844, true);
 
     const calls: string[] = [];
@@ -158,87 +187,63 @@ describe('強制横画面', () => {
     });
 
     const root = await boot();
-    const lockSwitch = root.querySelector<HTMLButtonElement>('.landscape-lock-switch');
-    expect(lockSwitch).not.toBeNull();
-    expect(lockSwitch!.getAttribute('aria-checked')).toBe('false');
-    expect(root.textContent).toContain('横画面固定（Android・フル画面）');
 
-    lockSwitch!.click();
+    // ホーム画面の「設定」ボタンから設定モーダルを開く
+    const topSettingsBtn = root.querySelector<HTMLButtonElement>('.top-bar-settings-btn');
+    expect(topSettingsBtn).not.toBeNull();
+    topSettingsBtn!.click();
+
+    const homeModalSwitch = document.querySelector<HTMLButtonElement>(
+      '.table-settings-modal button[aria-label="フル画面表示"]',
+    )!;
+    expect(homeModalSwitch).not.toBeNull();
+    expect(homeModalSwitch.getAttribute('aria-checked')).toBe('false');
+
+    homeModalSwitch.click();
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     expect(calls).toEqual(['requestFullscreen', 'lock:landscape']);
-    expect(localStorage.getItem('arena-mahjong:landscape-lock:v1')).toBe('true');
+    expect(
+      document
+        .querySelector<HTMLButtonElement>(
+          '.table-settings-modal button[aria-label="フル画面表示"]',
+        )!
+        .getAttribute('aria-checked'),
+    ).toBe('true');
 
-    const updatedSwitch = root.querySelector<HTMLButtonElement>('.landscape-lock-switch')!;
-    expect(updatedSwitch.getAttribute('aria-checked')).toBe('true');
-    expect(updatedSwitch.textContent).toContain('ON');
-    expect(root.textContent).toContain('フル画面表示で横向きに固定しています');
-
-    // ON のまま対局開始しても横画面のためオーバーレイは出ない
+    // モーダルを閉じて対局を開始しても横画面のためオーバーレイは出ない
+    expect(clickText(document.body, '.table-settings-modal button', '閉じる')).toBe(
+      true,
+    );
     expect(clickText(root, 'button', 'CPU対局をはじめる')).toBe(true);
     await new Promise((resolve) => setTimeout(resolve, 40));
     expect(document.querySelector('.rotate-overlay')).toBeNull();
 
-    // 設定モーダルから OFF にすると unlock + exitFullscreen が呼ばれ、設定も OFF に戻る
+    // 対局中の設定モーダルから OFF にすると unlock + exitFullscreen が呼ばれる
     root.querySelector<HTMLButtonElement>('.table-chrome-settings')!.click();
-    const settingsSwitch = root.querySelector<HTMLButtonElement>(
-      '.table-settings-modal [role="switch"]',
+    const gameModalSwitch = document.querySelector<HTMLButtonElement>(
+      '.table-settings-modal button[aria-label="フル画面表示"]',
     )!;
-    expect(settingsSwitch.getAttribute('aria-checked')).toBe('true');
-    settingsSwitch.click();
+    expect(gameModalSwitch.getAttribute('aria-checked')).toBe('true');
+    gameModalSwitch.click();
     await new Promise((resolve) => setTimeout(resolve, 20));
+
     expect(calls).toEqual([
       'requestFullscreen',
       'lock:landscape',
       'unlock',
       'exitFullscreen',
     ]);
-    expect(localStorage.getItem('arena-mahjong:landscape-lock:v1')).toBeNull();
+    expect(
+      document
+        .querySelector<HTMLButtonElement>(
+          '.table-settings-modal button[aria-label="フル画面表示"]',
+        )!
+        .getAttribute('aria-checked'),
+    ).toBe('false');
   });
 
-  it('ホーム画面で横画面固定を有効化した記憶がある場合、次回起動時に「今すぐ横画面」が出て対局開始時にも自動適用される', async () => {
-    setViewport(390, 844, true);
-    localStorage.setItem('arena-mahjong:landscape-lock:v1', 'true');
-
-    let fsEl: Element | null = null;
-    Object.defineProperty(document, 'fullscreenElement', {
-      configurable: true,
-      get: () => fsEl,
-    });
-    const reqFs = vi.fn(async () => {
-      fsEl = document.documentElement;
-      document.dispatchEvent(new Event('fullscreenchange'));
-    });
-    document.documentElement.requestFullscreen = reqFs;
-    const lockMock = vi.fn(async () => {
-      setViewport(844, 390, true);
-      window.dispatchEvent(new Event('resize'));
-    });
-    Object.defineProperty(window.screen, 'orientation', {
-      configurable: true,
-      value: {
-        lock: lockMock,
-        unlock: () => {},
-        addEventListener: () => {},
-        removeEventListener: () => {},
-      },
-    });
-
-    const root = await boot();
-    const applyBtn = root.querySelector<HTMLButtonElement>('.landscape-lock-apply-btn');
-    expect(applyBtn).not.toBeNull();
-    expect(applyBtn!.textContent).toContain('今すぐ横画面');
-
-    // 今すぐ横画面を押さずそのまま CPU 対局を開始しても自動適用される
-    expect(clickText(root, 'button', 'CPU対局をはじめる')).toBe(true);
-    await new Promise((resolve) => setTimeout(resolve, 40));
-
-    expect(reqFs).toHaveBeenCalledTimes(1);
-    expect(lockMock).toHaveBeenCalledWith('landscape');
-    expect(document.querySelector('.rotate-overlay')).toBeNull();
-  });
-
-  it('非対応ブラウザでホーム画面の横画面固定を ON にするとエラーを表示し OFF に戻す', async () => {
+  it('非対応ブラウザで設定モーダルのフル画面表示を ON にするとモーダル内にエラーを表示し OFF のままにする', async () => {
     setViewport(390, 844, true);
     Object.defineProperty(document, 'fullscreenElement', {
       configurable: true,
@@ -256,97 +261,23 @@ describe('強制横画面', () => {
     });
 
     const root = await boot();
-    root.querySelector<HTMLButtonElement>('.landscape-lock-switch')!.click();
+    root.querySelector<HTMLButtonElement>('.top-bar-settings-btn')!.click();
+    document
+      .querySelector<HTMLButtonElement>(
+        '.table-settings-modal button[aria-label="フル画面表示"]',
+      )!
+      .click();
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    const msg = root.querySelector('.landscape-lock-message.is-err');
-    expect(msg).not.toBeNull();
-    expect(msg!.textContent).toContain('対応していません');
+    const err = document.querySelector('.table-settings-modal .fullscreen-error-note');
+    expect(err).not.toBeNull();
+    expect(err!.textContent).toContain('対応していません');
     expect(
-      root
-        .querySelector<HTMLButtonElement>('.landscape-lock-switch')!
+      document
+        .querySelector<HTMLButtonElement>(
+          '.table-settings-modal button[aria-label="フル画面表示"]',
+        )!
         .getAttribute('aria-checked'),
     ).toBe('false');
-  });
-
-  it('縦持ちオーバーレイ上の「横画面に固定する」ボタンから Android 横画面固定へ復帰できる', async () => {
-    setViewport(390, 844, true);
-
-    let fsEl: Element | null = null;
-    Object.defineProperty(document, 'fullscreenElement', {
-      configurable: true,
-      get: () => fsEl,
-    });
-    const reqFs = vi.fn(async () => {
-      fsEl = document.documentElement;
-      document.dispatchEvent(new Event('fullscreenchange'));
-    });
-    document.documentElement.requestFullscreen = reqFs;
-    const lockMock = vi.fn(async () => {
-      setViewport(844, 390, true);
-      window.dispatchEvent(new Event('resize'));
-    });
-    Object.defineProperty(window.screen, 'orientation', {
-      configurable: true,
-      value: {
-        lock: lockMock,
-        unlock: () => {},
-        addEventListener: () => {},
-        removeEventListener: () => {},
-      },
-    });
-
-    const root = await boot();
-    expect(clickText(root, 'button', 'CPU対局をはじめる')).toBe(true);
-    await new Promise((resolve) => setTimeout(resolve, 50));
-
-    const lockBtn = document.querySelector<HTMLButtonElement>('.rotate-overlay-lock-btn');
-    expect(lockBtn).not.toBeNull();
-    lockBtn!.click();
-    await new Promise((resolve) => setTimeout(resolve, 30));
-
-    expect(reqFs).toHaveBeenCalledTimes(1);
-    expect(lockMock).toHaveBeenCalledWith('landscape');
-    expect(document.querySelector('.rotate-overlay')).toBeNull();
-  });
-
-  it('モバイル端末で requestFullscreen 成功後に orientation.lock が失敗した場合、オーバーレイ上に案内エラーを出す', async () => {
-    setViewport(390, 844, true);
-
-    let fsEl: Element | null = null;
-    Object.defineProperty(document, 'fullscreenElement', {
-      configurable: true,
-      get: () => fsEl,
-    });
-    document.documentElement.requestFullscreen = vi.fn(async () => {
-      fsEl = document.documentElement;
-      document.dispatchEvent(new Event('fullscreenchange'));
-    });
-    Object.defineProperty(window.screen, 'orientation', {
-      configurable: true,
-      writable: true,
-      value: {
-        lock: vi.fn(async () => {
-          throw new Error('NotSupportedError');
-        }),
-        unlock: () => {},
-        addEventListener: () => {},
-        removeEventListener: () => {},
-      },
-    });
-
-    const root = await boot();
-    expect(clickText(root, 'button', 'CPU対局をはじめる')).toBe(true);
-    await new Promise((resolve) => setTimeout(resolve, 50));
-
-    const lockBtn = document.querySelector<HTMLButtonElement>('.rotate-overlay-lock-btn')!;
-    expect(lockBtn).not.toBeNull();
-    lockBtn.click();
-    await new Promise((resolve) => setTimeout(resolve, 30));
-
-    const errEl = document.querySelector<HTMLElement>('.rotate-overlay-error');
-    expect(errEl).not.toBeNull();
-    expect(errEl!.hidden).toBe(false);
-    expect(errEl!.textContent).toContain('横画面ロックに非対応');
   });
 });

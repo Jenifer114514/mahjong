@@ -85,19 +85,22 @@
   border-bottom-color: var(--tile-ivory-side);
 }
 
-/* 牌面の艶（左上からの反射光と下端の陰り） */
+/* 牌面の艶（斜めクリアコート反射光と下端の落ち着いた陰り） */
 .mj-tile:not(.mj-tile-back)::after {
   content: '';
   position: absolute;
   inset: 0;
   border-radius: inherit;
   pointer-events: none;
+  z-index: 1;
   background:
     linear-gradient(
-      162deg,
-      rgba(255, 255, 255, 0.6) 0%,
-      rgba(255, 255, 255, 0.12) 26%,
-      rgba(255, 255, 255, 0) 52%,
+      146deg,
+      rgba(255, 255, 255, 0.62) 0%,
+      rgba(255, 255, 255, 0.22) 16%,
+      rgba(255, 255, 255, 0.34) 24%,
+      rgba(255, 255, 255, 0.05) 37%,
+      rgba(255, 255, 255, 0) 56%,
       rgba(96, 76, 44, 0.09) 100%
     );
 }
@@ -129,10 +132,12 @@
 .table-felt.is-landscape .meld-orient-right .meld-tiles > .mj-tile.mj-tile-called:not(.mj-tile-back)::after {
   background:
     linear-gradient(
-      342deg,
-      rgba(255, 255, 255, 0.6) 0%,
-      rgba(255, 255, 255, 0.12) 26%,
-      rgba(255, 255, 255, 0) 52%,
+      326deg,
+      rgba(255, 255, 255, 0.62) 0%,
+      rgba(255, 255, 255, 0.22) 16%,
+      rgba(255, 255, 255, 0.34) 24%,
+      rgba(255, 255, 255, 0.05) 37%,
+      rgba(255, 255, 255, 0) 56%,
       rgba(96, 76, 44, 0.09) 100%
     );
 }
@@ -152,10 +157,12 @@
 .table-felt.is-landscape .meld-orient-top .meld-tiles > .mj-tile.mj-tile-called:not(.mj-tile-back)::after {
   background:
     linear-gradient(
-      72deg,
-      rgba(255, 255, 255, 0.6) 0%,
-      rgba(255, 255, 255, 0.12) 26%,
-      rgba(255, 255, 255, 0) 52%,
+      56deg,
+      rgba(255, 255, 255, 0.62) 0%,
+      rgba(255, 255, 255, 0.22) 16%,
+      rgba(255, 255, 255, 0.34) 24%,
+      rgba(255, 255, 255, 0.05) 37%,
+      rgba(255, 255, 255, 0) 56%,
       rgba(96, 76, 44, 0.09) 100%
     );
 }
@@ -175,12 +182,144 @@
 .table-felt.is-landscape .meld-orient-self .meld-tiles > .mj-tile.mj-tile-called:not(.mj-tile-back)::after {
   background:
     linear-gradient(
-      252deg,
-      rgba(255, 255, 255, 0.6) 0%,
-      rgba(255, 255, 255, 0.12) 26%,
-      rgba(255, 255, 255, 0) 52%,
+      236deg,
+      rgba(255, 255, 255, 0.62) 0%,
+      rgba(255, 255, 255, 0.22) 16%,
+      rgba(255, 255, 255, 0.34) 24%,
+      rgba(255, 255, 255, 0.05) 37%,
+      rgba(255, 255, 255, 0) 56%,
       rgba(96, 76, 44, 0.09) 100%
     );
+}
+
+/* ---------- 雀魂風 ドラ / 赤ドラ 光るオーラ演出 ---------- */
+.mj-tile.mj-tile-dora,
+.mj-tile.mj-tile-red {
+  z-index: 1;
+}
+
+.mj-tile-dora-aura {
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 2;
+  box-shadow:
+    inset 0 0 0 1.4px rgba(255, 224, 118, 0.88),
+    inset 0 0 7px rgba(255, 198, 56, 0.32),
+    0 0 7px 1px rgba(255, 206, 68, 0.72),
+    0 0 15px 3px rgba(255, 174, 34, 0.44);
+  animation: doraAuraPulse 2.3s ease-in-out infinite;
+}
+
+.mj-tile-red > .mj-tile-dora-aura {
+  box-shadow:
+    inset 0 0 0 1.4px rgba(255, 152, 118, 0.92),
+    inset 0 0 7px rgba(255, 92, 62, 0.34),
+    0 0 7px 1px rgba(255, 108, 72, 0.74),
+    0 0 15px 3px rgba(255, 150, 56, 0.44);
+}
+
+.mj-tile-dora.mj-tile-red > .mj-tile-dora-aura {
+  box-shadow:
+    inset 0 0 0 1.6px rgba(255, 228, 132, 0.96),
+    inset 0 0 9px rgba(255, 142, 64, 0.42),
+    0 0 8px 1.5px rgba(255, 194, 74, 0.84),
+    0 0 18px 4px rgba(255, 118, 52, 0.56);
+}
+
+.mj-tile-sm > .mj-tile-dora-aura {
+  inset: -0.5px;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 224, 118, 0.85),
+    inset 0 0 5px rgba(255, 198, 56, 0.3),
+    0 0 4.5px 0.5px rgba(255, 204, 66, 0.7),
+    0 0 9px 1.5px rgba(255, 172, 34, 0.4);
+}
+
+.mj-tile-sm.mj-tile-red > .mj-tile-dora-aura {
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 152, 118, 0.9),
+    inset 0 0 5px rgba(255, 92, 62, 0.32),
+    0 0 4.5px 0.5px rgba(255, 108, 72, 0.72),
+    0 0 9px 1.5px rgba(255, 150, 56, 0.4);
+}
+
+.mj-tile-sm.mj-tile-dora.mj-tile-red > .mj-tile-dora-aura {
+  box-shadow:
+    inset 0 0 0 1.2px rgba(255, 228, 132, 0.95),
+    inset 0 0 6px rgba(255, 142, 64, 0.4),
+    0 0 5.5px 1px rgba(255, 194, 74, 0.82),
+    0 0 11px 2px rgba(255, 118, 52, 0.52);
+}
+
+.mj-tile-dora-sheen {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.mj-tile-dora-sheen::before {
+  content: '';
+  position: absolute;
+  top: -35%;
+  bottom: -35%;
+  left: 0;
+  width: 58%;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 240, 170, 0.56) 45%,
+    rgba(255, 255, 255, 0.78) 52%,
+    rgba(255, 222, 120, 0.35) 64%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  transform: translateX(-180%) rotate(24deg);
+  animation: doraSheenSweep 2.7s ease-in-out infinite;
+  will-change: transform, opacity;
+}
+
+.mj-tile-red .mj-tile-dora-sheen::before {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 180, 140, 0.56) 45%,
+    rgba(255, 248, 228, 0.8) 52%,
+    rgba(255, 150, 96, 0.36) 64%,
+    rgba(255, 255, 255, 0) 100%
+  );
+}
+
+@keyframes doraAuraPulse {
+  0%,
+  100% {
+    opacity: 0.72;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes doraSheenSweep {
+  0% {
+    opacity: 0;
+    transform: translateX(-180%) rotate(24deg);
+  }
+  12% {
+    opacity: 0.95;
+  }
+  42% {
+    opacity: 0.95;
+    transform: translateX(250%) rotate(24deg);
+  }
+  48%,
+  100% {
+    opacity: 0;
+    transform: translateX(250%) rotate(24deg);
+  }
 }
 
 .table-felt.is-landscape .hand-area > .mj-tile {
@@ -569,7 +708,7 @@
 }
 
 .text-input {
-  min-height: 44px;
+  min-height: clamp(36px, 4.8dvh, 42px);
   font-size: 16px;
   border-radius: 10px;
   border-color: rgba(140, 180, 245, 0.22);
@@ -587,11 +726,12 @@
 }
 
 .text-input.code-input {
-  font-size: 1.1rem;
+  font-size: 1.08rem;
 }
 
 .seg-btn {
-  min-height: 44px;
+  min-height: clamp(36px, 4.8dvh, 42px);
+  padding: clamp(5px, 0.8dvh, 8px) 10px;
   border-radius: 10px;
   border-color: rgba(140, 180, 245, 0.18);
   background: rgba(255, 255, 255, 0.03);
@@ -607,7 +747,8 @@
 }
 
 .lobby-wrap .btn {
-  min-height: 44px;
+  min-height: clamp(36px, 4.8dvh, 42px);
+  padding: clamp(6px, 1dvh, 9px) 14px;
 }
 
 /* ===================================================================
@@ -807,7 +948,9 @@
   .seat-chat-bubble.is-bubble-enter,
   .lobby-chat-toast,
   .overlay-backdrop-modal.is-agari-flash,
-  .overlay-backdrop-modal.is-agari-flash > .round-end-panel {
+  .overlay-backdrop-modal.is-agari-flash > .round-end-panel,
+  .mj-tile-dora-aura,
+  .mj-tile-dora-sheen::before {
     animation: none;
   }
 }
@@ -865,12 +1008,12 @@
 .table-felt.is-3d-table .hand-area {
   flex-wrap: nowrap;
   overflow: hidden;
-  height: clamp(68px, 14vh, 108px);
+  height: clamp(44px, 12.5dvh, 104px);
   min-height: 0;
-  padding: 6px 0 0;
+  padding: 4px 0 0;
 }
 
-/* 3D モード時の 4 家ネームプレート（3D 卓・立牌の余白に整列） */
+/* 3D モード時の 4 家ネームプレート（あらゆる画面サイズで 3D 卓・立牌の余白に整列） */
 .table-felt.is-3d-table .seat-header {
   position: absolute;
   z-index: 7;
@@ -881,48 +1024,54 @@
 }
 
 .table-felt.is-3d-table .dora-panel {
-  left: 10px;
+  top: clamp(4px, 0.9dvh, 8px);
+  left: clamp(6px, 1vw, 12px);
+}
+
+.table-felt.is-3d-table .table-chrome {
+  top: clamp(4px, 0.9dvh, 8px);
+  right: clamp(6px, 1vw, 16px);
 }
 
 .table-felt.is-3d-table .table-left-actions {
-  left: 10px;
-  bottom: 104px;
+  left: clamp(6px, 1vw, 10px);
+  bottom: clamp(56px, 14dvh, 108px);
 }
 
 .table-felt.is-3d-table .seat-orient-top > .seat-header {
-  top: 46px;
-  right: 12px;
+  top: clamp(34px, 6.2dvh, 46px);
+  right: clamp(6px, 1vw, 12px);
   left: auto;
   bottom: auto;
   width: auto;
-  min-width: 108px;
-  max-width: 152px;
+  min-width: clamp(72px, 11vw, 108px);
+  max-width: clamp(102px, 16vw, 152px);
 }
 
 .table-felt.is-3d-table .seat-orient-left > .seat-header {
-  top: 132px;
-  left: 10px;
+  top: clamp(78px, 18dvh, 134px);
+  left: clamp(6px, 1vw, 10px);
   right: auto;
   bottom: auto;
-  width: 92px;
+  width: clamp(62px, 9.5vw, 92px);
 }
 
 .table-felt.is-3d-table .seat-orient-right > .seat-header {
   top: 38%;
-  right: 12px;
+  right: clamp(6px, 1vw, 12px);
   left: auto;
   bottom: auto;
-  width: 96px;
+  width: clamp(64px, 9.8vw, 96px);
 }
 
 .table-felt.is-3d-table .seat-orient-self > .seat-header {
-  bottom: 10px;
-  left: 10px;
+  bottom: clamp(6px, 1.2dvh, 10px);
+  left: clamp(6px, 1vw, 10px);
   top: auto;
   right: auto;
   width: auto;
-  min-width: 108px;
-  max-width: 152px;
+  min-width: clamp(72px, 11vw, 108px);
+  max-width: clamp(102px, 16vw, 152px);
 }
 
 .table-felt.is-3d-table .seat-chat-bubble {
@@ -945,80 +1094,86 @@
   right: 16px;
 }
 
-@media (max-height: 680px), (max-width: 900px) {
-  .table-felt.is-3d-table .dora-panel {
-    top: 6px;
-    left: 8px;
-  }
-
-  .table-felt.is-3d-table .table-left-actions {
-    left: 8px;
-    bottom: 88px;
-  }
-
-  .table-felt.is-3d-table .seat-orient-left > .seat-header {
-    left: 8px;
-    top: 128px;
-    width: 82px;
-  }
-}
-
 @media (max-height: 540px), (max-width: 900px) {
   .table-felt.is-3d-table .hand-area {
     flex-wrap: nowrap;
     overflow: hidden;
-    height: clamp(50px, 13vh, 76px);
+    height: clamp(44px, 12dvh, 74px);
     min-height: 0;
   }
 
   .table-felt.is-3d-table .seat-orient-top > .seat-header {
-    top: 42px;
-    right: 8px;
-    min-width: 90px;
-    max-width: 132px;
-  }
-
-  .table-felt.is-3d-table .seat-orient-right > .seat-header {
-    right: 8px;
-    top: 34%;
-    width: 82px;
-  }
-
-  .table-felt.is-3d-table .seat-orient-self > .seat-header {
-    bottom: 6px;
-    left: 8px;
-    min-width: 88px;
-    max-width: 126px;
-  }
-}
-
-@media (max-height: 560px) {
-  .table-felt.is-3d-table .dora-panel {
-    left: 6px;
-  }
-
-  .table-felt.is-3d-table .table-left-actions {
-    left: 6px;
-    bottom: 72px;
+    top: clamp(32px, 6.4dvh, 42px);
+    right: clamp(6px, 1vw, 8px);
+    min-width: clamp(70px, 11vw, 90px);
+    max-width: clamp(98px, 16vw, 132px);
   }
 
   .table-felt.is-3d-table .seat-orient-left > .seat-header {
-    left: 6px;
-    top: 98px;
-    width: 78px;
+    left: clamp(5px, 0.9vw, 8px);
+    top: clamp(66px, 18dvh, 106px);
+    width: clamp(60px, 9.5vw, 82px);
+  }
+
+  .table-felt.is-3d-table .seat-orient-right > .seat-header {
+    right: clamp(5px, 0.9vw, 8px);
+    top: 34%;
+    width: clamp(60px, 9.5vw, 82px);
+  }
+
+  .table-felt.is-3d-table .table-left-actions {
+    left: clamp(5px, 0.9vw, 8px);
+    bottom: clamp(54px, 13dvh, 84px);
+  }
+}
+
+@media (max-width: 640px) {
+  .table-felt.is-3d-table .seat-header {
+    padding: 3px 5px;
+    gap: 2px;
+  }
+
+  .table-felt.is-3d-table .seat-avatar {
+    width: 24px;
+    height: 24px;
+  }
+
+  .table-felt.is-3d-table .seat-name,
+  .table-felt.is-3d-table .seat-score {
+    font-size: 0.62rem;
+  }
+
+  .table-felt.is-3d-table .seat-orient-self > .seat-header {
+    bottom: clamp(54px, 13dvh, 100px);
+    left: auto;
+    right: 6px;
+  }
+
+  .table-felt.is-3d-table .table-left-actions {
+    bottom: clamp(54px, 13dvh, 100px);
   }
 }
 
 @media (max-height: 430px) {
+  .table-felt.is-3d-table .seat-header {
+    padding: 2px 5px;
+    gap: 2px;
+  }
+
+  .table-felt.is-3d-table .seat-avatar {
+    width: 22px;
+    height: 22px;
+  }
+
   .table-felt.is-3d-table .table-left-actions {
     left: 6px;
-    bottom: 64px;
+    bottom: clamp(48px, 13dvh, 66px);
   }
 
   .table-felt.is-3d-table .seat-orient-left > .seat-header {
     left: 6px;
-    top: 84px;
-    width: 74px;
+    top: clamp(54px, 17dvh, 84px);
+    width: clamp(58px, 9vw, 74px);
   }
 }
 

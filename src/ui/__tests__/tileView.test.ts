@@ -51,4 +51,35 @@ describe('tileView スプライトシート描画', () => {
     const firstCell = createTileElement({ id: 't3', kind: '1m', isRed: false });
     expect(firstCell.style.backgroundPosition).toBe('0% 0%');
   });
+
+  it('赤ドラまたはdora指定のある牌にドラオーラと光沢シマー要素を付与し、通常牌には付与しない', () => {
+    const plainEl = createTileElement({ id: 'p1', kind: '2m', isRed: false });
+    expect(plainEl.classList.contains('mj-tile-dora')).toBe(false);
+    expect(plainEl.classList.contains('mj-tile-red')).toBe(false);
+    expect(plainEl.querySelector('.mj-tile-dora-aura')).toBeNull();
+    expect(plainEl.querySelector('.mj-tile-dora-sheen')).toBeNull();
+
+    const doraEl = createTileElement(
+      { id: 'd1', kind: '2m', isRed: false },
+      { dora: true },
+    );
+    expect(doraEl.classList.contains('mj-tile-dora')).toBe(true);
+    expect(doraEl.querySelector('.mj-tile-dora-aura')?.getAttribute('aria-hidden')).toBe('true');
+    expect(doraEl.querySelector('.mj-tile-dora-sheen')?.getAttribute('aria-hidden')).toBe('true');
+
+    const redEl = createTileElement({ id: 'r1', kind: '5p', isRed: true });
+    expect(redEl.classList.contains('mj-tile-red')).toBe(true);
+    expect(redEl.classList.contains('mj-tile-dora')).toBe(false);
+    expect(redEl.querySelector('.mj-tile-dora-aura')).not.toBeNull();
+    expect(redEl.querySelector('.mj-tile-dora-sheen')).not.toBeNull();
+
+    const bothEl = createTileElement(
+      { id: 'b1', kind: '5p', isRed: true },
+      { dora: true, small: true },
+    );
+    expect(bothEl.classList.contains('mj-tile-red')).toBe(true);
+    expect(bothEl.classList.contains('mj-tile-dora')).toBe(true);
+    expect(bothEl.querySelectorAll('.mj-tile-dora-aura')).toHaveLength(1);
+    expect(bothEl.querySelectorAll('.mj-tile-dora-sheen')).toHaveLength(1);
+  });
 });

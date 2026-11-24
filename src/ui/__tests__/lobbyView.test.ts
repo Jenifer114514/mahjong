@@ -428,9 +428,7 @@ describe('renderWaitingRoom（CPU の後入れ）', () => {
     expect(specRoot.querySelector('.spectator-lobby-banner')).not.toBeNull();
   });
 
-  it('ホーム画面と待機ロビーに Android 向け横画面固定トグルを表示し操作できる', () => {
-    const onToggle = vi.fn();
-    const onApplyNow = vi.fn();
+  it('ホーム画面と待機ロビーにフル画面表示・横画面固定カードを置かない', () => {
     const formState: LobbyFormState = {
       playerName: 'テスト',
       playerCount: 4,
@@ -456,47 +454,25 @@ describe('renderWaitingRoom（CPU の後入れ）', () => {
         onLeaveLobby: () => {},
       },
       false,
-      {
-        landscapeLock: {
-          enabled: true,
-          fullscreenActive: false,
-          onToggle,
-          onApplyNow,
-        },
-      },
     );
 
-    expect(entryRoot.querySelector('.landscape-lock-card')).not.toBeNull();
+    expect(entryRoot.querySelector('.landscape-lock-card')).toBeNull();
+    expect(entryRoot.querySelector('.landscape-lock-switch')).toBeNull();
+    expect(entryRoot.querySelector('.lobby-entry-top-grid')).toBeNull();
     expect(entryRoot.querySelector('.rule-toggle-field')).toBeNull();
     expect(entryRoot.querySelectorAll('.seg-btn')).toHaveLength(4);
-    entryRoot.querySelector<HTMLButtonElement>('.landscape-lock-apply-btn')!.click();
-    expect(onApplyNow).toHaveBeenCalledTimes(1);
-    entryRoot.querySelector<HTMLButtonElement>('.landscape-lock-switch')!.click();
-    expect(onToggle).toHaveBeenCalledWith(false);
 
     const { session, latest } = lobbySession(1);
     session.start();
     const waitRoot = document.createElement('div');
-    renderWaitingRoom(
-      waitRoot,
-      latest(),
-      {
-        onCreateRoom: () => {},
-        onJoinRoom: () => {},
-        onStartLocalGame: () => {},
-        onLeaveLobby: () => {},
-      },
-      {
-        landscapeLock: {
-          enabled: false,
-          fullscreenActive: false,
-          onToggle,
-        },
-      },
-    );
-    expect(waitRoot.querySelector('.landscape-lock-box')).not.toBeNull();
-    waitRoot.querySelector<HTMLButtonElement>('.landscape-lock-switch')!.click();
-    expect(onToggle).toHaveBeenCalledWith(true);
+    renderWaitingRoom(waitRoot, latest(), {
+      onCreateRoom: () => {},
+      onJoinRoom: () => {},
+      onStartLocalGame: () => {},
+      onLeaveLobby: () => {},
+    });
+    expect(waitRoot.querySelector('.landscape-lock-box')).toBeNull();
+    expect(waitRoot.querySelector('.landscape-lock-switch')).toBeNull();
     session.destroy();
   });
 
@@ -651,6 +627,41 @@ describe('renderWaitingRoom（CPU の後入れ）', () => {
     ).toBe('9+');
 
     session.destroy();
+  });
+
+  it('トップロビーにプレイヤー名コンパクトカード(.lobby-name-card / .lobby-name-field)を描画する', () => {
+    const root = document.createElement('div');
+    const formState: LobbyFormState = {
+      playerName: '雀士テスト',
+      playerCount: 4,
+      gameLength: 'tonpuu',
+      tobi: true,
+      tsumoLoss: false,
+      allowKuitan: true,
+      allowAtozuke: true,
+      honbaBonus: true,
+      joinCode: '',
+      cpuCount: 0,
+      cpuLevel: 'normal',
+    };
+    renderLobbyEntry(
+      root,
+      formState,
+      {
+        onCreateRoom: () => {},
+        onJoinRoom: () => {},
+        onStartLocalGame: () => {},
+        onLeaveLobby: () => {},
+      },
+      false,
+    );
+
+    const card = root.querySelector('.lobby-name-card');
+    const field = root.querySelector('.lobby-name-card .lobby-name-field');
+    const input = field?.querySelector<HTMLInputElement>('input');
+    expect(card).not.toBeNull();
+    expect(field).not.toBeNull();
+    expect(input?.value).toBe('雀士テスト');
   });
 });
 

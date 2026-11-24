@@ -104,6 +104,7 @@ function createFake2dContext(): CanvasRenderingContext2D {
 interface DrawnTileRecord {
   model: number[];
   uvRect: number[];
+  doraGlow?: number;
 }
 
 interface MockGlTracker {
@@ -115,6 +116,7 @@ interface MockGlTracker {
   tileIndices: number[] | null;
   drawnTiles: DrawnTileRecord[];
   uploadedCanvasSizes?: Array<{ width: number; height: number }>;
+  additiveDraws?: number;
 }
 
 function createFakeWebGL2Context(tracker: MockGlTracker): WebGL2RenderingContext {
@@ -123,6 +125,8 @@ function createFakeWebGL2Context(tracker: MockGlTracker): WebGL2RenderingContext
   let currentModel: number[] = [];
   let currentUvRect: number[] = [0, 0, 0, 0];
   let currentUseAtlas = 0;
+  let currentDoraGlow = 0;
+  let currentBlendDst = 0x0303;
 
   return {
     VERTEX_SHADER: 0x8b31,
@@ -152,6 +156,7 @@ function createFakeWebGL2Context(tracker: MockGlTracker): WebGL2RenderingContext
     CULL_FACE: 0x0b44,
     BACK: 0x0405,
     BLEND: 0x0be2,
+    ONE: 1,
     SRC_ALPHA: 0x0302,
     ONE_MINUS_SRC_ALPHA: 0x0303,
     COLOR_BUFFER_BIT: 0x4000,
@@ -223,7 +228,9 @@ function createFakeWebGL2Context(tracker: MockGlTracker): WebGL2RenderingContext
     enable: noop,
     disable: noop,
     cullFace: noop,
-    blendFunc: noop,
+    blendFunc: (_src: number, dst: number) => {
+      currentBlendDst = dst;
+    },
     depthMask: noop,
     viewport: noop,
     clearColor: noop,
@@ -242,6 +249,8 @@ function createFakeWebGL2Context(tracker: MockGlTracker): WebGL2RenderingContext
     uniform1f: (loc: { name?: string }, val: number) => {
       if (loc?.name === 'uUseAtlas') {
         currentUseAtlas = val;
+      } else if (loc?.name === 'uDoraGlow') {
+        currentDoraGlow = val;
       }
     },
     uniform1i: noop,
@@ -251,7 +260,10 @@ function createFakeWebGL2Context(tracker: MockGlTracker): WebGL2RenderingContext
         tracker.drawnTiles.push({
           model: currentModel,
           uvRect: currentUvRect,
+          doraGlow: currentDoraGlow,
         });
+      } else if (currentBlendDst === 1 && currentDoraGlow > 0.5) {
+        tracker.additiveDraws = (tracker.additiveDraws ?? 0) + 1;
       }
     },
   } as unknown as WebGL2RenderingContext;
@@ -953,6 +965,152 @@ describe('3D麻雀卓とフォールバック統合', () => {
       expect(tz).toBeGreaterThan(2.1);
       expect(tz).toBeLessThan(3.6);
     }
+
+    container.remove();
+  });
+
+  it('3D卓でドラ・赤ドラ・重複ドラに3段階のuDoraGlowと加算オーラが描画され、狭幅画面でも14枚の手牌すべてをピックできる', () => {
+    const tracker: MockGlTracker = {
+      drawCalls: 0,
+      texUploads: 0,
+      shaderCompiles: 0,
+      loseContextCount: 0,
+      tileVerts: null,
+      tileIndices: null,
+      drawnTiles: [],
+      additiveDraws: 0,
+    };
+    const gl = createFakeWebGL2Context(tracker);
+    const ctx2d = createFake2dContext();
+    let rafCallback: FrameRequestCallback | null = null;
+
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+      rafCallback = cb;
+      return 1;
+    });
+    vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => {});
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(
+      function (this: HTMLCanvasElement, kind: string) {
+        if (kind === 'webgl2') return gl;
+        if (kind === '2d') return ctx2d;
+        return null;
+      } as unknown as HTMLCanvasElement['getContext'],
+    );
+
+    let boxWidth = 1280;
+    let boxHeight = 720;
+    vi.spyOn(HTMLCanvasElement.prototype, 'getBoundingClientRect').mockImplementation(
+      () => ({
+        width: boxWidth,
+        height: boxHeight,
+        top: 0,
+        left: 0,
+        right: boxWidth,
+        bottom: boxHeight,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      }),
+    );
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    containers.push(container);
+
+    const base = makeView(4, 7171);
+    const viewWithDora: StateView = {
+      ...base,
+      round: base.round
+        ? {
+            ...base.round,
+            // 表示牌 4p → 有効ドラ 5p
+            doraIndicators: [t('ind-4p', '4p')],
+          }
+        : null,
+      myHand: [
+        t('d-5p-only', '5p', false), // glow 1 (通常ドラ)
+        t('d-5m-red', '5m', true), // glow 2 (赤ドラ)
+        t('d-5p-red', '5p', true), // glow 3 (ドラ+赤ドラ重複)
+        t('n-1m', '1m', false),
+        t('n-2m', '2m', false),
+        t('n-3m', '3m', false),
+        t('n-4m', '4m', false),
+        t('n-6m', '6m', false),
+        t('n-7m', '7m', false),
+        t('n-8m', '8m', false),
+        t('n-9m', '9m', false),
+        t('n-1s', '1s', false),
+        t('n-2s', '2s', false),
+      ],
+      myDrawnTile: t('n-3s', '3s', false),
+    };
+
+    const onSelectTile = vi.fn();
+    const handlers = makeHandlers({ onSelectTile });
+    renderGameTable(container, viewWithDora, handlers, {
+      riichiSelectingMode: false,
+      autoTsumogiriEnabled: true,
+      enable3dTable: true,
+      cameraPreset: 'standard',
+    });
+
+    rafCallback!(performance.now());
+    const glowValues = new Set(
+      tracker.drawnTiles.map((d) => d.doraGlow).filter((v) => (v ?? 0) > 0),
+    );
+    expect(glowValues.has(1)).toBe(true);
+    expect(glowValues.has(2)).toBe(true);
+    expect(glowValues.has(3)).toBe(true);
+    expect(tracker.additiveDraws).toBeGreaterThanOrEqual(3);
+
+    // 狭幅縦長画面 (400x700) でも端から端まで14枚全てレイキャストが当たる距離にカメラがフィットすること
+    destroyTable3DScene(container);
+    container.innerHTML = '';
+    boxWidth = 400;
+    boxHeight = 700;
+    onSelectTile.mockClear();
+
+    renderGameTable(container, viewWithDora, handlers, {
+      riichiSelectingMode: false,
+      autoTsumogiriEnabled: true,
+      enable3dTable: true,
+      cameraPreset: 'standard',
+    });
+    rafCallback!(performance.now() + 20);
+
+    const canvas = container.querySelector<HTMLCanvasElement>('.table-3d-canvas')!;
+    const pickedIds = new Set<string>();
+    for (let x = 8; x <= 392; x += 12) {
+      for (let y = 400; y <= 685; y += 16) {
+        canvas.dispatchEvent(
+          new PointerEvent('pointerdown', {
+            clientX: x,
+            clientY: y,
+            pointerId: 1,
+            pointerType: 'mouse',
+            button: 0,
+            bubbles: true,
+          }),
+        );
+        canvas.dispatchEvent(
+          new PointerEvent('pointerup', {
+            clientX: x,
+            clientY: y,
+            pointerId: 1,
+            pointerType: 'mouse',
+            button: 0,
+            bubbles: true,
+          }),
+        );
+        const call = onSelectTile.mock.calls.at(-1)?.[0];
+        if (typeof call === 'string') {
+          pickedIds.add(call);
+        }
+      }
+    }
+    expect(pickedIds.has('d-5p-only')).toBe(true);
+    expect(pickedIds.has('n-3s')).toBe(true);
+    expect(pickedIds.size).toBe(14);
 
     container.remove();
   });
