@@ -47,24 +47,13 @@ export interface LobbyHandlers {
   onOpenChat?: () => void;
 }
 
-export interface LandscapeLockUiState {
-  enabled: boolean;
-  fullscreenActive: boolean;
-  message?: string | null;
-  messageKind?: 'info' | 'err';
-  onToggle: (next: boolean) => void;
-  onApplyNow?: () => void;
-}
-
 export interface LobbyEntryOptions {
   savedSession?: SavedSessionRecord | null;
-  landscapeLock?: LandscapeLockUiState;
   roomStatuses?: Partial<Record<PermanentRoomId, PermanentRoomProbeState>>;
   roomRefreshing?: boolean;
 }
 
 export interface WaitingRoomOptions {
-  landscapeLock?: LandscapeLockUiState;
   unreadChatCount?: number;
 }
 
@@ -134,87 +123,6 @@ function createOnOffToggleField(params: {
 
   field.append(meta, toggleBtn);
   return field;
-}
-
-function createLandscapeLockField(
-  lock: LandscapeLockUiState,
-  variant: 'card' | 'box',
-): HTMLElement {
-  const container = document.createElement('div');
-  container.className =
-    variant === 'card' ? 'card landscape-lock-card' : 'landscape-lock-box';
-
-  const row = document.createElement('div');
-  row.className = 'landscape-lock-row';
-
-  const meta = document.createElement('div');
-  meta.className = 'landscape-lock-meta';
-
-  const label = document.createElement('span');
-  label.className = 'landscape-lock-label';
-  label.textContent = '横画面固定（Android・フル画面）';
-
-  const sub = document.createElement('span');
-  sub.className = 'seg-sub landscape-lock-sub';
-  sub.textContent =
-    lock.enabled && lock.fullscreenActive
-      ? 'フル画面表示で横向きに固定しています'
-      : lock.enabled
-        ? '有効（対局開始・参加時に自動で横画面へ切り替わります）'
-        : 'ONにするとフル画面表示になり、端末を横向きに固定します（Android向け）';
-
-  meta.append(label, sub);
-
-  const controls = document.createElement('div');
-  controls.className = 'landscape-lock-controls';
-
-  if (lock.enabled && !lock.fullscreenActive && lock.onApplyNow) {
-    const applyBtn = document.createElement('button');
-    applyBtn.type = 'button';
-    applyBtn.className = 'btn btn-secondary landscape-lock-apply-btn';
-    applyBtn.textContent = '今すぐ横画面';
-    applyBtn.addEventListener('click', () => lock.onApplyNow?.());
-    controls.appendChild(applyBtn);
-  }
-
-  const toggleBtn = document.createElement('button');
-  toggleBtn.type = 'button';
-  toggleBtn.className = `toggle-switch landscape-lock-switch${lock.enabled ? ' is-on' : ''}`;
-  toggleBtn.setAttribute('role', 'switch');
-  toggleBtn.setAttribute('aria-checked', lock.enabled ? 'true' : 'false');
-  toggleBtn.setAttribute('aria-label', '横画面固定（Android・フル画面）');
-
-  const track = document.createElement('span');
-  track.className = 'toggle-track';
-  track.setAttribute('aria-hidden', 'true');
-  const thumb = document.createElement('span');
-  thumb.className = 'toggle-thumb';
-  track.appendChild(thumb);
-
-  const stateText = document.createElement('span');
-  stateText.className = 'toggle-state-text';
-  stateText.textContent = lock.enabled ? 'ON' : 'OFF';
-
-  toggleBtn.append(track, stateText);
-  toggleBtn.addEventListener('click', () => {
-    lock.onToggle(!lock.enabled);
-  });
-
-  controls.appendChild(toggleBtn);
-  row.append(meta, controls);
-  container.appendChild(row);
-
-  if (lock.message) {
-    const msg = document.createElement('div');
-    msg.className = `landscape-lock-message${
-      lock.messageKind === 'err' ? ' is-err' : ' is-info'
-    }`;
-    msg.setAttribute('role', 'status');
-    msg.textContent = lock.message;
-    container.appendChild(msg);
-  }
-
-  return container;
 }
 
 export function renderPermanentRoomOccupancy(
@@ -355,9 +263,9 @@ export function renderLobbyEntry(
 
   // Player name card
   const nameCard = document.createElement('div');
-  nameCard.className = 'card';
+  nameCard.className = 'card lobby-name-card';
   const nameField = document.createElement('div');
-  nameField.className = 'field';
+  nameField.className = 'field lobby-name-field';
   nameField.style.marginBottom = '0';
 
   const nameLabel = document.createElement('label');
@@ -377,15 +285,7 @@ export function renderLobbyEntry(
 
   nameField.append(nameLabel, nameInput);
   nameCard.appendChild(nameField);
-
-  if (options.landscapeLock) {
-    const topGrid = document.createElement('div');
-    topGrid.className = 'lobby-entry-top-grid';
-    topGrid.append(nameCard, createLandscapeLockField(options.landscapeLock, 'card'));
-    wrap.appendChild(topGrid);
-  } else {
-    wrap.appendChild(nameCard);
-  }
+  wrap.appendChild(nameCard);
 
   // 常設ルーム（銅の間 / 銀の間 / 金の間）
   const permCard = document.createElement('div');
@@ -1046,10 +946,6 @@ export function renderWaitingRoom(
     btnRow.append(addCpuBtn, removeCpuBtn);
     cpuControls.append(cpuCaption, btnRow);
     card.appendChild(cpuControls);
-  }
-
-  if (options.landscapeLock) {
-    card.appendChild(createLandscapeLockField(options.landscapeLock, 'box'));
   }
 
   const leaveBtn = document.createElement('button');

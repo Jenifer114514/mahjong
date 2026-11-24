@@ -1366,6 +1366,96 @@ describe('renderGameTable（横画面レイアウト）', () => {
     expect(rightHeader.querySelector('.kita-badge')?.textContent).toBe('北×1');
     expect(leftHeader.querySelector('.kita-badge')).toBeNull();
   });
+
+  it('2D卓で有効ドラ牌(表示牌の次位牌)と赤ドラに .mj-tile-dora / .mj-tile-red とオーラ要素が付与される', () => {
+    const baseView = toStateView(state4, 'p0', 0);
+    // ドラ表示牌を 1m にすると有効ドラは 2m
+    const viewWithDora: StateView = {
+      ...baseView,
+      round: baseView.round
+        ? {
+            ...baseView.round,
+            doraIndicators: [{ id: 'ind-1m', kind: '1m', isRed: false }],
+          }
+        : null,
+      myHand: [
+        { id: 'h-2m', kind: '2m', isRed: false },
+        { id: 'h-3m', kind: '3m', isRed: false },
+        { id: 'h-5pr', kind: '5p', isRed: true },
+        ...baseView.myHand.slice(3),
+      ],
+      players: baseView.players.map((p, idx) => {
+        if (idx === 0) {
+          return {
+            ...p,
+            discards: [
+              {
+                tile: { id: 'd-2m', kind: '2m', isRed: false },
+                isTsumogiri: false,
+                isRiichiDeclaration: false,
+              },
+              {
+                tile: { id: 'd-9p', kind: '9p', isRed: false },
+                isTsumogiri: true,
+                isRiichiDeclaration: false,
+              },
+            ],
+          };
+        }
+        if (idx === 1) {
+          const calledTile = { id: 'm-2m-1', kind: '2m' as const, isRed: false };
+          return {
+            ...p,
+            discards: [
+              {
+                tile: { id: 'opp-2m', kind: '2m', isRed: false },
+                isTsumogiri: false,
+                isRiichiDeclaration: false,
+              },
+            ],
+            melds: [
+              {
+                type: 'pon' as const,
+                tiles: [
+                  calledTile,
+                  { id: 'm-2m-2', kind: '2m', isRed: false },
+                  { id: 'm-2m-3', kind: '2m', isRed: false },
+                ],
+                calledTile,
+                fromSeatIndex: 0,
+                addedTile: null,
+              },
+            ],
+          };
+        }
+        return p;
+      }),
+    };
+
+    const root = document.createElement('div');
+    renderGameTable(root, viewWithDora, noopHandlers);
+
+    // 自家手牌の 2m と 赤5p にオーラが付くが、3m には付かない
+    const h2m = root.querySelector('.seat-self [data-tile-id="h-2m"]')!;
+    const h3m = root.querySelector('.seat-self [data-tile-id="h-3m"]')!;
+    const h5pr = root.querySelector('.seat-self [data-tile-id="h-5pr"]')!;
+    expect(h2m.classList.contains('mj-tile-dora')).toBe(true);
+    expect(h2m.querySelector('.mj-tile-dora-aura')).not.toBeNull();
+    expect(h3m.classList.contains('mj-tile-dora')).toBe(false);
+    expect(h3m.querySelector('.mj-tile-dora-aura')).toBeNull();
+    expect(h5pr.classList.contains('mj-tile-red')).toBe(true);
+    expect(h5pr.querySelector('.mj-tile-dora-aura')).not.toBeNull();
+
+    // 自家河と他家河・副露の 2m にもオーラが付く（9p には付かない）
+    const d2m = root.querySelector('.river-self [data-tile-id="d-2m"]')!;
+    const d9p = root.querySelector('.river-self [data-tile-id="d-9p"]')!;
+    const opp2m = root.querySelector('.river-right [data-tile-id="opp-2m"]')!;
+    const meld2m = root.querySelector('.seat-right [data-tile-id="m-2m-1"]')!;
+    expect(d2m.classList.contains('mj-tile-dora')).toBe(true);
+    expect(d9p.classList.contains('mj-tile-dora')).toBe(false);
+    expect(opp2m.classList.contains('mj-tile-dora')).toBe(true);
+    expect(meld2m.classList.contains('mj-tile-dora')).toBe(true);
+  });
 });
 
 

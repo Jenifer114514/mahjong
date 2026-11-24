@@ -6,8 +6,6 @@
  * 横画面ロック（requestFullscreen + screen.orientation.lock('landscape')）を提供する。
  */
 
-const LANDSCAPE_LOCK_STORAGE_KEY = 'arena-mahjong:landscape-lock:v1';
-
 interface ScreenOrientationWithLock {
   lock?: (
     orientation:
@@ -38,45 +36,6 @@ export interface LandscapeFullscreenResult {
   fullscreen: boolean;
   orientationLocked: boolean;
   error: string | null;
-}
-
-export interface RotateOverlayOptions {
-  onRequestLandscapeLock?: () => Promise<LandscapeFullscreenResult | void>;
-}
-
-function getStorage(): Storage | null {
-  try {
-    if (typeof window !== 'undefined' && window.localStorage) {
-      return window.localStorage;
-    }
-  } catch {
-    // ignore storage access restrictions
-  }
-  return null;
-}
-
-export function loadLandscapeLockPreference(): boolean {
-  const storage = getStorage();
-  if (!storage) return false;
-  try {
-    return storage.getItem(LANDSCAPE_LOCK_STORAGE_KEY) === 'true';
-  } catch {
-    return false;
-  }
-}
-
-export function saveLandscapeLockPreference(enabled: boolean): void {
-  const storage = getStorage();
-  if (!storage) return;
-  try {
-    if (enabled) {
-      storage.setItem(LANDSCAPE_LOCK_STORAGE_KEY, 'true');
-    } else {
-      storage.removeItem(LANDSCAPE_LOCK_STORAGE_KEY);
-    }
-  } catch {
-    // ignore quota errors
-  }
 }
 
 export function isFullscreenActive(doc: Document = document): boolean {
@@ -207,7 +166,7 @@ export function shouldBlockForOrientation(): boolean {
   return !isLandscapeViewport() && isCoarsePointer();
 }
 
-export function createRotateOverlay(options: RotateOverlayOptions = {}): HTMLElement {
+export function createRotateOverlay(): HTMLElement {
   const overlay = document.createElement('div');
   overlay.className = 'rotate-overlay';
   overlay.setAttribute('role', 'dialog');
@@ -232,36 +191,6 @@ export function createRotateOverlay(options: RotateOverlayOptions = {}): HTMLEle
     '※ 画面の回転ロックがかかっている場合は、端末の設定から自動回転をオンにしてください。';
 
   overlay.append(icon, title, body, hint);
-
-  if (options.onRequestLandscapeLock) {
-    const lockBtn = document.createElement('button');
-    lockBtn.type = 'button';
-    lockBtn.className = 'btn btn-primary rotate-overlay-lock-btn';
-    lockBtn.textContent = '横画面に固定する（Android・フル画面）';
-
-    const errorEl = document.createElement('div');
-    errorEl.className = 'rotate-overlay-error';
-    errorEl.hidden = true;
-
-    lockBtn.addEventListener('click', () => {
-      lockBtn.disabled = true;
-      errorEl.hidden = true;
-      errorEl.textContent = '';
-      void Promise.resolve(options.onRequestLandscapeLock?.())
-        .then((res) => {
-          if (res && typeof res === 'object' && 'error' in res && res.error) {
-            errorEl.textContent = res.error;
-            errorEl.hidden = false;
-          }
-        })
-        .finally(() => {
-          lockBtn.disabled = false;
-        });
-    });
-
-    overlay.append(lockBtn, errorEl);
-  }
-
   return overlay;
 }
 

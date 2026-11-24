@@ -91,6 +91,7 @@ interface DrawRequest {
   highlight: number;
   emissive: number;
   doraGlow: number;
+  additive?: boolean;
 }
 
 // ==================================================
@@ -345,8 +346,36 @@ void main() {
   float diff1 = max(dot(N, L1), 0.0);
   float diff2 = max(dot(N, L2), 0.0);
   vec3 H1 = normalize(L1 + V);
-  float spec = pow(max(dot(N, H1), 0.0), 42.0);
-  float rim = pow(1.0 - max(dot(N, V), 0.0), 3.0);
+  vec3 H2 = normalize(L2 + V);
+  float specSharp = pow(max(dot(N, H1), 0.0), 82.0);
+  float specBroad = pow(max(dot(N, H1), 0.0), 18.0);
+  float specSide = pow(max(dot(N, H2), 0.0), 50.0);
+  float rim = pow(1.0 - max(dot(N, V), 0.0), 3.1);
+
+  // 牌の樹脂クリアコートによる滑らかなスタジオ光沢
+  vec3 R = reflect(-V, N);
+  float skyPanel = smoothstep(0.30, 0.88, R.y) * smoothstep(-0.35, 0.72, R.z * 0.65 - R.x * 0.45);
+  float coatGloss = skyPanel * 0.08 + specBroad * 0.075 + specSharp * 0.25 + specSide * 0.11;
+
+  // ドラ・赤ドラの外周加算オーラ（shadowMesh / vZone > 5.5）
+  if (vZone > 5.5 && uDoraGlow > 0.5) {
+    float isRedDora = step(1.5, uDoraGlow);
+    float isDoubleDora = step(2.5, uDoraGlow);
+    vec2 p = abs(vUv - vec2(0.5)) * 2.0;
+    vec2 q = max(p - vec2(0.46, 0.50), 0.0);
+    float boxDist = length(q);
+    float halo = exp(-boxDist * boxDist * 14.0) * smoothstep(0.54, 0.14, boxDist);
+    float innerEdge = exp(-pow(max(0.0, boxDist - 0.08), 2.0) * 30.0);
+    float pulse = 0.80 + 0.20 * sin(uTime * 3.0 + vWorldPos.x * 0.5);
+    float angle = atan(vUv.y - 0.5, vUv.x - 0.5);
+    float wisp = 0.88 + 0.12 * sin(angle * 4.0 - uTime * 2.4);
+    vec3 auraCol = mix(vec3(1.0, 0.78, 0.22), vec3(1.0, 0.36, 0.18), isRedDora);
+    vec3 hotCol = mix(vec3(1.0, 0.94, 0.62), vec3(1.0, 0.72, 0.42), isRedDora);
+    float intensity = (0.42 + isDoubleDora * 0.18) * pulse * wisp;
+    vec3 finalGlow = mix(auraCol, hotCol, innerEdge * 0.58) * intensity * halo;
+    outColor = vec4(finalGlow, clamp(halo * intensity, 0.0, 1.0));
+    return;
+  }
 
   vec3 base = uColor.rgb;
   float alpha = uColor.a;
@@ -410,16 +439,40 @@ void main() {
     // 中央デジタルコンソール天面は照明の暗化や白飛びスペキュラを抑えて文字コントラストを最大化
     lit = base;
   } else if (uUseAtlas > 0.5) {
-    lit += vec3(0.24, 0.23, 0.21) * spec + vec3(0.11, 0.12, 0.15) * rim;
+    if (vZone < 0.5) {
+      // 天面: 図柄コントラストを保ちながら上品な樹脂クリアコート光沢を乗せる
+      lit += vec3(0.98, 0.99, 1.0) * (coatGloss * 0.85) + vec3(0.11, 0.12, 0.15) * rim;
+    } else if (vZone < 1.5) {
+      // ベベル角・側面: 丸みを帯びたエッジに艶のラインを通す
+      lit += vec3(1.0, 0.98, 0.94) * (coatGloss * 1.18) + vec3(0.16, 0.16, 0.18) * rim;
+    } else {
+      // 黄金背面: 滑らかなアクリル艶
+      lit += vec3(1.0, 0.93, 0.76) * (coatGloss * 1.12) + vec3(0.20, 0.15, 0.08) * rim;
+    }
   } else if (vZone < 4.5) {
-    lit += vec3(0.14) * spec;
+    lit += vec3(0.14) * specSharp;
   }
 
-  // ドラシマー
-  if (uDoraGlow > 0.5 && vZone < 0.5) {
-    float wave = sin(vUv.x * 7.0 - vUv.y * 5.0 - uTime * 3.1);
-    float band = smoothstep(0.82, 0.99, wave);
-    lit += vec3(1.0, 0.86, 0.42) * band * 0.22;
+  // 雀魂風 ドラ・赤ドラ内発光オーラ + 斜めシマー
+  if (uDoraGlow > 0.5 && uUseAtlas > 0.5) {
+    float isRedDora = step(1.5, uDoraGlow);
+    float isDoubleDora = step(2.5, uDoraGlow);
+    vec3 auraCol = mix(vec3(1.0, 0.84, 0.28), vec3(1.0, 0.42, 0.22), isRedDora);
+    vec3 coreCol = mix(vec3(1.0, 0.95, 0.68), vec3(1.0, 0.76, 0.52), isRedDora);
+    float pulse = 0.78 + 0.22 * sin(uTime * 3.0 + vWorldPos.x * 0.6);
+    float boost = 1.0 + isDoubleDora * 0.35;
+
+    if (vZone < 0.5) {
+      vec2 edge = min(vUv, 1.0 - vUv);
+      float border = 1.0 - smoothstep(0.02, 0.25, min(edge.x, edge.y));
+      float phase = fract(uTime * 0.40 + vWorldPos.x * 0.07 - vWorldPos.z * 0.05);
+      float diag = vUv.x * 0.75 + vUv.y * 0.55 - (phase * 2.2 - 0.55);
+      float shimmer = exp(-diag * diag * 52.0);
+      lit += auraCol * (border * 0.32 * pulse * boost) + coreCol * (shimmer * 0.36 * boost);
+    } else if (vZone < 2.2) {
+      float edgeRim = pow(1.0 - max(dot(N, V), 0.0), 1.6);
+      lit += auraCol * ((0.14 + 0.28 * edgeRim) * pulse * boost);
+    }
   }
 
   // 選択・ホバー・リーチ候補ハイライト
@@ -872,6 +925,7 @@ export class Mahjong3DScene {
   private drawAnims: DrawAnimState[] = [];
   private doraFlipAnims: DoraFlipAnimState[] = [];
   private animQueue: DrawRequest[] = [];
+  private auraQueue: DrawRequest[] = [];
 
   private cameraPreset: Table3DCameraPreset = 'standard';
   private userYawOffset = 0;
@@ -1241,16 +1295,24 @@ export class Mahjong3DScene {
       );
       this.currentYaw = this.userYawOffset;
       const aspect = this.canvas.width / this.canvas.height;
-      const aspectZoom =
-        aspect < 1.5 ? 1.5 / Math.max(0.85, aspect) : Math.max(0.96, 1.0 + (aspect - 1.78) * 0.04);
-      const presetZoom =
-        this.cameraPreset === 'high'
-          ? 1.06
-          : this.cameraPreset === 'low'
-            ? 0.94
-            : 1.0;
-      this.currentZoom = aspectZoom * presetZoom;
+      this.currentZoom = this.computeTargetZoom(aspect);
     }
+  }
+
+  private computeTargetZoom(aspect: number): number {
+    // 縦長（タブレット・スマホ縦・狭幅ウインドウ）から超ワイド（スマホ横・ウルトラワイド）まで
+    // 手牌14枚と卓全体が 1 画面内に収まる距離を自動算出する
+    const aspectZoom =
+      aspect < 1.5
+        ? 1.5 / Math.max(0.42, aspect)
+        : Math.max(0.96, 1.0 + Math.min(0.28, (aspect - 1.78) * 0.09));
+    const presetZoom =
+      this.cameraPreset === 'high'
+        ? 1.06
+        : this.cameraPreset === 'low'
+          ? 0.94
+          : 1.0;
+    return aspectZoom * presetZoom;
   }
 
   private getHandOriginForSide(side: SeatSide3D): [number, number, number] {
@@ -1298,8 +1360,29 @@ export class Mahjong3DScene {
     return [c.u0, c.v0, c.u1, c.v1];
   }
 
-  private isDoraTile(tile: Tile): boolean {
-    return tile.isRed || this.activeDoraKinds.has(tile.kind);
+  private getTileDoraGlow(tile: Tile): number {
+    const isActive = this.activeDoraKinds.has(tile.kind);
+    if (tile.isRed && isActive) return 3;
+    if (tile.isRed) return 2;
+    if (isActive) return 1;
+    return 0;
+  }
+
+  private pushDoraAura(model: Float32Array, doraGlow: number): void {
+    if (doraGlow < 0.5) return;
+    this.auraQueue.push({
+      mesh: this.shadowMesh,
+      model,
+      color: [1, 1, 1, 1],
+      uvRect: [0, 0, 1, 1],
+      useAtlas: 0,
+      useConsole: 0,
+      backTone: 0,
+      highlight: 0,
+      emissive: 0,
+      doraGlow,
+      additive: true,
+    });
   }
 
   private startLoop(): void {
@@ -1678,11 +1761,17 @@ export class Mahjong3DScene {
     opts: {
       tint?: [number, number, number, number];
       highlight?: number;
-      doraGlow?: boolean;
+      doraGlow?: boolean | number;
       backTone?: number;
       useAtlas?: boolean;
     } = {},
   ): void {
+    const glowVal =
+      typeof opts.doraGlow === 'number'
+        ? opts.doraGlow
+        : opts.doraGlow
+          ? 1
+          : 0;
     this.animQueue.push({
       mesh: this.tileMesh,
       model,
@@ -1693,7 +1782,7 @@ export class Mahjong3DScene {
       backTone: opts.backTone ?? 0,
       highlight: opts.highlight ?? 0,
       emissive: 0,
-      doraGlow: opts.doraGlow ? 1 : 0,
+      doraGlow: glowVal,
     });
   }
 
@@ -1707,11 +1796,18 @@ export class Mahjong3DScene {
     opts: {
       tint?: [number, number, number, number];
       highlight?: number;
-      doraGlow?: boolean;
+      doraGlow?: boolean | number;
       backTone?: number;
       shadowAlpha?: number;
+      auraY?: number;
     } = {},
   ): void {
+    const glowVal =
+      typeof opts.doraGlow === 'number'
+        ? opts.doraGlow
+        : opts.doraGlow
+          ? 1
+          : 0;
     this.animQueue.push({
       mesh: this.shadowMesh,
       model: mat4Compose(
@@ -1734,6 +1830,22 @@ export class Mahjong3DScene {
       emissive: 0,
       doraGlow: 0,
     });
+    if (glowVal > 0.5) {
+      this.pushDoraAura(
+        mat4Compose(
+          tx,
+          opts.auraY ?? 0.012,
+          tz,
+          0,
+          ry,
+          0,
+          TILE_W * scale * 1.66,
+          1,
+          TILE_H * scale * 1.66,
+        ),
+        glowVal,
+      );
+    }
     this.drawTile(model, uvRect, opts);
   }
 
@@ -1794,15 +1906,7 @@ export class Mahjong3DScene {
     const aspect = w / h;
 
     // 縦狭（タブレット縦画面や狭いウインドウ）や超ワイド（スマホ横長）でも卓全体・手牌14枚が収まる距離補正
-    const aspectZoom =
-      aspect < 1.5 ? 1.5 / Math.max(0.85, aspect) : Math.max(0.96, 1.0 + (aspect - 1.78) * 0.04);
-    const presetZoom =
-      this.cameraPreset === 'high'
-        ? 1.06
-        : this.cameraPreset === 'low'
-          ? 0.94
-          : 1.0;
-    const targetZoom = aspectZoom * presetZoom;
+    const targetZoom = this.computeTargetZoom(aspect);
 
     const lerp = Math.min(1, dt * 12);
     this.currentPitch += (targetPitch - this.currentPitch) * lerp;
@@ -1811,7 +1915,9 @@ export class Mahjong3DScene {
 
     const dist = 18.8 * this.currentZoom;
     const targetY = this.cameraPreset === 'high' ? -0.1 : -0.15;
-    const targetZ = this.cameraPreset === 'low' ? 1.35 : 1.15;
+    const baseTargetZ = this.cameraPreset === 'low' ? 1.35 : 1.15;
+    const targetZ =
+      aspect < 1.1 ? baseTargetZ * Math.max(0.45, aspect / 1.1) : baseTargetZ;
     const target: [number, number, number] = [0, targetY, targetZ];
 
     const ey = Math.sin(this.currentPitch) * dist + target[1];
@@ -1827,6 +1933,7 @@ export class Mahjong3DScene {
 
     // シーン構築
     this.animQueue.length = 0;
+    this.auraQueue.length = 0;
     this.handHitBoxes.length = 0;
     this.populateScene(params, now, dt);
 
@@ -1849,32 +1956,43 @@ export class Mahjong3DScene {
     gl.uniform1i(this.uConsoleTex, 1);
 
     let lastVao: WebGLVertexArrayObject | null = null;
-    for (const cmd of this.animQueue) {
-      if (cmd.color[3] < 0.999) {
-        gl.enable(gl.BLEND);
-        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-        gl.depthMask(false);
-      } else {
-        gl.disable(gl.BLEND);
-        gl.depthMask(true);
+    const runDrawQueue = (queue: readonly DrawRequest[]): void => {
+      for (const cmd of queue) {
+        if (cmd.additive) {
+          gl.enable(gl.BLEND);
+          gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+          gl.depthMask(false);
+        } else if (cmd.color[3] < 0.999) {
+          gl.enable(gl.BLEND);
+          gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+          gl.depthMask(false);
+        } else {
+          gl.disable(gl.BLEND);
+          gl.depthMask(true);
+        }
+
+        if (cmd.mesh.vao !== lastVao) {
+          gl.bindVertexArray(cmd.mesh.vao);
+          lastVao = cmd.mesh.vao;
+        }
+
+        gl.uniformMatrix4fv(this.uModel, false, cmd.model);
+        gl.uniform4fv(this.uColor, cmd.color);
+        gl.uniform4fv(this.uUvRect, cmd.uvRect);
+        gl.uniform1f(this.uUseAtlas, cmd.useAtlas);
+        gl.uniform1f(this.uUseConsole, cmd.useConsole);
+        gl.uniform1f(this.uBackTone, cmd.backTone);
+        gl.uniform1f(this.uHighlight, cmd.highlight);
+        gl.uniform1f(this.uEmissive, cmd.emissive);
+        gl.uniform1f(this.uDoraGlow, cmd.doraGlow);
+
+        gl.drawElements(gl.TRIANGLES, cmd.mesh.indexCount, gl.UNSIGNED_SHORT, 0);
       }
+    };
 
-      if (cmd.mesh.vao !== lastVao) {
-        gl.bindVertexArray(cmd.mesh.vao);
-        lastVao = cmd.mesh.vao;
-      }
-
-      gl.uniformMatrix4fv(this.uModel, false, cmd.model);
-      gl.uniform4fv(this.uColor, cmd.color);
-      gl.uniform4fv(this.uUvRect, cmd.uvRect);
-      gl.uniform1f(this.uUseAtlas, cmd.useAtlas);
-      gl.uniform1f(this.uUseConsole, cmd.useConsole);
-      gl.uniform1f(this.uBackTone, cmd.backTone);
-      gl.uniform1f(this.uHighlight, cmd.highlight);
-      gl.uniform1f(this.uEmissive, cmd.emissive);
-      gl.uniform1f(this.uDoraGlow, cmd.doraGlow);
-
-      gl.drawElements(gl.TRIANGLES, cmd.mesh.indexCount, gl.UNSIGNED_SHORT, 0);
+    runDrawQueue(this.animQueue);
+    if (this.auraQueue.length > 0) {
+      runDrawQueue(this.auraQueue);
     }
 
     gl.depthMask(true);
@@ -2109,10 +2227,27 @@ export class Mahjong3DScene {
           );
 
           if (revealedTile) {
+            const doraGlow = this.getTileDoraGlow(revealedTile);
+            if (doraGlow > 0) {
+              this.pushDoraAura(
+                mat4Compose(
+                  wx,
+                  ty + 0.006,
+                  wz,
+                  flipAngle,
+                  cfg.ry,
+                  0,
+                  TILE_W * ws * 1.66,
+                  1,
+                  TILE_H * ws * 1.66,
+                ),
+                doraGlow,
+              );
+            }
             this.drawTile(
               m,
               this.getTileUv(revealedTile.kind, revealedTile.isRed),
-              { highlight: 0.45, doraGlow: this.isDoraTile(revealedTile) },
+              { highlight: 0.45, doraGlow },
             );
           } else {
             this.drawTile(m, [0, 0, 0.001, 0.001], { backTone: 0 });
@@ -2200,7 +2335,7 @@ export class Mahjong3DScene {
         {
           tint,
           highlight: isLatest ? 0.95 : 0,
-          doraGlow: this.isDoraTile(entry.tile),
+          doraGlow: this.getTileDoraGlow(entry.tile),
         },
       );
 
@@ -2261,7 +2396,7 @@ export class Mahjong3DScene {
     const meldGap = 0.14;
 
     // 卓の右側手前に並べる（山 z <= 4.62 と立牌 z = 6.10 の間の安全帯 z = 5.24）
-    let cursorX = side === 'self' ? 6.82 : 6.2;
+    let cursorX = side === 'self' ? 6.25 : 5.95;
     const baseZ = 5.24;
 
     // 自分の手前副露から順に右→左へ並べる
@@ -2313,7 +2448,7 @@ export class Mahjong3DScene {
           sc,
           isFaceDown ? [0, 0, 0.001, 0.001] : this.getTileUv(tile.kind, tile.isRed),
           {
-            doraGlow: !isFaceDown && this.isDoraTile(tile),
+            doraGlow: !isFaceDown ? this.getTileDoraGlow(tile) : 0,
           },
         );
 
@@ -2327,7 +2462,7 @@ export class Mahjong3DScene {
             tileRy,
             sc,
             this.getTileUv(meld.addedTile.kind, meld.addedTile.isRed),
-            { doraGlow: this.isDoraTile(meld.addedTile) },
+            { doraGlow: this.getTileDoraGlow(meld.addedTile) },
           );
         }
 
@@ -2380,8 +2515,9 @@ export class Mahjong3DScene {
           kSc,
           this.getTileUv(kitaTile.kind, kitaTile.isRed),
           {
-            doraGlow: this.isDoraTile(kitaTile),
+            doraGlow: this.getTileDoraGlow(kitaTile),
             highlight: 0.25,
+            auraY: 0.056,
           },
         );
       });
@@ -2511,7 +2647,7 @@ export class Mahjong3DScene {
         ry,
         sc,
         this.getTileUv(tile.kind, tile.isRed),
-        { doraGlow: this.isDoraTile(tile) },
+        { doraGlow: this.getTileDoraGlow(tile) },
       );
     });
   }
@@ -2535,7 +2671,7 @@ export class Mahjong3DScene {
     if (allCount === 0) return;
 
     const totalWidth = (allCount - 1) * step + drawnGap;
-    const meldShift = Math.min(2.2, selfPlayer.melds.length * 0.55);
+    const meldShift = Math.min(1.65, selfPlayer.melds.length * 0.48);
     const startX = -totalWidth / 2 - meldShift;
 
     const pitch = deg(48);
@@ -2625,13 +2761,32 @@ export class Mahjong3DScene {
             ? 0.45
             : 0;
 
+      const doraGlow = this.getTileDoraGlow(tile);
+      if (doraGlow > 0) {
+        const auraNormalDist = TILE_D * sc * 0.24;
+        this.pushDoraAura(
+          mat4Compose(
+            x,
+            ty + auraNormalDist * cosP,
+            tz + auraNormalDist * sinP,
+            pitch,
+            0,
+            0,
+            w * 1.66,
+            1,
+            h * 1.66,
+          ),
+          doraGlow,
+        );
+      }
+
       this.drawTile(
         mat4Compose(x, ty, tz, pitch, 0, 0, sc, sc, sc),
         this.getTileUv(tile.kind, tile.isRed),
         {
           tint,
           highlight,
-          doraGlow: this.isDoraTile(tile),
+          doraGlow,
         },
       );
 

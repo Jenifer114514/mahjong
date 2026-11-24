@@ -3,6 +3,7 @@ import {
   cpuDisplayName,
   isCpuPlayerId,
 } from '../cpu/player';
+import { getActiveDoraKinds } from '../engine/dora';
 import { deriveRules } from '../engine/rules';
 import { formatRoomDisplayName } from '../net/rooms';
 import type { PublicPlayerView, RoundView, StateView } from '../types/message';
@@ -34,6 +35,28 @@ export type { Table3DCameraPreset } from './tableScene3d';
 export type SeatSide = 'self' | 'top' | 'left' | 'right';
 
 /** 席ごとの河・手牌の向き（CSS の data-seat と対応） */
+function getActiveDoraSet(
+  view: StateView,
+  includeUra = false,
+): Set<TileKind> {
+  const set = new Set<TileKind>();
+  const round = view.round;
+  if (!round) return set;
+  const rules = deriveRules(view.ruleConfig);
+  for (const kind of getActiveDoraKinds(round.doraIndicators, rules)) {
+    set.add(kind);
+  }
+  if (includeUra && round.uraDoraIndicators.length > 0) {
+    for (const kind of getActiveDoraKinds(round.uraDoraIndicators, rules)) {
+      set.add(kind);
+    }
+  }
+  if (rules.playerCount === 3 && rules.kitaCountsAsIndicatorDora) {
+    set.add('4z');
+  }
+  return set;
+}
+
 const SEAT_CLASS: Record<SeatSide, string> = {
   self: 'seat-self',
   top: 'seat-top',
@@ -1240,6 +1263,7 @@ export function renderGameTable(
     if (isSpectator) {
       felt.appendChild(
         renderSpectatedBottomSeat(
+          perspectiveView,
           selfPlayer,
           rankByPlayerId.get(selfPlayer.playerId),
           diff.newlyMeldedSides.get('self'),
@@ -1535,6 +1559,9 @@ function renderRoundEndOverlay(
     headingLabel = `${roundTitle} 途中流局（${meta.title}）`;
   }
 
+  const doraKinds = getActiveDoraSet(view, false);
+  const doraAndUraKinds = getActiveDoraSet(view, true);
+
   let currentStep: RoundEndStep = uiState.roundEndStep ?? 'details';
 
   const setStep = (nextStep: RoundEndStep): void => {
@@ -1638,8 +1665,9 @@ function renderRoundEndOverlay(
         const cardsWrap = document.createElement('div');
         cardsWrap.className = 'agari-cards-list';
         for (const agari of round.agariResults) {
+          const cardDoraSet = agari.uraDoraCount > 0 ? doraAndUraKinds : doraKinds;
           cardsWrap.appendChild(
-            renderAgariWinnerCard(agari, view.players, round.dealerIndex),
+            renderAgariWinnerCard(agari, view.players, round.dealerIndex, cardDoraSet),
           );
         }
         overlay.appendChild(cardsWrap);
@@ -1653,7 +1681,12 @@ function renderRoundEndOverlay(
           const uraRow = document.createElement('div');
           uraRow.className = 'dora-tiles-row';
           for (const indicator of round.uraDoraIndicators) {
-            uraRow.appendChild(createTileElement(indicator, { small: true }));
+            uraRow.appendChild(
+              createTileElement(indicator, {
+                small: true,
+                dora: doraKinds.has(indicator.kind),
+              }),
+            );
           }
           uraBox.append(uraLabel, uraRow);
           overlay.appendChild(uraBox);
@@ -1675,7 +1708,13 @@ function renderRoundEndOverlay(
           const text = document.createElement('span');
           text.textContent = `${winnerPlayer?.name ?? winner.playerId}（${loserPlayer?.name ?? ''} からロン）`;
 
-          item.append(text, createTileElement(winner.winningTile, { small: true }));
+          item.append(
+            text,
+            createTileElement(winner.winningTile, {
+              small: true,
+              dora: doraKinds.has(winner.winningTile.kind),
+            }),
+          );
           winnerList.appendChild(item);
         }
         overlay.appendChild(winnerList);
@@ -1702,7 +1741,12 @@ function renderRoundEndOverlay(
           const tilesRow = document.createElement('div');
           tilesRow.className = 'agari-tiles-row';
           for (const tile of round.revealedHands[round.abortiveDrawPlayerId]!) {
-            tilesRow.appendChild(createTileElement(tile, { small: true }));
+            tilesRow.appendChild(
+              createTileElement(tile, {
+                small: true,
+                dora: doraKinds.has(tile.kind),
+              }),
+            );
           }
           revealCard.append(who, tilesRow);
           overlay.appendChild(revealCard);
@@ -1756,15 +1800,26 @@ function renderRoundEndOverlay(
             const tilesRow = document.createElement('div');
             tilesRow.className = 'agari-tiles-row';
             for (const tile of revealed) {
-              tilesRow.appendChild(createTileElement(tile, { small: true }));
+              tilesRow.appendChild(
+                createTileElement(tile, {
+                  small: true,
+                  dora: doraKinds.has(tile.kind),
+                }),
+              );
             }
             for (const meld of p.melds) {
               tilesRow.appendChild(
-                renderMeldGroup(meld, { ankanHidden: true, small: true }),
+                renderMeldGroup(meld, {
+                  ankanHidden: true,
+                  small: true,
+                  doraKinds,
+                }),
               );
             }
             if (p.kitaTiles.length > 0) {
-              tilesRow.appendChild(renderKitaGroup(p.kitaTiles, true));
+              tilesRow.appendChild(
+                renderKitaGroup(p.kitaTiles, true, false, 'self', doraKinds),
+              );
             }
             card.appendChild(tilesRow);
           } else {
@@ -1867,9 +1922,11 @@ function renderMeldGroup(
     small?: boolean;
     animateMeld?: boolean;
     side?: SeatSide;
+    doraKinds?: ReadonlySet<TileKind>;
   } = {},
 ): HTMLElement {
   const small = options.small ?? true;
+  const doraKinds = options.doraKinds;
   const group = document.createElement('div');
   group.className = `meld-group${options.animateMeld ? ' is-meld-anim' : ''}`;
   if (options.animateMeld) {
@@ -1888,14 +1945,30 @@ function renderMeldGroup(
 
   if (meld.type === 'ankan' && meld.tiles.length === 4 && options.ankanHidden) {
     tiles.appendChild(createTileBackElement(small, true));
-    tiles.appendChild(createTileElement(meld.tiles[1]!, { small }));
-    tiles.appendChild(createTileElement(meld.tiles[2]!, { small }));
+    tiles.appendChild(
+      createTileElement(meld.tiles[1]!, {
+        small,
+        dora: doraKinds?.has(meld.tiles[1]!.kind),
+      }),
+    );
+    tiles.appendChild(
+      createTileElement(meld.tiles[2]!, {
+        small,
+        dora: doraKinds?.has(meld.tiles[2]!.kind),
+      }),
+    );
     tiles.appendChild(createTileBackElement(small, true));
   } else {
     for (const tile of meld.tiles) {
       const isCalled =
         meld.calledTile?.id === tile.id || meld.addedTile?.id === tile.id;
-      tiles.appendChild(createTileElement(tile, { small, called: isCalled }));
+      tiles.appendChild(
+        createTileElement(tile, {
+          small,
+          called: isCalled,
+          dora: doraKinds?.has(tile.kind),
+        }),
+      );
     }
   }
 
@@ -1908,6 +1981,7 @@ function renderKitaGroup(
   small = true,
   animateKita = false,
   side: SeatSide = 'self',
+  doraKinds?: ReadonlySet<TileKind>,
 ): HTMLElement {
   const group = document.createElement('div');
   group.className = `meld-group meld-group-kita${
@@ -1928,7 +2002,10 @@ function renderKitaGroup(
   tiles.className = 'meld-tiles';
   for (const tile of kitaTiles) {
     tiles.appendChild(
-      createTileElement({ ...tile, isRed: false }, { small }),
+      createTileElement(
+        { ...tile, isRed: false },
+        { small, dora: doraKinds?.has(tile.kind) },
+      ),
     );
   }
   group.appendChild(tiles);
@@ -1939,6 +2016,7 @@ function renderAgariWinnerCard(
   agari: RoundAgariWinner,
   players: readonly PublicPlayerView[],
   dealerIndex: number,
+  doraKinds?: ReadonlySet<TileKind>,
 ): HTMLElement {
   const card = document.createElement('div');
   card.className = 'agari-result-card';
@@ -1976,7 +2054,9 @@ function renderAgariWinnerCard(
   tilesRow.className = 'agari-tiles-row';
 
   for (const tile of agari.hand) {
-    tilesRow.appendChild(createTileElement(tile, { small: true }));
+    tilesRow.appendChild(
+      createTileElement(tile, { small: true, dora: doraKinds?.has(tile.kind) }),
+    );
   }
 
   const winGap = document.createElement('div');
@@ -1984,17 +2064,23 @@ function renderAgariWinnerCard(
   tilesRow.appendChild(winGap);
 
   tilesRow.appendChild(
-    createTileElement(agari.winningTile, { small: true, called: true }),
+    createTileElement(agari.winningTile, {
+      small: true,
+      called: true,
+      dora: doraKinds?.has(agari.winningTile.kind),
+    }),
   );
 
   for (const meld of agari.melds) {
     tilesRow.appendChild(
-      renderMeldGroup(meld, { ankanHidden: true, small: true }),
+      renderMeldGroup(meld, { ankanHidden: true, small: true, doraKinds }),
     );
   }
 
   if (agari.kitaTiles.length > 0) {
-    tilesRow.appendChild(renderKitaGroup(agari.kitaTiles, true));
+    tilesRow.appendChild(
+      renderKitaGroup(agari.kitaTiles, true, false, 'self', doraKinds),
+    );
   }
 
   card.appendChild(tilesRow);
@@ -2063,6 +2149,7 @@ function renderDoraPanel(
   const round = view.round;
   if (!round) return null;
   const rules = deriveRules(view.ruleConfig);
+  const doraKinds = getActiveDoraSet(view);
 
   const panel = document.createElement('div');
   panel.className = 'dora-panel';
@@ -2076,7 +2163,10 @@ function renderDoraPanel(
   for (let i = 0; i < rules.doraIndicatorCount; i++) {
     const indicator = round.doraIndicators[i];
     if (indicator) {
-      const tileEl = createTileElement(indicator, { small: true });
+      const tileEl = createTileElement(indicator, {
+        small: true,
+        dora: doraKinds.has(indicator.kind),
+      });
       if (newlyRevealedDoraIndices?.has(i)) {
         tileEl.classList.add('dora-tile-flip');
       }
@@ -2566,9 +2656,11 @@ function renderDiscardRiver(
     latestOnly?: boolean;
     compact?: boolean;
     label?: string | null;
+    doraKinds?: ReadonlySet<TileKind>;
   } = {},
 ): HTMLElement {
   const side = options.side ?? 'self';
+  const doraKinds = options.doraKinds;
   const wrap = document.createElement('div');
   wrap.className = `river-zone river-${side}`;
   wrap.dataset.seat = side;
@@ -2612,6 +2704,7 @@ function renderDiscardRiver(
         tsumogiri: entry.isTsumogiri,
         latestDiscard: isLatest,
         riichiDeclaration: Boolean(entry.isRiichiDeclaration),
+        dora: doraKinds?.has(entry.tile.kind),
       }),
     );
   });
@@ -2625,6 +2718,7 @@ function renderMeldsAndKita(
   side: SeatSide = 'self',
   newlyMeldedIndices?: Set<number>,
   newlyAddedKita = false,
+  doraKinds?: ReadonlySet<TileKind>,
 ): HTMLElement | null {
   if (player.melds.length === 0 && player.kitaTiles.length === 0) {
     return null;
@@ -2640,12 +2734,15 @@ function renderMeldsAndKita(
         small: true,
         animateMeld: newlyMeldedIndices?.has(idx) ?? false,
         side,
+        doraKinds,
       }),
     );
   });
 
   if (player.kitaTiles.length > 0) {
-    row.appendChild(renderKitaGroup(player.kitaTiles, true, newlyAddedKita, side));
+    row.appendChild(
+      renderKitaGroup(player.kitaTiles, true, newlyAddedKita, side, doraKinds),
+    );
   }
 
   return row;
@@ -2654,12 +2751,13 @@ function renderMeldsAndKita(
 function renderOpponentSeat(
   side: Exclude<SeatSide, 'self'>,
   player: PublicPlayerView,
-  _view: StateView,
+  view: StateView,
   rank?: number,
   newlyMeldedIndices?: Set<number>,
   newlyAddedKita = false,
   chatBubble?: SeatChatBubble,
 ): HTMLElement {
+  const doraKinds = getActiveDoraSet(view);
   const box = document.createElement('div');
   box.className = `seat-box ${SEAT_CLASS[side]} seat-orient-${side}${
     player.isCurrentTurn ? ' is-turn' : ''
@@ -2693,13 +2791,14 @@ function renderOpponentSeat(
     side,
     newlyMeldedIndices,
     newlyAddedKita,
+    doraKinds,
   );
   if (meldsEl) {
     body.appendChild(meldsEl);
   }
 
   // 河は中央に向かって積まれる（全牌を表示・6枚折り返し）
-  body.appendChild(renderDiscardRiver(player, { side }));
+  body.appendChild(renderDiscardRiver(player, { side, doraKinds }));
 
   box.appendChild(body);
   return box;
@@ -2707,12 +2806,15 @@ function renderOpponentSeat(
 
 function createActionTilePreview(
   tiles: readonly { id: string; kind: TileKind; isRed: boolean }[],
+  doraKinds?: ReadonlySet<TileKind>,
 ): HTMLElement {
   const wrap = document.createElement('span');
   wrap.className = 'btn-tile-preview';
   wrap.setAttribute('aria-hidden', 'true');
   for (const tile of tiles) {
-    wrap.appendChild(createTileElement(tile, { small: true }));
+    wrap.appendChild(
+      createTileElement(tile, { small: true, dora: doraKinds?.has(tile.kind) }),
+    );
   }
   return wrap;
 }
@@ -2723,6 +2825,7 @@ function renderCallResponseBar(
 ): HTMLElement | null {
   const opts = view.myCallOptions;
   if (!opts) return null;
+  const doraKinds = getActiveDoraSet(view);
 
   const bar = document.createElement('div');
   bar.className = 'call-action-bar';
@@ -2734,7 +2837,10 @@ function renderCallResponseBar(
   title.className = 'call-bar-title';
   title.textContent = '鳴き・ロン選択';
 
-  const targetTileEl = createTileElement(opts.discardedTile, { small: true });
+  const targetTileEl = createTileElement(opts.discardedTile, {
+    small: true,
+    dora: doraKinds.has(opts.discardedTile.kind),
+  });
 
   info.append(title, targetTileEl);
 
@@ -2755,7 +2861,10 @@ function renderCallResponseBar(
     ronBtn.className = 'btn btn-ron btn-with-tiles';
     const textSpan = document.createElement('span');
     textSpan.textContent = 'ロン';
-    ronBtn.append(textSpan, createActionTilePreview([opts.discardedTile]));
+    ronBtn.append(
+      textSpan,
+      createActionTilePreview([opts.discardedTile], doraKinds),
+    );
     ronBtn.addEventListener('click', () =>
       handlers.onCallResponse({ type: 'ron' }),
     );
@@ -2768,7 +2877,10 @@ function renderCallResponseBar(
     ponBtn.className = 'btn btn-call btn-with-tiles';
     const textSpan = document.createElement('span');
     textSpan.textContent = `ポン (${formatTileLabel(opts.discardedTile.kind)})`;
-    ponBtn.append(textSpan, createActionTilePreview([opts.discardedTile]));
+    ponBtn.append(
+      textSpan,
+      createActionTilePreview([opts.discardedTile], doraKinds),
+    );
     ponBtn.addEventListener('click', () =>
       handlers.onCallResponse({ type: 'pon' }),
     );
@@ -2781,7 +2893,10 @@ function renderCallResponseBar(
     kanBtn.className = 'btn btn-call btn-with-tiles';
     const textSpan = document.createElement('span');
     textSpan.textContent = `大明槓 (${formatTileLabel(opts.discardedTile.kind)})`;
-    kanBtn.append(textSpan, createActionTilePreview([opts.discardedTile]));
+    kanBtn.append(
+      textSpan,
+      createActionTilePreview([opts.discardedTile], doraKinds),
+    );
     kanBtn.addEventListener('click', () =>
       handlers.onCallResponse({ type: 'daiminkan' }),
     );
@@ -2795,7 +2910,7 @@ function renderCallResponseBar(
     chiBtn.className = 'btn btn-call btn-with-tiles';
     const textSpan = document.createElement('span');
     textSpan.textContent = `チー (${formatTileLabel(t1.kind)}・${formatTileLabel(t2.kind)})`;
-    chiBtn.append(textSpan, createActionTilePreview([t1, t2]));
+    chiBtn.append(textSpan, createActionTilePreview([t1, t2], doraKinds));
     chiBtn.addEventListener('click', () =>
       handlers.onCallResponse({
         type: 'chi',
@@ -2842,6 +2957,7 @@ function renderSelfTurnActionsBar(
     return null;
   }
 
+  const doraKinds = getActiveDoraSet(view);
   const bar = document.createElement('div');
   bar.className = 'self-action-bar';
 
@@ -2862,7 +2978,9 @@ function renderSelfTurnActionsBar(
     textSpan.textContent = 'ツモ和了';
     tsumoBtn.appendChild(textSpan);
     if (view.myDrawnTile) {
-      tsumoBtn.appendChild(createActionTilePreview([view.myDrawnTile]));
+      tsumoBtn.appendChild(
+        createActionTilePreview([view.myDrawnTile], doraKinds),
+      );
     }
     tsumoBtn.addEventListener('click', handlers.onDeclareTsumo);
     btns.appendChild(tsumoBtn);
@@ -2899,7 +3017,7 @@ function renderSelfTurnActionsBar(
       btn.className = 'btn btn-call btn-with-tiles';
       const textSpan = document.createElement('span');
       textSpan.textContent = `暗槓 (${formatTileLabel(kind)})`;
-      btn.append(textSpan, createActionTilePreview([sample]));
+      btn.append(textSpan, createActionTilePreview([sample], doraKinds));
       btn.addEventListener('click', () => handlers.onDeclareAnkan(kind));
       btns.appendChild(btn);
     }
@@ -2914,7 +3032,7 @@ function renderSelfTurnActionsBar(
       textSpan.textContent = `加槓 (${tileLabel})`;
       btn.appendChild(textSpan);
       if (tile) {
-        btn.appendChild(createActionTilePreview([tile]));
+        btn.appendChild(createActionTilePreview([tile], doraKinds));
       }
       btn.addEventListener('click', () => handlers.onDeclareKakan(tileId));
       btns.appendChild(btn);
@@ -2932,7 +3050,7 @@ function renderSelfTurnActionsBar(
       btn.className = 'btn btn-kita btn-with-tiles';
       const textSpan = document.createElement('span');
       textSpan.textContent = '抜北 (北)';
-      btn.append(textSpan, createActionTilePreview([kitaSample]));
+      btn.append(textSpan, createActionTilePreview([kitaSample], doraKinds));
       btn.addEventListener('click', () => handlers.onDeclareKita(firstKitaId));
       btns.appendChild(btn);
     }
@@ -3059,7 +3177,7 @@ function updateTenpaiGuideElement(
     item.appendChild(
       createTileElement(
         { id: `tenpai-wait-${w.kind}`, kind: w.kind, isRed: false },
-        { small: true },
+        { small: true, dora: w.isDora },
       ),
     );
     const rem = document.createElement('span');
@@ -3165,6 +3283,7 @@ function renderSelfSeat(
   controls.appendChild(topBar);
 
   const forbiddenSet = new Set(canDiscardNow ? view.kuikaeForbiddenKinds : []);
+  const doraKinds = getActiveDoraSet(view);
   const handArea = document.createElement('div');
   handArea.className = `hand-area${canDiscardNow ? ' is-my-turn-hand' : ''}`;
   const initialSelectedId = canDiscardNow ? (uiState.selectedTileId ?? null) : null;
@@ -3210,6 +3329,7 @@ function renderSelfSeat(
           selected: isCandidate && initialSelectedId === tile.id,
           disabled: !isCandidate,
           riichiCandidate: isCandidate,
+          dora: doraKinds.has(tile.kind),
           disabledReason: isCandidate
             ? undefined
             : 'この牌を切っても聴牌にならないためリーチできません',
@@ -3229,6 +3349,7 @@ function renderSelfSeat(
           clickable: canTap,
           selected: canTap && initialSelectedId === tile.id,
           disabled: canDiscardNow && blocked,
+          dora: doraKinds.has(tile.kind),
           disabledReason: lockedByRiichi
             ? 'リーチ後は手牌を入れ替えられません'
             : blockedByKuikae
@@ -3255,6 +3376,7 @@ function renderSelfSeat(
         selected: isCandidate && initialSelectedId === drawn.id,
         disabled: !isCandidate,
         riichiCandidate: isCandidate,
+        dora: doraKinds.has(drawn.kind),
         disabledReason: isCandidate
           ? undefined
           : 'この牌を切っても聴牌にならないためリーチできません',
@@ -3272,6 +3394,7 @@ function renderSelfSeat(
         clickable: canTap,
         selected: canTap && initialSelectedId === drawn.id,
         disabled: canDiscardNow && blocked,
+        dora: doraKinds.has(drawn.kind),
         disabledReason: blocked ? '喰い替え禁止のため切れません' : undefined,
         onClick: onTap,
       });
@@ -3290,6 +3413,7 @@ function renderSelfSeat(
     'self',
     newlyMeldedIndices,
     newlyAddedKita,
+    doraKinds,
   );
   if (meldsEl) {
     meldsSlot.appendChild(meldsEl);
@@ -3304,7 +3428,7 @@ function renderSelfSeat(
   box.appendChild(controls);
 
   // 自分の河は手牌より中央側（卓の内側）に置き、実物と同じ並びにする
-  box.appendChild(renderDiscardRiver(player, { side: 'self' }));
+  box.appendChild(renderDiscardRiver(player, { side: 'self', doraKinds }));
   return {
     box,
     canDiscardNow,
@@ -3323,12 +3447,14 @@ function renderSelfSeat(
 }
 
 function renderSpectatedBottomSeat(
+  view: StateView,
   player: PublicPlayerView,
   rank?: number,
   newlyMeldedIndices?: Set<number>,
   newlyAddedKita = false,
   chatBubble?: SeatChatBubble,
 ): HTMLElement {
+  const doraKinds = getActiveDoraSet(view);
   const box = document.createElement('div');
   box.className = `seat-box seat-self seat-orient-self is-spectated${
     player.isCurrentTurn ? ' is-turn' : ''
@@ -3352,6 +3478,7 @@ function renderSpectatedBottomSeat(
     'self',
     newlyMeldedIndices,
     newlyAddedKita,
+    doraKinds,
   );
   if (meldsEl) {
     meldsSlot.appendChild(meldsEl);
@@ -3378,7 +3505,7 @@ function renderSpectatedBottomSeat(
   controls.appendChild(handDock);
   box.appendChild(controls);
 
-  box.appendChild(renderDiscardRiver(player, { side: 'self' }));
+  box.appendChild(renderDiscardRiver(player, { side: 'self', doraKinds }));
   return box;
 }
 
