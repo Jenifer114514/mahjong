@@ -302,4 +302,73 @@ describe('net/protocol', () => {
       'タイムアウトしました。',
     );
   });
+
+  it('SECRET_OPTION と SECRET_STATE メッセージを正しくパースし不正値を拒否する', () => {
+    expect(
+      parseClientMessage({ kind: 'SECRET_OPTION', peek: true }),
+    ).toEqual({ kind: 'SECRET_OPTION', peek: true });
+    expect(
+      parseClientMessage({ kind: 'SECRET_OPTION', luck: 'god' }),
+    ).toEqual({ kind: 'SECRET_OPTION', luck: 'god' });
+    expect(
+      parseClientMessage({
+        kind: 'SECRET_OPTION',
+        luck: 'god',
+        luckTargetPlayerId: 'cpu-1',
+      }),
+    ).toEqual({
+      kind: 'SECRET_OPTION',
+      luck: 'god',
+      luckTargetPlayerId: 'cpu-1',
+    });
+    expect(
+      parseClientMessage({ kind: 'SECRET_OPTION', clearAllLuck: true }),
+    ).toEqual({ kind: 'SECRET_OPTION', clearAllLuck: true });
+    expect(
+      parseClientMessage({ kind: 'SECRET_OPTION', requestSync: true }),
+    ).toEqual({ kind: 'SECRET_OPTION', requestSync: true });
+    expect(
+      parseClientMessage({ kind: 'SECRET_OPTION', peek: false, luck: 'normal' }),
+    ).toEqual({ kind: 'SECRET_OPTION', peek: false, luck: 'normal' });
+
+    expect(parseClientMessage({ kind: 'SECRET_OPTION' })).toBeNull();
+    expect(
+      parseClientMessage({ kind: 'SECRET_OPTION', peek: 'yes' }),
+    ).toBeNull();
+    expect(
+      parseClientMessage({ kind: 'SECRET_OPTION', luck: 'ultra' }),
+    ).toBeNull();
+    expect(
+      parseClientMessage({ kind: 'SECRET_OPTION', luckTargetPlayerId: 'cpu-1' }),
+    ).toBeNull();
+    expect(
+      parseClientMessage({
+        kind: 'SECRET_OPTION',
+        luck: 'good',
+        luckTargetPlayerId: '',
+      }),
+    ).toBeNull();
+
+    expect(
+      parseHostMessage({
+        kind: 'SECRET_STATE',
+        payload: { peek: true, luckByPlayer: { p0: 'god', 'cpu-1': 'normal' } },
+      }),
+    ).toEqual({
+      kind: 'SECRET_STATE',
+      payload: { peek: true, luckByPlayer: { p0: 'god', 'cpu-1': 'normal' } },
+    });
+    expect(
+      parseHostMessage({
+        kind: 'SECRET_STATE',
+        payload: { peek: 'yes', luckByPlayer: {} },
+      }),
+    ).toBeNull();
+    expect(
+      parseHostMessage({
+        kind: 'SECRET_STATE',
+        payload: { peek: false, luckByPlayer: { p0: 'cheat' } },
+      }),
+    ).toBeNull();
+  });
 });

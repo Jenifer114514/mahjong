@@ -143,6 +143,9 @@ export function mergeRuleConfig(
     ...current,
     ...patch,
   };
+  if ('initialPoints' in patch && patch.initialPoints === undefined) {
+    delete next.initialPoints;
+  }
   if (
     patch.playerCount !== undefined &&
     patch.playerCount !== current.playerCount

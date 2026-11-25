@@ -14,7 +14,7 @@ import type {
   Meld,
   RoundAgariWinner,
 } from '../types/state';
-import type { TileKind } from '../types/tile';
+import type { Tile, TileKind } from '../types/tile';
 import {
   createTileBackElement,
   createTileElement,
@@ -25,7 +25,9 @@ import {
 import { soundEngine } from './sound';
 import {
   Mahjong3DScene,
+  type SeatSide3D,
   type Table3DCameraPreset,
+  type Table3DRonEffect,
 } from './tableScene3d';
 import { computeSelfTenpaiGuide } from './tenpaiGuide';
 
@@ -177,6 +179,7 @@ function cleanupDetached3dScenes(activeContainer: HTMLElement): void {
 
 /** コンテナに 3D 卓がアタッチされているか（または破棄する） */
 export function destroyTable3DScene(container: HTMLElement): void {
+  clearRonCutinState(container);
   table3dContainers.delete(container);
   const existing = table3dScenes.get(container);
   if (existing) {
@@ -1018,6 +1021,138 @@ function updateAndRenderRoundBanner(
   return triggeredNew;
 }
 
+interface RonVisualContext {
+  key: string;
+  winnerPlayerIds: Set<string>;
+  winnerSeatIndices: Set<number>;
+  loserPlayerId: string | null;
+  loserSeatIndex: number | null;
+  winningTileIds: Set<string>;
+  winningTile: Tile | null;
+  winnerNames: string[];
+  loserName: string | null;
+  isDoubleRon: boolean;
+  isTripleRon: boolean;
+  isYakuman: boolean;
+  isHighHand: boolean;
+  scoreLabel: string | null;
+  pointsText: string | null;
+  doraKinds: Set<TileKind>;
+}
+
+interface ActiveRonCutinState {
+  key: string;
+  expiresAt: number;
+  dismissed: boolean;
+  timer: ReturnType<typeof setTimeout> | null;
+}
+
+const RON_CUTIN_DURATION_MS = 1450;
+const activeRonCutins = new WeakMap<HTMLElement, ActiveRonCutinState>();
+
+function clearRonCutinState(container: HTMLElement): void {
+  const existing = activeRonCutins.get(container);
+  if (existing?.timer) {
+    clearTimeout(existing.timer);
+  }
+  activeRonCutins.delete(container);
+}
+
+function extractRonVisualContext(view: StateView): RonVisualContext | null {
+  if (view.phase !== 'round_end' || !view.round) return null;
+  const round = view.round;
+  const ronAgari = round.agariResults.filter((a) => a.winType === 'ron');
+
+  if (ronAgari.length > 0) {
+    const winnerPlayerIds = new Set(ronAgari.map((a) => a.playerId));
+    const winnerSeatIndices = new Set(ronAgari.map((a) => a.seatIndex));
+    const first = ronAgari[0]!;
+    const loserSeatIndex = first.fromSeatIndex;
+    const loserPlayer =
+      loserSeatIndex !== null
+        ? (view.players.find((p) => p.seatIndex === loserSeatIndex) ?? null)
+        : null;
+    const winnerNames = ronAgari.map(
+      (a) => view.players.find((p) => p.playerId === a.playerId)?.name ?? a.playerId,
+    );
+    const winningTileIds = new Set(ronAgari.map((a) => a.winningTile.id));
+    const totalPoints = ronAgari.reduce(
+      (sum, a) => sum + a.pointsAwarded + a.honbaPointsAwarded,
+      0,
+    );
+    const hasUra = ronAgari.some((a) => a.uraDoraCount > 0);
+    const isYakuman = ronAgari.some((a) => a.isYakuman);
+    const isHighHand = ronAgari.some((a) => a.isYakuman || a.han >= 5);
+    return {
+      key: `${round.roundIndex}:${round.honba}:ron:${ronAgari.map((a) => a.playerId).join(',')}`,
+      winnerPlayerIds,
+      winnerSeatIndices,
+      loserPlayerId: loserPlayer?.playerId ?? null,
+      loserSeatIndex,
+      winningTileIds,
+      winningTile: first.winningTile,
+      winnerNames,
+      loserName: loserPlayer?.name ?? null,
+      isDoubleRon: ronAgari.length === 2,
+      isTripleRon: ronAgari.length >= 3,
+      isYakuman,
+      isHighHand,
+      scoreLabel: ronAgari.length === 1 ? first.scoreLabel : null,
+      pointsText: first.isYakuman
+        ? `${first.scoreLabel} ${totalPoints.toLocaleString()}点`
+        : ronAgari.length === 1
+          ? `${first.han}翻${first.fu}符 ${first.scoreLabel} ${totalPoints.toLocaleString()}点`
+          : `合計 ${totalPoints.toLocaleString()}点`,
+      doraKinds: getActiveDoraSet(view, hasUra),
+    };
+  }
+
+  if (round.agariResults.length === 0 && round.ronWinners.length > 0) {
+    const first = round.ronWinners[0]!;
+    const winnerPlayerIds = new Set(round.ronWinners.map((w) => w.playerId));
+    const winnerSeatIndices = new Set(round.ronWinners.map((w) => w.seatIndex));
+    const loserSeatIndex = first.fromSeatIndex;
+    const loserPlayer =
+      view.players.find((p) => p.seatIndex === loserSeatIndex) ?? null;
+    const winnerNames = round.ronWinners.map(
+      (w) => view.players.find((p) => p.playerId === w.playerId)?.name ?? w.playerId,
+    );
+    const winningTileIds = new Set(round.ronWinners.map((w) => w.winningTile.id));
+    return {
+      key: `${round.roundIndex}:${round.honba}:ron:${round.ronWinners.map((w) => w.playerId).join(',')}`,
+      winnerPlayerIds,
+      winnerSeatIndices,
+      loserPlayerId: loserPlayer?.playerId ?? null,
+      loserSeatIndex,
+      winningTileIds,
+      winningTile: first.winningTile,
+      winnerNames,
+      loserName: loserPlayer?.name ?? null,
+      isDoubleRon: round.ronWinners.length === 2,
+      isTripleRon: round.ronWinners.length >= 3,
+      isYakuman: false,
+      isHighHand: false,
+      scoreLabel: null,
+      pointsText: null,
+      doraKinds: getActiveDoraSet(view, false),
+    };
+  }
+
+  return null;
+}
+
+function seatIndexToSide3D(
+  seatIndex: number,
+  viewerSeatIndex: number,
+  playerCount: number,
+): SeatSide3D {
+  const rel = ((seatIndex - viewerSeatIndex) % playerCount + playerCount) % playerCount;
+  if (rel === 0) return 'self';
+  if (rel === 1) return 'right';
+  if (playerCount === 4 && rel === 2) return 'top';
+  return 'left';
+}
+
 function resolveActiveSeatIndex(
   view: StateView,
   perspectiveSeatIndex: number | undefined,
@@ -1060,6 +1195,7 @@ export function renderGameTable(
   const isHost = !isSpectator && view.viewerPlayerId === view.hostPlayerId;
 
   if (view.phase === 'finished') {
+    clearRonCutinState(container);
     table3dScenes.get(container)?.pause();
     container.innerHTML = '';
     const isFreshFinish = prevView !== null && prevView.phase !== 'finished';
@@ -1171,6 +1307,31 @@ export function renderGameTable(
     view.players,
     view.initialDealerIndex,
   );
+  const ronContext = extractRonVisualContext(view);
+  const isEnteringRoundEnd =
+    prevView !== null &&
+    prevView.phase !== 'round_end' &&
+    view.phase === 'round_end' &&
+    view.round !== null;
+  const hasAgariInRound = Boolean(
+    view.round &&
+      (view.round.agariResults.length > 0 || view.round.ronWinners.length > 0),
+  );
+  const isFreshAgariReveal = isEnteringRoundEnd && hasAgariInRound;
+  const isFreshRonReveal = isFreshAgariReveal && ronContext !== null;
+
+  if (!ronContext) {
+    clearRonCutinState(container);
+  } else if (isFreshRonReveal) {
+    const prevCutin = activeRonCutins.get(container);
+    if (prevCutin?.timer) clearTimeout(prevCutin.timer);
+    activeRonCutins.set(container, {
+      key: ronContext.key,
+      expiresAt: Date.now() + RON_CUTIN_DURATION_MS,
+      dismissed: false,
+      timer: null,
+    });
+  }
 
   const perspectiveView: StateView =
     activeSeatIndex === view.viewerSeatIndex
@@ -1354,10 +1515,114 @@ export function renderGameTable(
     container.appendChild(wrapper);
   }
 
+  // 2D 卓上のロン演出ハイライト（和了席 / 放銃席 / 放銃牌）
+  felt.classList.toggle('is-ron-active', ronContext !== null);
+  felt.classList.remove('is-ron-shake');
+  if (isFreshRonReveal) {
+    felt.classList.add('is-ron-shake');
+    felt.addEventListener(
+      'animationend',
+      (e) => {
+        if (e.target === felt && e.animationName === 'ronTableShake') {
+          felt.classList.remove('is-ron-shake');
+        }
+      },
+      { once: true },
+    );
+  }
+  if (ronContext) {
+    const seatPairs: Array<[string, PublicPlayerView | undefined]> = [
+      ['.seat-top', topPlayer],
+      ['.seat-left', leftPlayer],
+      ['.seat-right', rightPlayer],
+      ['.seat-self', selfPlayer],
+    ];
+    for (const [sel, player] of seatPairs) {
+      if (!player) continue;
+      const seatEl = felt.querySelector<HTMLElement>(sel);
+      if (!seatEl) continue;
+      if (ronContext.winnerPlayerIds.has(player.playerId)) {
+        seatEl.classList.add('is-ron-winner');
+      }
+      if (ronContext.loserPlayerId === player.playerId) {
+        seatEl.classList.add('is-ron-loser');
+        const riverTiles = seatEl.querySelectorAll<HTMLElement>(
+          '.discard-river > .mj-tile',
+        );
+        let matched = false;
+        for (const tileEl of riverTiles) {
+          if (
+            tileEl.dataset.tileId &&
+            ronContext.winningTileIds.has(tileEl.dataset.tileId)
+          ) {
+            tileEl.classList.add('mj-tile-ron-target');
+            matched = true;
+          }
+        }
+        if (!matched && riverTiles.length > 0) {
+          riverTiles[riverTiles.length - 1]!.classList.add('mj-tile-ron-target');
+        }
+      }
+    }
+  }
+
+  if (
+    perspectiveView.phase === 'awaiting_responses' &&
+    !isSpectator &&
+    perspectiveView.myCallOptions !== null
+  ) {
+    const callOpts = perspectiveView.myCallOptions;
+    const targetSeat = perspectiveView.players.find(
+      (p) => p.seatIndex === callOpts.discarderSeatIndex,
+    );
+    const targetSeatSel =
+      targetSeat === rightPlayer
+        ? '.seat-right'
+        : targetSeat === topPlayer
+          ? '.seat-top'
+          : targetSeat === leftPlayer
+            ? '.seat-left'
+            : null;
+    const scope =
+      (targetSeatSel ? felt.querySelector<HTMLElement>(targetSeatSel) : null) ??
+      felt;
+    const riverTiles = scope.querySelectorAll<HTMLElement>(
+      '.discard-river > .mj-tile',
+    );
+    let foundCallTarget = false;
+    for (const tileEl of riverTiles) {
+      if (tileEl.dataset.tileId === callOpts.discardedTile.id) {
+        tileEl.classList.add('mj-tile-call-target');
+        foundCallTarget = true;
+      }
+    }
+    if (!foundCallTarget && riverTiles.length > 0) {
+      riverTiles[riverTiles.length - 1]!.classList.add('mj-tile-call-target');
+    }
+  }
+
   if (scene3d) {
     const canDiscardNow = Boolean(selfSeatController?.canDiscardNow);
     const newlyDiscardedSides = new Set(discardTargets.map((t) => t.side));
     const newlyDrawnSides = new Set(drawTargets.map((t) => t.side));
+    const ronEffect: Table3DRonEffect | null = ronContext
+      ? {
+          key: ronContext.key,
+          winnerSides: Array.from(ronContext.winnerSeatIndices).map((si) =>
+            seatIndexToSide3D(si, activeSeatIndex, playerCount),
+          ),
+          loserSide:
+            ronContext.loserSeatIndex !== null
+              ? seatIndexToSide3D(
+                  ronContext.loserSeatIndex,
+                  activeSeatIndex,
+                  playerCount,
+                )
+              : null,
+          winningTileIds: Array.from(ronContext.winningTileIds),
+          isFresh: isFreshRonReveal,
+        }
+      : null;
     scene3d.syncView({
       view: perspectiveView,
       isSpectator,
@@ -1370,6 +1635,7 @@ export function renderGameTable(
       newlyDiscardedSides,
       newlyDrawnSides,
       newlyRevealedDoraIndices: diff.newlyRevealedDoraIndices,
+      ronEffect,
     });
     scene3d.resume();
   } else {
@@ -1389,21 +1655,18 @@ export function renderGameTable(
   }
 
   // 各種効果音をアニメーションタイミングに合わせて再生
-  const isEnteringRoundEnd =
-    prevView !== null &&
-    prevView.phase !== 'round_end' &&
-    view.phase === 'round_end' &&
-    view.round !== null;
-  const hasAgariInRound =
-    Boolean(
-      view.round &&
-        (view.round.agariResults.length > 0 || view.round.ronWinners.length > 0),
-    );
-
   if (isEnteringRoundEnd) {
     if (hasAgariInRound) {
-      const isTsumo = view.round!.agariResults[0]?.winType === 'tsumo';
-      soundEngine.playAgari(isTsumo);
+      if (ronContext) {
+        soundEngine.playRon({
+          ronCount: ronContext.winnerPlayerIds.size,
+          isYakuman: ronContext.isYakuman,
+          isHighHand: ronContext.isHighHand,
+        });
+      } else {
+        const isTsumo = view.round!.agariResults[0]?.winType === 'tsumo';
+        soundEngine.playAgari(isTsumo);
+      }
     } else {
       soundEngine.playDrawRound();
     }
@@ -1443,7 +1706,8 @@ export function renderGameTable(
       isHost,
       handlers,
       uiState,
-      isEnteringRoundEnd && hasAgariInRound,
+      isFreshAgariReveal,
+      ronContext,
     );
   }
 }
@@ -1527,14 +1791,16 @@ function renderRoundEndOverlay(
   handlers: TableHandlers,
   uiState: TableUiState = DEFAULT_TABLE_UI_STATE,
   isFreshAgariReveal = false,
+  ronContext: RonVisualContext | null = null,
 ): void {
   const round = view.round!;
   const hasAgariResults =
     round.agariResults.length > 0 || round.ronWinners.length > 0;
+  const isRonResult = ronContext !== null;
   const overlay = document.createElement('div');
   overlay.className = `overlay-panel round-end-panel${
     hasAgariResults ? ' is-agari-panel' : ''
-  }`;
+  }${isRonResult ? ' is-ron-panel' : ''}`;
   applyOrientationClass(overlay);
 
   const roundTitle = formatRoundName(round.roundWind, round.kyokuNumber, round.honba);
@@ -1618,8 +1884,11 @@ function renderRoundEndOverlay(
     if (step === 'details') {
       if (round.agariResults.length > 0) {
         const firstAgari = round.agariResults[0]!;
+        const isRonCallout = firstAgari.winType === 'ron';
         const calloutHero = document.createElement('div');
-        calloutHero.className = 'agari-callout-hero';
+        calloutHero.className = `agari-callout-hero${
+          isRonCallout ? ' is-ron-callout' : ' is-tsumo-callout'
+        }`;
 
         const calloutType = document.createElement('div');
         calloutType.className = 'agari-callout-type';
@@ -1900,12 +2169,159 @@ function renderRoundEndOverlay(
 
   renderStepBody(currentStep);
 
+  const cutinState = ronContext ? (activeRonCutins.get(container) ?? null) : null;
+  const isCutinPlaying =
+    Boolean(
+      ronContext &&
+        cutinState &&
+        cutinState.key === ronContext.key &&
+        !cutinState.dismissed &&
+        Date.now() < cutinState.expiresAt,
+    );
+
   const backdrop = document.createElement('div');
   backdrop.className = `overlay-backdrop overlay-backdrop-modal${
     hasAgariResults ? ' is-agari-backdrop' : ''
-  }${isFreshAgariReveal ? ' is-agari-flash' : ''}`;
+  }${isRonResult ? ' is-ron-backdrop' : ''}${
+    isFreshAgariReveal ? ' is-agari-flash' : ''
+  }${isCutinPlaying ? ' is-ron-cutin-playing' : ''}`;
+
+  if (isCutinPlaying && ronContext && cutinState) {
+    const cutinStage = createRonCutinStage(ronContext);
+    const finishCutin = (): void => {
+      if (cutinState.timer) {
+        clearTimeout(cutinState.timer);
+        cutinState.timer = null;
+      }
+      cutinState.dismissed = true;
+      backdrop.classList.remove('is-ron-cutin-playing');
+      backdrop.classList.add('is-ron-cutin-done');
+      if (cutinStage.isConnected) {
+        cutinStage.classList.add('is-leaving');
+        setTimeout(() => {
+          cutinStage.remove();
+        }, 220);
+      }
+    };
+
+    cutinStage.addEventListener('click', (event) => {
+      event.stopPropagation();
+      finishCutin();
+    });
+
+    if (cutinState.timer) {
+      clearTimeout(cutinState.timer);
+    }
+    const remaining = Math.max(80, cutinState.expiresAt - Date.now());
+    cutinState.timer = setTimeout(() => {
+      if (!backdrop.isConnected) return;
+      finishCutin();
+    }, remaining);
+
+    backdrop.appendChild(cutinStage);
+  }
+
   backdrop.appendChild(overlay);
   container.appendChild(backdrop);
+}
+
+function createRonCutinStage(ronContext: RonVisualContext): HTMLElement {
+  const stage = document.createElement('div');
+  stage.className = `ron-cutin-stage${
+    ronContext.isHighHand ? ' is-high-hand' : ''
+  }${ronContext.isYakuman ? ' is-yakuman' : ''}`;
+  stage.setAttribute('role', 'status');
+  stage.setAttribute('aria-live', 'assertive');
+
+  const flashVeil = document.createElement('div');
+  flashVeil.className = 'ron-flash-veil';
+  flashVeil.setAttribute('aria-hidden', 'true');
+
+  const speedlines = document.createElement('div');
+  speedlines.className = 'ron-speedlines';
+  speedlines.setAttribute('aria-hidden', 'true');
+
+  const slashBeam = document.createElement('div');
+  slashBeam.className = 'ron-slash-beam';
+  slashBeam.setAttribute('aria-hidden', 'true');
+
+  const banner = document.createElement('div');
+  banner.className = 'ron-cutin-banner';
+
+  const leftCol = document.createElement('div');
+  leftCol.className = 'ron-cutin-word-col';
+
+  const subEn = document.createElement('div');
+  subEn.className = 'ron-cutin-sub-en';
+  subEn.textContent = ronContext.isTripleRon
+    ? 'TRIPLE RON'
+    : ronContext.isDoubleRon
+      ? 'DOUBLE RON'
+      : 'RON';
+
+  const bigWord = document.createElement('div');
+  bigWord.className = 'ron-cutin-word';
+  bigWord.textContent = ronContext.isTripleRon
+    ? 'トリプルロン!!'
+    : ronContext.isDoubleRon
+      ? 'ダブロン!!'
+      : 'ロン!!';
+
+  leftCol.append(subEn, bigWord);
+  banner.appendChild(leftCol);
+
+  if (ronContext.winningTile) {
+    const tileSpot = document.createElement('div');
+    tileSpot.className = 'ron-cutin-tile-spot';
+
+    const ring = document.createElement('div');
+    ring.className = 'ron-cutin-tile-ring';
+    ring.setAttribute('aria-hidden', 'true');
+
+    const tileEl = createTileElement(ronContext.winningTile, {
+      dora: ronContext.doraKinds.has(ronContext.winningTile.kind),
+    });
+    tileEl.classList.add('ron-cutin-tile');
+
+    const tileLbl = document.createElement('span');
+    tileLbl.className = 'ron-cutin-tile-label';
+    const tilePrefix = ronContext.winningTile.isRed ? '赤' : '';
+    tileLbl.textContent = `和了牌 ${tilePrefix}${formatTileLabel(ronContext.winningTile.kind)}`;
+
+    tileSpot.append(ring, tileEl, tileLbl);
+    banner.appendChild(tileSpot);
+  }
+
+  const metaCol = document.createElement('div');
+  metaCol.className = 'ron-cutin-meta';
+
+  const winnerEl = document.createElement('div');
+  winnerEl.className = 'ron-cutin-winners';
+  winnerEl.textContent = ronContext.winnerNames.join(' ・ ');
+  metaCol.appendChild(winnerEl);
+
+  if (ronContext.loserName) {
+    const loserEl = document.createElement('div');
+    loserEl.className = 'ron-cutin-loser';
+    loserEl.textContent = `放銃: ${ronContext.loserName}`;
+    metaCol.appendChild(loserEl);
+  }
+
+  if (ronContext.pointsText) {
+    const ptsEl = document.createElement('div');
+    ptsEl.className = 'ron-cutin-points';
+    ptsEl.textContent = ronContext.pointsText;
+    metaCol.appendChild(ptsEl);
+  }
+
+  banner.appendChild(metaCol);
+
+  const skipHint = document.createElement('div');
+  skipHint.className = 'ron-cutin-skip';
+  skipHint.textContent = 'クリックでスキップ';
+
+  stage.append(flashVeil, speedlines, slashBeam, banner, skipHint);
+  return stage;
 }
 
 const MELD_SLIDE_VECTOR: Record<SeatSide, { x: string; y: string }> = {
@@ -2773,16 +3189,36 @@ function renderOpponentSeat(
   const body = document.createElement('div');
   body.className = `seat-body seat-body-${side}`;
 
-  // 手牌（裏向き）は卓の外周を向く。実物同様、左家は縦、対面は逆さになる。
+  // 手牌（通常は裏向き、ローカル透視モード時は表向き）は卓の外周を向く。
+  const revealedHand =
+    view.phase !== 'round_end'
+      ? view.round?.revealedHands?.[player.playerId]
+      : undefined;
   const handRow = document.createElement('div');
-  handRow.className = `opponent-hand hand-orient-${side}`;
-  for (let i = 0; i < player.handCount; i++) {
-    handRow.appendChild(createTileBackElement(true));
-  }
-  if (player.hasDrawnTile) {
-    const drawnBack = createTileBackElement(true);
-    drawnBack.classList.add('opp-tile-drawn');
-    handRow.appendChild(drawnBack);
+  handRow.className = `opponent-hand hand-orient-${side}${
+    revealedHand && revealedHand.length > 0 ? ' is-revealed' : ''
+  }`;
+  if (revealedHand && revealedHand.length > 0) {
+    const drawnIndex = player.hasDrawnTile ? revealedHand.length - 1 : -1;
+    revealedHand.forEach((tile, idx) => {
+      const tileEl = createTileElement(tile, {
+        small: true,
+        dora: doraKinds.has(tile.kind),
+      });
+      if (idx === drawnIndex) {
+        tileEl.classList.add('opp-tile-drawn');
+      }
+      handRow.appendChild(tileEl);
+    });
+  } else {
+    for (let i = 0; i < player.handCount; i++) {
+      handRow.appendChild(createTileBackElement(true));
+    }
+    if (player.hasDrawnTile) {
+      const drawnBack = createTileBackElement(true);
+      drawnBack.classList.add('opp-tile-drawn');
+      handRow.appendChild(drawnBack);
+    }
   }
   body.appendChild(handRow);
 
@@ -2807,25 +3243,146 @@ function renderOpponentSeat(
 function createActionTilePreview(
   tiles: readonly { id: string; kind: TileKind; isRed: boolean }[],
   doraKinds?: ReadonlySet<TileKind>,
+  options?: { calledIndex?: number; isMeld?: boolean },
 ): HTMLElement {
   const wrap = document.createElement('span');
-  wrap.className = 'btn-tile-preview';
+  wrap.className = options?.isMeld
+    ? 'btn-tile-preview is-meld-preview'
+    : 'btn-tile-preview';
   wrap.setAttribute('aria-hidden', 'true');
-  for (const tile of tiles) {
-    wrap.appendChild(
-      createTileElement(tile, { small: true, dora: doraKinds?.has(tile.kind) }),
-    );
-  }
+  tiles.forEach((tile, idx) => {
+    const tileEl = createTileElement(tile, {
+      small: true,
+      dora: doraKinds?.has(tile.kind),
+    });
+    if (options?.calledIndex === idx) {
+      tileEl.classList.add('mj-tile-called-preview');
+    }
+    wrap.appendChild(tileEl);
+  });
   return wrap;
+}
+
+function getRelativeSeatLabel(
+  viewerSeatIndex: number,
+  targetSeatIndex: number,
+  playerCount: number,
+): string {
+  const diff = ((targetSeatIndex - viewerSeatIndex) % playerCount + playerCount) % playerCount;
+  if (diff === 0) return '自分';
+  if (diff === 1) return '下家';
+  if (playerCount === 4 && diff === 2) return '対面';
+  return '上家';
+}
+
+function formatCallTileName(tile: { kind: TileKind; isRed: boolean }): string {
+  return `${tile.isRed ? '赤' : ''}${formatTileLabel(tile.kind)}`;
+}
+
+function parseTileNumericRank(kind: TileKind): number {
+  const suit = kind.slice(-1);
+  if (suit === 'm' || suit === 'p' || suit === 's') {
+    return Number(kind[0]);
+  }
+  return 10;
+}
+
+function collectCallCandidateTileIds(view: StateView): Set<string> {
+  const ids = new Set<string>();
+  const opts = view.myCallOptions;
+  if (!opts) return ids;
+  if (opts.canPon) {
+    for (const t of view.myHand
+      .filter((h) => h.kind === opts.discardedTile.kind)
+      .slice(0, 2)) {
+      ids.add(t.id);
+    }
+  }
+  if (opts.canDaiminkan) {
+    for (const t of view.myHand
+      .filter((h) => h.kind === opts.discardedTile.kind)
+      .slice(0, 3)) {
+      ids.add(t.id);
+    }
+  }
+  for (const chiOpt of opts.chiOptions) {
+    ids.add(chiOpt.tiles[0].id);
+    ids.add(chiOpt.tiles[1].id);
+  }
+  return ids;
+}
+
+type CallPreviewKind = 'pon' | 'chi' | 'kan' | 'ron';
+
+function createCallChoiceButton(options: {
+  variantClass: string;
+  actionLabel: string;
+  detailLabel: string;
+  previewTiles: readonly { id: string; kind: TileKind; isRed: boolean }[];
+  calledIndex: number;
+  isMeld: boolean;
+  doraKinds: ReadonlySet<TileKind>;
+  previewHandIds?: readonly string[];
+  previewKind: CallPreviewKind;
+  onPreviewChange?: (ids: readonly string[], kind: CallPreviewKind | null) => void;
+  onClick: () => void;
+}): HTMLButtonElement {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = `btn ${options.variantClass} btn-call-choice btn-with-tiles`;
+
+  const labelCol = document.createElement('span');
+  labelCol.className = 'call-btn-label-col';
+
+  const actionEl = document.createElement('span');
+  actionEl.className = 'call-btn-action';
+  actionEl.textContent = options.actionLabel;
+
+  const detailEl = document.createElement('span');
+  detailEl.className = 'call-btn-detail';
+  detailEl.textContent = options.detailLabel;
+
+  labelCol.append(actionEl, detailEl);
+  btn.append(
+    labelCol,
+    createActionTilePreview(options.previewTiles, options.doraKinds, {
+      calledIndex: options.calledIndex,
+      isMeld: options.isMeld,
+    }),
+  );
+
+  if (options.onPreviewChange && options.previewHandIds && options.previewHandIds.length > 0) {
+    const ids = options.previewHandIds;
+    const kind = options.previewKind;
+    const activate = () => options.onPreviewChange!(ids, kind);
+    const deactivate = () => options.onPreviewChange!([], null);
+    btn.addEventListener('mouseenter', activate);
+    btn.addEventListener('mouseleave', deactivate);
+    btn.addEventListener('focus', activate);
+    btn.addEventListener('blur', deactivate);
+  }
+
+  btn.addEventListener('click', options.onClick);
+  return btn;
 }
 
 function renderCallResponseBar(
   view: StateView,
   handlers: TableHandlers,
+  onPreviewChange?: (ids: readonly string[], kind: CallPreviewKind | null) => void,
 ): HTMLElement | null {
   const opts = view.myCallOptions;
   if (!opts) return null;
   const doraKinds = getActiveDoraSet(view);
+  const playerCount = view.players.length;
+  const discarder = view.players.find(
+    (p) => p.seatIndex === opts.discarderSeatIndex,
+  );
+  const relSeat = getRelativeSeatLabel(
+    view.viewerSeatIndex,
+    opts.discarderSeatIndex,
+    playerCount,
+  );
 
   const bar = document.createElement('div');
   bar.className = 'call-action-bar';
@@ -2833,16 +3390,28 @@ function renderCallResponseBar(
   const info = document.createElement('div');
   info.className = 'call-bar-info';
 
+  const fromBadge = document.createElement('span');
+  fromBadge.className = 'call-bar-from-badge';
+  fromBadge.textContent = relSeat;
+
   const title = document.createElement('span');
   title.className = 'call-bar-title';
-  title.textContent = '鳴き・ロン選択';
+  title.textContent = discarder
+    ? `${discarder.name} の打牌`
+    : '鳴き・ロン選択';
 
+  const targetWrap = document.createElement('span');
+  targetWrap.className = 'call-bar-target';
   const targetTileEl = createTileElement(opts.discardedTile, {
     small: true,
     dora: doraKinds.has(opts.discardedTile.kind),
   });
+  const targetName = document.createElement('span');
+  targetName.className = 'call-bar-target-name';
+  targetName.textContent = formatCallTileName(opts.discardedTile);
+  targetWrap.append(targetTileEl, targetName);
 
-  info.append(title, targetTileEl);
+  info.append(fromBadge, title, targetWrap);
 
   if (view.responseRemainingMs !== null) {
     const timer = document.createElement('span');
@@ -2853,76 +3422,130 @@ function renderCallResponseBar(
   }
 
   const btns = document.createElement('div');
-  btns.className = 'action-buttons-row';
+  btns.className = 'action-buttons-row call-buttons-row';
+
+  const matchingHandTiles = view.myHand.filter(
+    (t) => t.kind === opts.discardedTile.kind,
+  );
 
   if (opts.canRon) {
-    const ronBtn = document.createElement('button');
-    ronBtn.type = 'button';
-    ronBtn.className = 'btn btn-ron btn-with-tiles';
-    const textSpan = document.createElement('span');
-    textSpan.textContent = 'ロン';
-    ronBtn.append(
-      textSpan,
-      createActionTilePreview([opts.discardedTile], doraKinds),
+    btns.appendChild(
+      createCallChoiceButton({
+        variantClass: 'btn-ron btn-call-ron',
+        actionLabel: 'ロン',
+        detailLabel: `和了・${formatCallTileName(opts.discardedTile)}`,
+        previewTiles: [opts.discardedTile],
+        calledIndex: 0,
+        isMeld: false,
+        doraKinds,
+        previewKind: 'ron',
+        onPreviewChange,
+        onClick: () => handlers.onCallResponse({ type: 'ron' }),
+      }),
     );
-    ronBtn.addEventListener('click', () =>
-      handlers.onCallResponse({ type: 'ron' }),
-    );
-    btns.appendChild(ronBtn);
   }
 
   if (opts.canPon) {
-    const ponBtn = document.createElement('button');
-    ponBtn.type = 'button';
-    ponBtn.className = 'btn btn-call btn-with-tiles';
-    const textSpan = document.createElement('span');
-    textSpan.textContent = `ポン (${formatTileLabel(opts.discardedTile.kind)})`;
-    ponBtn.append(
-      textSpan,
-      createActionTilePreview([opts.discardedTile], doraKinds),
+    const ponHandPair = matchingHandTiles.slice(0, 2);
+    const ponTile0 = ponHandPair[0] ?? {
+      ...opts.discardedTile,
+      id: `pon-sample-0-${opts.discardedTile.id}`,
+      isRed: false,
+    };
+    const ponTile1 = ponHandPair[1] ?? {
+      ...opts.discardedTile,
+      id: `pon-sample-1-${opts.discardedTile.id}`,
+      isRed: false,
+    };
+    btns.appendChild(
+      createCallChoiceButton({
+        variantClass: 'btn-call btn-call-pon',
+        actionLabel: 'ポン',
+        detailLabel: `${formatCallTileName(opts.discardedTile)} ×3`,
+        previewTiles: [ponTile0, opts.discardedTile, ponTile1],
+        calledIndex: 1,
+        isMeld: true,
+        doraKinds,
+        previewHandIds: ponHandPair.map((t) => t.id),
+        previewKind: 'pon',
+        onPreviewChange,
+        onClick: () => handlers.onCallResponse({ type: 'pon' }),
+      }),
     );
-    ponBtn.addEventListener('click', () =>
-      handlers.onCallResponse({ type: 'pon' }),
-    );
-    btns.appendChild(ponBtn);
   }
 
   if (opts.canDaiminkan) {
-    const kanBtn = document.createElement('button');
-    kanBtn.type = 'button';
-    kanBtn.className = 'btn btn-call btn-with-tiles';
-    const textSpan = document.createElement('span');
-    textSpan.textContent = `大明槓 (${formatTileLabel(opts.discardedTile.kind)})`;
-    kanBtn.append(
-      textSpan,
-      createActionTilePreview([opts.discardedTile], doraKinds),
+    const kanHandTiles = matchingHandTiles.slice(0, 3);
+    const kanTile0 = kanHandTiles[0] ?? {
+      ...opts.discardedTile,
+      id: `kan-sample-0-${opts.discardedTile.id}`,
+      isRed: false,
+    };
+    const kanTile1 = kanHandTiles[1] ?? {
+      ...opts.discardedTile,
+      id: `kan-sample-1-${opts.discardedTile.id}`,
+      isRed: false,
+    };
+    const kanTile2 = kanHandTiles[2] ?? {
+      ...opts.discardedTile,
+      id: `kan-sample-2-${opts.discardedTile.id}`,
+      isRed: false,
+    };
+    btns.appendChild(
+      createCallChoiceButton({
+        variantClass: 'btn-call btn-call-kan',
+        actionLabel: '大明槓',
+        detailLabel: `${formatCallTileName(opts.discardedTile)} ×4`,
+        previewTiles: [kanTile0, opts.discardedTile, kanTile1, kanTile2],
+        calledIndex: 1,
+        isMeld: true,
+        doraKinds,
+        previewHandIds: kanHandTiles.map((t) => t.id),
+        previewKind: 'kan',
+        onPreviewChange,
+        onClick: () => handlers.onCallResponse({ type: 'daiminkan' }),
+      }),
     );
-    kanBtn.addEventListener('click', () =>
-      handlers.onCallResponse({ type: 'daiminkan' }),
-    );
-    btns.appendChild(kanBtn);
   }
 
   for (const chiOpt of opts.chiOptions) {
     const [t1, t2] = chiOpt.tiles;
-    const chiBtn = document.createElement('button');
-    chiBtn.type = 'button';
-    chiBtn.className = 'btn btn-call btn-with-tiles';
-    const textSpan = document.createElement('span');
-    textSpan.textContent = `チー (${formatTileLabel(t1.kind)}・${formatTileLabel(t2.kind)})`;
-    chiBtn.append(textSpan, createActionTilePreview([t1, t2], doraKinds));
-    chiBtn.addEventListener('click', () =>
-      handlers.onCallResponse({
-        type: 'chi',
-        tileIds: [t1.id, t2.id],
+    const meldItems: Array<{ tile: Tile; isCalled: boolean; rank: number }> = [
+      { tile: t1, isCalled: false, rank: parseTileNumericRank(t1.kind) },
+      {
+        tile: opts.discardedTile,
+        isCalled: true,
+        rank: parseTileNumericRank(opts.discardedTile.kind),
+      },
+      { tile: t2, isCalled: false, rank: parseTileNumericRank(t2.kind) },
+    ];
+    meldItems.sort((a, b) => a.rank - b.rank);
+    const calledIndex = meldItems.findIndex((item) => item.isCalled);
+
+    btns.appendChild(
+      createCallChoiceButton({
+        variantClass: 'btn-call btn-call-chi',
+        actionLabel: 'チー',
+        detailLabel: `手: ${formatCallTileName(t1)}・${formatCallTileName(t2)}`,
+        previewTiles: meldItems.map((item) => item.tile),
+        calledIndex,
+        isMeld: true,
+        doraKinds,
+        previewHandIds: [t1.id, t2.id],
+        previewKind: 'chi',
+        onPreviewChange,
+        onClick: () =>
+          handlers.onCallResponse({
+            type: 'chi',
+            tileIds: [t1.id, t2.id],
+          }),
       }),
     );
-    btns.appendChild(chiBtn);
   }
 
   const passBtn = document.createElement('button');
   passBtn.type = 'button';
-  passBtn.className = 'btn btn-secondary';
+  passBtn.className = 'btn btn-secondary btn-call-pass';
   passBtn.textContent = 'スルー';
   passBtn.addEventListener('click', () =>
     handlers.onCallResponse({ type: 'pass' }),
@@ -3014,7 +3637,7 @@ function renderSelfTurnActionsBar(
       };
       const btn = document.createElement('button');
       btn.type = 'button';
-      btn.className = 'btn btn-call btn-with-tiles';
+      btn.className = 'btn btn-call btn-call-kan btn-with-tiles';
       const textSpan = document.createElement('span');
       textSpan.textContent = `暗槓 (${formatTileLabel(kind)})`;
       btn.append(textSpan, createActionTilePreview([sample], doraKinds));
@@ -3027,7 +3650,7 @@ function renderSelfTurnActionsBar(
       const tileLabel = tile ? formatTileLabel(tile.kind) : tileId;
       const btn = document.createElement('button');
       btn.type = 'button';
-      btn.className = 'btn btn-call btn-with-tiles';
+      btn.className = 'btn btn-call btn-call-kan btn-with-tiles';
       const textSpan = document.createElement('span');
       textSpan.textContent = `加槓 (${tileLabel})`;
       btn.appendChild(textSpan);
@@ -3248,10 +3871,34 @@ function renderSelfSeat(
   topBar.appendChild(tenpaiGuideEl);
 
   const actionDock = document.createElement('div');
-  actionDock.className = 'self-action-dock';
+  const hasCallOptions =
+    view.phase === 'awaiting_responses' && view.myCallOptions !== null;
+  actionDock.className = `self-action-dock${hasCallOptions ? ' has-call-options' : ''}`;
   actionDock.appendChild(buildTurnPrompt(view, canDiscardNow));
 
-  const callBar = renderCallResponseBar(view, handlers);
+  let sceneRef: Mahjong3DScene | null = null;
+  const handArea = document.createElement('div');
+  handArea.className = `hand-area${canDiscardNow ? ' is-my-turn-hand' : ''}`;
+
+  const setCallPreviewTiles = (
+    ids: readonly string[],
+    kind: CallPreviewKind | null,
+  ): void => {
+    const idSet = new Set(ids);
+    if (kind) {
+      handArea.dataset.callPreviewKind = kind;
+    } else {
+      delete handArea.dataset.callPreviewKind;
+    }
+    const tiles = handArea.querySelectorAll<HTMLElement>('.mj-tile');
+    for (const tileEl of tiles) {
+      const active = Boolean(tileEl.dataset.tileId && idSet.has(tileEl.dataset.tileId));
+      tileEl.classList.toggle('mj-tile-call-active', active);
+    }
+    sceneRef?.setCallPreviewTileIds(ids);
+  };
+
+  const callBar = renderCallResponseBar(view, handlers, setCallPreviewTiles);
   if (callBar) {
     actionDock.appendChild(callBar);
   }
@@ -3284,12 +3931,10 @@ function renderSelfSeat(
 
   const forbiddenSet = new Set(canDiscardNow ? view.kuikaeForbiddenKinds : []);
   const doraKinds = getActiveDoraSet(view);
-  const handArea = document.createElement('div');
-  handArea.className = `hand-area${canDiscardNow ? ' is-my-turn-hand' : ''}`;
+  const callCandidateIds = collectCallCandidateTileIds(view);
   const initialSelectedId = canDiscardNow ? (uiState.selectedTileId ?? null) : null;
   updateTenpaiGuideElement(tenpaiGuideEl, view, initialSelectedId);
 
-  let sceneRef: Mahjong3DScene | null = null;
   const tapHandlers = new Map<string, () => void>();
 
   const setSelectedTileInDom = (nextId: string | null): void => {
@@ -3344,20 +3989,22 @@ function renderSelfSeat(
       const onTap = () =>
         handleTileTap(tile.id, () => handlers.onDiscardTile(tile.id));
       if (canTap) tapHandlers.set(tile.id, onTap);
-      handArea.appendChild(
-        createTileElement(tile, {
-          clickable: canTap,
-          selected: canTap && initialSelectedId === tile.id,
-          disabled: canDiscardNow && blocked,
-          dora: doraKinds.has(tile.kind),
-          disabledReason: lockedByRiichi
-            ? 'リーチ後は手牌を入れ替えられません'
-            : blockedByKuikae
-              ? '喰い替え禁止のため切れません'
-              : undefined,
-          onClick: onTap,
-        }),
-      );
+      const tileEl = createTileElement(tile, {
+        clickable: canTap,
+        selected: canTap && initialSelectedId === tile.id,
+        disabled: canDiscardNow && blocked,
+        dora: doraKinds.has(tile.kind),
+        disabledReason: lockedByRiichi
+          ? 'リーチ後は手牌を入れ替えられません'
+          : blockedByKuikae
+            ? '喰い替え禁止のため切れません'
+            : undefined,
+        onClick: onTap,
+      });
+      if (callCandidateIds.has(tile.id)) {
+        tileEl.classList.add('mj-tile-call-candidate');
+      }
+      handArea.appendChild(tileEl);
     }
   }
 

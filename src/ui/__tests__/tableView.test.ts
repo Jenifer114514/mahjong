@@ -1456,6 +1456,263 @@ describe('renderGameTable（横画面レイアウト）', () => {
     expect(opp2m.classList.contains('mj-tile-dora')).toBe(true);
     expect(meld2m.classList.contains('mj-tile-dora')).toBe(true);
   });
+
+  it('ロン和了時は専用サウンド・卓シェイク・放銃牌標的・カットイン演出を出し、クリックでスキップして結果へ進める', () => {
+    const playRonSpy = vi.spyOn(soundEngine, 'playRon');
+    const playAgariSpy = vi.spyOn(soundEngine, 'playAgari');
+    const baseView = toStateView(state4, 'p0', 0);
+
+    const playingWithDiscard: StateView = {
+      ...baseView,
+      players: baseView.players.map((p, idx) =>
+        idx === 0
+          ? {
+              ...p,
+              discards: [
+                {
+                  tile: { id: 'ron-target-1m', kind: '1m', isRed: false },
+                  isTsumogiri: false,
+                  isRiichiDeclaration: false,
+                },
+              ],
+            }
+          : p,
+      ),
+    };
+
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    renderGameTable(root, playingWithDiscard, noopHandlers);
+
+    const ronRoundEndView: StateView = {
+      ...playingWithDiscard,
+      phase: 'round_end',
+      round: {
+        ...playingWithDiscard.round!,
+        agariResults: [
+          {
+            playerId: playingWithDiscard.players[1]!.playerId,
+            seatIndex: 1,
+            winType: 'ron',
+            fromSeatIndex: 0,
+            winningTile: { id: 'ron-target-1m', kind: '1m', isRed: false },
+            hand: [...playingWithDiscard.myHand],
+            melds: [],
+            kitaTiles: [],
+            yaku: [{ id: 'riichi', name: '立直', han: 1 }],
+            doraCount: 0,
+            uraDoraCount: 0,
+            kitaCount: 0,
+            han: 5,
+            fu: 30,
+            isYakuman: false,
+            scoreLabel: '満貫',
+            pointsAwarded: 8000,
+            honbaPointsAwarded: 0,
+            scoreDeltas: {},
+          },
+        ],
+      },
+    };
+
+    renderGameTable(root, ronRoundEndView, noopHandlers);
+
+    // 1. ロン専用効果音
+    expect(playRonSpy).toHaveBeenCalledWith({
+      ronCount: 1,
+      isYakuman: false,
+      isHighHand: true,
+    });
+    expect(playAgariSpy).not.toHaveBeenCalled();
+
+    // 2. 卓上の和了席・放銃席・放銃牌ハイライト & シェイク
+    const felt = root.querySelector('.table-felt')!;
+    expect(felt.classList.contains('is-ron-active')).toBe(true);
+    expect(felt.classList.contains('is-ron-shake')).toBe(true);
+    expect(root.querySelector('.seat-right')?.classList.contains('is-ron-winner')).toBe(true);
+    expect(root.querySelector('.seat-self')?.classList.contains('is-ron-loser')).toBe(true);
+    expect(
+      root
+        .querySelector('.river-self [data-tile-id="ron-target-1m"]')
+        ?.classList.contains('mj-tile-ron-target'),
+    ).toBe(true);
+
+    // 3. ロンカットインオーバーレイ（ロン!!・放銃者・和了牌）＋結果パネルも同期存在
+    const backdrop = root.querySelector('.overlay-backdrop-modal')!;
+    expect(backdrop.classList.contains('is-ron-backdrop')).toBe(true);
+    expect(backdrop.classList.contains('is-ron-cutin-playing')).toBe(true);
+    expect(
+      root.querySelector('.agari-callout-hero')?.classList.contains('is-ron-callout'),
+    ).toBe(true);
+    const cutin = root.querySelector<HTMLElement>('.ron-cutin-stage')!;
+    expect(cutin).not.toBeNull();
+    expect(cutin.querySelector('.ron-cutin-word')?.textContent).toBe('ロン!!');
+    expect(cutin.querySelector('.ron-cutin-tile')?.getAttribute('data-tile-id')).toBe(
+      'ron-target-1m',
+    );
+    expect(cutin.querySelector('.ron-cutin-loser')?.textContent).toContain(
+      playingWithDiscard.players[0]!.name,
+    );
+
+    // 4. カットインをクリックしてスキップすると即座に結果パネルへ移行し、再描画で再表示されない
+    cutin.click();
+    expect(backdrop.classList.contains('is-ron-cutin-playing')).toBe(false);
+    expect(backdrop.classList.contains('is-ron-cutin-done')).toBe(true);
+
+    renderGameTable(root, ronRoundEndView, noopHandlers);
+    expect(root.querySelector('.ron-cutin-stage')).toBeNull();
+    expect(
+      root.querySelector('.overlay-backdrop-modal')?.classList.contains('is-ron-cutin-playing'),
+    ).toBe(false);
+
+    // 5. ダブロン時は「ダブロン!!」が表示される
+    const doubleRonRoot = document.createElement('div');
+    document.body.appendChild(doubleRonRoot);
+    renderGameTable(doubleRonRoot, playingWithDiscard, noopHandlers);
+    const doubleRonView: StateView = {
+      ...ronRoundEndView,
+      round: {
+        ...ronRoundEndView.round!,
+        agariResults: [
+          ronRoundEndView.round!.agariResults[0]!,
+          {
+            ...ronRoundEndView.round!.agariResults[0]!,
+            playerId: playingWithDiscard.players[2]!.playerId,
+            seatIndex: 2,
+          },
+        ],
+      },
+    };
+    renderGameTable(doubleRonRoot, doubleRonView, noopHandlers);
+    expect(doubleRonRoot.querySelector('.ron-cutin-word')?.textContent).toBe(
+      'ダブロン!!',
+    );
+    expect(playRonSpy).toHaveBeenLastCalledWith({
+      ronCount: 2,
+      isYakuman: false,
+      isHighHand: true,
+    });
+
+    root.remove();
+    doubleRonRoot.remove();
+    playRonSpy.mockRestore();
+    playAgariSpy.mockRestore();
+  });
+
+  it('ポン・チー選択ボタンが種別ごとに色分けされ、完成面子3枚プレビューと手牌・河の連動ハイライトが出る', () => {
+    const onCallResponse = vi.fn();
+    const handlers: TableHandlers = { ...noopHandlers, onCallResponse };
+    const baseView = toStateView(state4, 'p0', 0);
+
+    const tile2m = { id: 'h-2m', kind: '2m' as const, isRed: false };
+    const tile3mA = { id: 'h-3m-a', kind: '3m' as const, isRed: false };
+    const tile3mB = { id: 'h-3m-b', kind: '3m' as const, isRed: false };
+    const tile4m = { id: 'h-4m', kind: '4m' as const, isRed: false };
+    const tile5mr = { id: 'h-5mr', kind: '5m' as const, isRed: true };
+    const called3m = { id: 'd-3m-from-kami', kind: '3m' as const, isRed: false };
+
+    const callView: StateView = {
+      ...baseView,
+      phase: 'awaiting_responses',
+      responseRemainingMs: 9200,
+      myHand: [tile2m, tile3mA, tile3mB, tile4m, tile5mr, ...baseView.myHand.slice(5)],
+      players: baseView.players.map((p, idx) =>
+        idx === 3
+          ? {
+              ...p,
+              discards: [
+                {
+                  tile: called3m,
+                  isTsumogiri: false,
+                  isRiichiDeclaration: false,
+                },
+              ],
+            }
+          : p,
+      ),
+      myCallOptions: {
+        discardedTile: called3m,
+        discarderSeatIndex: 3, // 4人麻雀で自分(0)の上家は3
+        canRon: false,
+        canPon: true,
+        canDaiminkan: false,
+        chiOptions: [
+          { tiles: [tile2m, tile4m] },
+          { tiles: [tile4m, tile5mr] },
+        ],
+      },
+    };
+
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    renderGameTable(root, callView, handlers);
+
+    // ヘッダーに「上家」・捨て牌名が表示され、河の捨て牌がターゲットハイライトされる
+    const bar = root.querySelector('.call-action-bar')!;
+    expect(bar.querySelector('.call-bar-from-badge')?.textContent).toBe('上家');
+    expect(bar.querySelector('.call-bar-target-name')?.textContent).toBe('3萬');
+    expect(
+      root
+        .querySelector('.river-left [data-tile-id="d-3m-from-kami"]')
+        ?.classList.contains('mj-tile-call-target'),
+    ).toBe(true);
+
+    // ポンボタン：オレンジ系(.btn-call-pon)で完成3枚組[手0, 鳴, 手1]
+    const ponBtn = bar.querySelector<HTMLButtonElement>('.btn-call-pon')!;
+    expect(ponBtn).not.toBeNull();
+    expect(ponBtn.querySelector('.call-btn-action')?.textContent).toBe('ポン');
+    const ponPreviewTiles = ponBtn.querySelectorAll('.btn-tile-preview .mj-tile');
+    expect(ponPreviewTiles.length).toBe(3);
+    expect(ponPreviewTiles[1]!.classList.contains('mj-tile-called-preview')).toBe(true);
+
+    // チーボタン：ティール系(.btn-call-chi)が2つ、完成順子が数字順に並び鳴く牌だけ強調
+    const chiBtns = Array.from(bar.querySelectorAll<HTMLButtonElement>('.btn-call-chi'));
+    expect(chiBtns.length).toBe(2);
+
+    const chi0Tiles = Array.from(chiBtns[0]!.querySelectorAll('.btn-tile-preview .mj-tile'));
+    expect(chi0Tiles.map((el) => el.getAttribute('data-tile-id'))).toEqual([
+      'h-2m',
+      'd-3m-from-kami',
+      'h-4m',
+    ]);
+    expect(chi0Tiles[1]!.classList.contains('mj-tile-called-preview')).toBe(true);
+
+    const chi1Tiles = Array.from(chiBtns[1]!.querySelectorAll('.btn-tile-preview .mj-tile'));
+    expect(chi1Tiles.map((el) => el.getAttribute('data-tile-id'))).toEqual([
+      'd-3m-from-kami',
+      'h-4m',
+      'h-5mr',
+    ]);
+    expect(chi1Tiles[0]!.classList.contains('mj-tile-called-preview')).toBe(true);
+    expect(chiBtns[1]!.querySelector('.call-btn-detail')?.textContent).toContain('赤5萬');
+
+    // ボタンをホバーすると対応する手牌が強調・解除される
+    const handArea = root.querySelector<HTMLElement>('.seat-self .hand-area')!;
+    expect(handArea.querySelector('[data-tile-id="h-2m"]')?.classList.contains('mj-tile-call-candidate')).toBe(true);
+
+    chiBtns[1]!.dispatchEvent(new Event('mouseenter'));
+    expect(handArea.dataset.callPreviewKind).toBe('chi');
+    expect(handArea.querySelector('[data-tile-id="h-4m"]')?.classList.contains('mj-tile-call-active')).toBe(true);
+    expect(handArea.querySelector('[data-tile-id="h-5mr"]')?.classList.contains('mj-tile-call-active')).toBe(true);
+    expect(handArea.querySelector('[data-tile-id="h-2m"]')?.classList.contains('mj-tile-call-active')).toBe(false);
+
+    chiBtns[1]!.dispatchEvent(new Event('mouseleave'));
+    expect(handArea.dataset.callPreviewKind).toBeUndefined();
+    expect(handArea.querySelector('.mj-tile-call-active')).toBeNull();
+
+    // 各ボタンのクリックで正しい選択が送信される
+    ponBtn.click();
+    expect(onCallResponse).toHaveBeenLastCalledWith({ type: 'pon' });
+    chiBtns[1]!.click();
+    expect(onCallResponse).toHaveBeenLastCalledWith({
+      type: 'chi',
+      tileIds: ['h-4m', 'h-5mr'],
+    });
+    bar.querySelector<HTMLButtonElement>('.btn-call-pass')!.click();
+    expect(onCallResponse).toHaveBeenLastCalledWith({ type: 'pass' });
+
+    root.remove();
+  });
 });
 
 

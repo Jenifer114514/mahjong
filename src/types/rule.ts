@@ -53,6 +53,18 @@ export interface RuleConfig {
   honbaBonus?: boolean;
   /** CPUの強さ（'easy': やさしめ / 'normal': 標準、既定: 'normal'） */
   cpuLevel?: CpuLevel;
+  /** 赤ドラ枚数（5萬・5筒・5索ごとの赤牌数: 0=なし, 1=各1枚, 4=全5赤。既定: 0） */
+  redDoraPerFive?: 0 | 1 | 4;
+  /** 切り上げ満貫（4翻30符・3翻60符を満貫扱い、既定: false） */
+  kiriageMangan?: boolean;
+  /** 数え役満あり/なし（既定: true） */
+  allowKazoeYakuman?: boolean;
+  /** 連風牌対子の符（2 or 4、既定: 4） */
+  doubleWindPairFu?: 2 | 4;
+  /** 初期持ち点カスタム（既定: 4麻25000 / 3麻35000） */
+  initialPoints?: number;
+  /** 流局時のノーテン罰符合計（既定: 3000） */
+  notenPenaltyTotal?: number;
 }
 
 /** 将来のローカルルール変更に備えて差し替え可能な定数群 */
@@ -111,6 +123,7 @@ export const DEFAULT_KIRIAGE_MANGAN = false;
 export const DEFAULT_ALLOW_KAZOE_YAKUMAN = true;
 export const DEFAULT_DOUBLE_WIND_PAIR_FU = 4;
 export const DEFAULT_KITA_COUNTS_AS_INDICATOR_DORA = true;
+export const DEFAULT_RED_DORA_PER_FIVE: 0 | 1 | 4 = 0;
 
 export const SCORE_LIMIT_BASE_POINTS: ScoreLimitBasePoints = {
   mangan: 2000,
@@ -181,6 +194,7 @@ export interface DerivedRules {
   allowKazoeYakuman: boolean;
   doubleWindPairFu: number;
   kitaCountsAsIndicatorDora: boolean;
+  redDoraPerFive: 0 | 1 | 4;
   riichiStickPoints: number;
   scoreLimits: ScoreLimitBasePoints;
 }

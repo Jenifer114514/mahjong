@@ -13,6 +13,7 @@ import {
   DEFAULT_KIRIAGE_MANGAN,
   DEFAULT_KITA_COUNTS_AS_INDICATOR_DORA,
   DEFAULT_MAX_KANS_PER_ROUND,
+  DEFAULT_RED_DORA_PER_FIVE,
   DEFAULT_RESPONSE_TIMEOUT_MS,
   DEFAULT_TILE_SET_BY_PLAYERS,
   DEFAULT_TOBI,
@@ -44,11 +45,40 @@ export function deriveRules(
   const allowedTileKinds = ALL_TILE_KINDS.filter((kind) => !excludedSet.has(kind));
   const totalTiles = allowedTileKinds.length * tileSet.copiesPerKind;
 
-  const initialPoints = INITIAL_POINTS_BY_PLAYERS[config.playerCount];
+  const initialPoints =
+    typeof config.initialPoints === 'number' &&
+    Number.isFinite(config.initialPoints) &&
+    config.initialPoints >= 1000
+      ? Math.min(1000000, Math.round(config.initialPoints / 100) * 100)
+      : INITIAL_POINTS_BY_PLAYERS[config.playerCount];
   const seatWinds = SEAT_WINDS_BY_PLAYERS[config.playerCount];
   const roundWinds = ROUND_WINDS_BY_LENGTH[config.gameLength];
   const totalRounds = roundWinds.length * config.playerCount;
   const deadWallSize = DEAD_WALL_SIZE_BY_PLAYERS[config.playerCount];
+
+  const redDoraPerFive: 0 | 1 | 4 =
+    config.redDoraPerFive === 4
+      ? 4
+      : config.redDoraPerFive === 1
+        ? 1
+        : DEFAULT_RED_DORA_PER_FIVE;
+  const notenPenaltyTotal =
+    typeof config.notenPenaltyTotal === 'number' &&
+    Number.isFinite(config.notenPenaltyTotal) &&
+    config.notenPenaltyTotal >= 0
+      ? Math.min(12000, Math.round(config.notenPenaltyTotal / 100) * 100)
+      : NOTEN_PENALTY_TOTAL;
+  const responseTimeoutMs =
+    typeof config.responseTimeoutMs === 'number' &&
+    Number.isFinite(config.responseTimeoutMs) &&
+    config.responseTimeoutMs >= 0
+      ? Math.min(60000, Math.round(config.responseTimeoutMs))
+      : DEFAULT_RESPONSE_TIMEOUT_MS;
+  const maxKansPerRound =
+    typeof config.maxKansPerRound === 'number' &&
+    Number.isFinite(config.maxKansPerRound)
+      ? Math.max(1, Math.min(16, Math.round(config.maxKansPerRound)))
+      : DEFAULT_MAX_KANS_PER_ROUND;
 
   return {
     playerCount: config.playerCount,
@@ -69,8 +99,8 @@ export function deriveRules(
     allowKita: config.allowKita ?? config.playerCount === 3,
     doubleRon: config.doubleRon ?? true,
     forbidKuikae: config.forbidKuikae ?? true,
-    responseTimeoutMs: config.responseTimeoutMs ?? DEFAULT_RESPONSE_TIMEOUT_MS,
-    maxKansPerRound: config.maxKansPerRound ?? DEFAULT_MAX_KANS_PER_ROUND,
+    responseTimeoutMs,
+    maxKansPerRound,
     kandoraTiming: {
       ankan: config.kandoraTiming?.ankan ?? DEFAULT_KANDORA_TIMING.ankan,
       daiminkan: config.kandoraTiming?.daiminkan ?? DEFAULT_KANDORA_TIMING.daiminkan,
@@ -86,11 +116,13 @@ export function deriveRules(
     honbaBonus: config.honbaBonus ?? DEFAULT_HONBA_BONUS,
     honbaPointsPerStick: HONBA_POINTS_BY_PLAYERS[config.playerCount],
     cpuLevel: config.cpuLevel ?? DEFAULT_CPU_LEVEL,
-    notenPenaltyTotal: NOTEN_PENALTY_TOTAL,
-    kiriageMangan: DEFAULT_KIRIAGE_MANGAN,
-    allowKazoeYakuman: DEFAULT_ALLOW_KAZOE_YAKUMAN,
-    doubleWindPairFu: DEFAULT_DOUBLE_WIND_PAIR_FU,
+    notenPenaltyTotal,
+    kiriageMangan: config.kiriageMangan ?? DEFAULT_KIRIAGE_MANGAN,
+    allowKazoeYakuman: config.allowKazoeYakuman ?? DEFAULT_ALLOW_KAZOE_YAKUMAN,
+    doubleWindPairFu:
+      config.doubleWindPairFu === 2 ? 2 : DEFAULT_DOUBLE_WIND_PAIR_FU,
     kitaCountsAsIndicatorDora: DEFAULT_KITA_COUNTS_AS_INDICATOR_DORA,
+    redDoraPerFive,
     riichiStickPoints: RIICHI_STICK_POINTS,
     scoreLimits: { ...SCORE_LIMIT_BASE_POINTS },
   };

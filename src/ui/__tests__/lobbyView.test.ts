@@ -663,5 +663,96 @@ describe('renderWaitingRoom（CPU の後入れ）', () => {
     expect(field).not.toBeNull();
     expect(input?.value).toBe('雀士テスト');
   });
+
+  it('部屋作成時および作成後ロビーの「詳細設定」から赤ドラ・切り上げ満貫・数え役満・連風牌符・初期点・ノーテン罰符・制限時間・カン上限を変更できる', () => {
+    const onCreateRoom = vi.fn();
+    const formState: LobbyFormState = {
+      playerName: 'ホスト',
+      playerCount: 4,
+      gameLength: 'tonpuu',
+      tobi: true,
+      tsumoLoss: false,
+      allowKuitan: true,
+      allowAtozuke: true,
+      honbaBonus: true,
+      joinCode: '',
+      cpuCount: 0,
+      cpuLevel: 'normal',
+    };
+
+    const entryRoot = document.createElement('div');
+    renderLobbyEntry(
+      entryRoot,
+      formState,
+      {
+        onCreateRoom,
+        onJoinRoom: () => {},
+        onStartLocalGame: () => {},
+        onLeaveLobby: () => {},
+      },
+      false,
+    );
+
+    const details = entryRoot.querySelector<HTMLDetailsElement>(
+      '.lobby-advanced-details',
+    );
+    expect(details).not.toBeNull();
+    expect(details!.querySelector('.lobby-advanced-summary')?.textContent).toBe(
+      '詳細設定',
+    );
+
+    const setSelect = (root: HTMLElement, key: string, value: string) => {
+      const sel = root.querySelector<HTMLSelectElement>(
+        `select[data-adv-setting="${key}"]`,
+      )!;
+      expect(sel).not.toBeNull();
+      sel.value = value;
+      sel.dispatchEvent(new Event('change'));
+    };
+
+    setSelect(entryRoot, 'adv-red-dora', '4');
+    setSelect(entryRoot, 'adv-kiriage-mangan', 'true');
+    setSelect(entryRoot, 'adv-kazoe-yakuman', 'false');
+    setSelect(entryRoot, 'adv-double-wind-fu', '2');
+    setSelect(entryRoot, 'initialPoints', '50000');
+    setSelect(entryRoot, 'notenPenaltyTotal', '0');
+    setSelect(entryRoot, 'adv-response-timeout', '0');
+    setSelect(entryRoot, 'adv-max-kans', '8');
+
+    expect(clickByText(entryRoot, '部屋を作成')).toBe(true);
+    expect(onCreateRoom).toHaveBeenCalledWith(
+      'ホスト',
+      expect.objectContaining({
+        redDoraPerFive: 4,
+        kiriageMangan: true,
+        allowKazoeYakuman: false,
+        doubleWindPairFu: 2,
+        initialPoints: 50000,
+        notenPenaltyTotal: 0,
+        responseTimeoutMs: 0,
+        maxKansPerRound: 8,
+      }),
+      0,
+    );
+
+    // 待機ロビー側でも同じ詳細設定パネルが機能する
+    const { session, latest } = lobbySession(1);
+    session.start();
+    const onUpdateRuleConfig = vi.fn();
+    const waitRoot = document.createElement('div');
+    renderWaitingRoom(waitRoot, latest(), {
+      onCreateRoom: () => {},
+      onJoinRoom: () => {},
+      onStartLocalGame: () => {},
+      onLeaveLobby: () => {},
+      onUpdateRuleConfig,
+    });
+    expect(waitRoot.querySelector('.lobby-advanced-details')).not.toBeNull();
+    setSelect(waitRoot, 'adv-red-dora', '1');
+    expect(onUpdateRuleConfig).toHaveBeenCalledWith({ redDoraPerFive: 1 });
+    setSelect(waitRoot, 'adv-double-wind-fu', '2');
+    expect(onUpdateRuleConfig).toHaveBeenCalledWith({ doubleWindPairFu: 2 });
+    session.destroy();
+  });
 });
 

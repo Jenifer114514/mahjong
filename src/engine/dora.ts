@@ -82,6 +82,11 @@ export function countDoraAndKita(params: {
   ];
 
   let doraCount = 0;
+  for (const tile of countTargets) {
+    if (tile.isRed) {
+      doraCount++;
+    }
+  }
   for (const doraKind of activeDoraKinds) {
     for (const tile of countTargets) {
       if (tile.kind === doraKind) {

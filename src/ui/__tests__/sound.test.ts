@@ -39,6 +39,8 @@ describe('soundEngine', () => {
       soundEngine.playDoraFlip();
       soundEngine.playAgari(true);
       soundEngine.playAgari(false);
+      soundEngine.playRon();
+      soundEngine.playRon({ ronCount: 2, isYakuman: true, isHighHand: true });
       soundEngine.playDrawRound();
       soundEngine.playRoundStart();
     }).not.toThrow();
@@ -87,6 +89,7 @@ describe('soundEngine', () => {
     soundEngine.playSelect();
     soundEngine.playDiscard(0);
     soundEngine.playAgari(true);
+    soundEngine.playRon({ ronCount: 2 });
     expect(startSpy).not.toHaveBeenCalled();
   });
 
@@ -136,8 +139,9 @@ describe('soundEngine', () => {
     soundEngine.playMeld();
     soundEngine.playDoraFlip();
     soundEngine.playAgari(true);
+    soundEngine.playRon({ ronCount: 2, isYakuman: true });
     soundEngine.playRoundStart();
 
-    expect(startSpy.mock.calls.length).toBeGreaterThanOrEqual(8);
+    expect(startSpy.mock.calls.length).toBeGreaterThanOrEqual(15);
   });
 });
