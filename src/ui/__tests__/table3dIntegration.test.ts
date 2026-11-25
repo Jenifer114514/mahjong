@@ -1114,4 +1114,218 @@ describe('3D麻雀卓とフォールバック統合', () => {
 
     container.remove();
   });
+
+  it('3D卓でロン発生時に衝撃シェイク・閃光レーザー帯・ショックウェーブリングが加算描画される', () => {
+    const tracker: MockGlTracker = {
+      drawCalls: 0,
+      texUploads: 0,
+      shaderCompiles: 0,
+      loseContextCount: 0,
+      tileVerts: null,
+      tileIndices: null,
+      drawnTiles: [],
+      additiveDraws: 0,
+    };
+    const gl = createFakeWebGL2Context(tracker);
+    const ctx2d = createFake2dContext();
+    let rafCallback: FrameRequestCallback | null = null;
+
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+      rafCallback = cb;
+      return 1;
+    });
+    vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => {});
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(
+      function (this: HTMLCanvasElement, kind: string) {
+        if (kind === 'webgl2') return gl;
+        if (kind === '2d') return ctx2d;
+        return null;
+      } as unknown as HTMLCanvasElement['getContext'],
+    );
+    vi.spyOn(HTMLCanvasElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      width: 1280,
+      height: 720,
+      top: 0,
+      left: 0,
+      right: 1280,
+      bottom: 720,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    });
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    containers.push(container);
+
+    const handlers = makeHandlers();
+    const baseView = makeView(4, 8181);
+    const playingView: StateView = {
+      ...baseView,
+      players: baseView.players.map((p, idx) =>
+        idx === 0
+          ? {
+              ...p,
+              discards: [
+                {
+                  tile: t('ron-3d-target', '7p'),
+                  isTsumogiri: false,
+                  isRiichiDeclaration: false,
+                },
+              ],
+            }
+          : p,
+      ),
+    };
+
+    renderGameTable(container, playingView, handlers, {
+      riichiSelectingMode: false,
+      autoTsumogiriEnabled: true,
+      enable3dTable: true,
+      cameraPreset: 'standard',
+    });
+    rafCallback!(performance.now());
+    const baselineAdditive = tracker.additiveDraws ?? 0;
+
+    const ronView: StateView = {
+      ...playingView,
+      phase: 'round_end',
+      round: {
+        ...playingView.round!,
+        agariResults: [
+          {
+            playerId: playingView.players[1]!.playerId,
+            seatIndex: 1,
+            winType: 'ron',
+            fromSeatIndex: 0,
+            winningTile: t('ron-3d-target', '7p'),
+            hand: [...playingView.myHand],
+            melds: [],
+            kitaTiles: [],
+            yaku: [{ id: 'riichi', name: '立直', han: 1 }],
+            doraCount: 0,
+            uraDoraCount: 0,
+            kitaCount: 0,
+            han: 1,
+            fu: 30,
+            isYakuman: false,
+            scoreLabel: '1000点',
+            pointsAwarded: 1000,
+            honbaPointsAwarded: 0,
+            scoreDeltas: {},
+          },
+        ],
+      },
+    };
+
+    tracker.additiveDraws = 0;
+    renderGameTable(container, ronView, handlers, {
+      riichiSelectingMode: false,
+      autoTsumogiriEnabled: true,
+      enable3dTable: true,
+      cameraPreset: 'standard',
+    });
+    // 演出中の 0.25 秒時点を描画してショックウェーブリング + 閃光レーザー帯が増えていることを確認
+    rafCallback!(performance.now() + 250);
+    expect(tracker.additiveDraws).toBeGreaterThan(baselineAdditive + 2);
+
+    container.remove();
+  });
+
+  it('3D卓で鳴きボタンホバー時に該当手牌がハイライト連動し河ターゲット牌も強調描画される', () => {
+    const tracker: MockGlTracker = {
+      drawCalls: 0,
+      texUploads: 0,
+      shaderCompiles: 0,
+      loseContextCount: 0,
+      tileVerts: null,
+      tileIndices: null,
+      drawnTiles: [],
+      additiveDraws: 0,
+    };
+    const gl = createFakeWebGL2Context(tracker);
+    const ctx2d = createFake2dContext();
+    let rafCallback: FrameRequestCallback | null = null;
+
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+      rafCallback = cb;
+      return 1;
+    });
+    vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => {});
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(
+      function (this: HTMLCanvasElement, kind: string) {
+        if (kind === 'webgl2') return gl;
+        if (kind === '2d') return ctx2d;
+        return null;
+      } as unknown as HTMLCanvasElement['getContext'],
+    );
+    vi.spyOn(HTMLCanvasElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      width: 1280,
+      height: 720,
+      top: 0,
+      left: 0,
+      right: 1280,
+      bottom: 720,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    });
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    containers.push(container);
+
+    const handlers = makeHandlers();
+    const baseView = makeView(4, 9292);
+    const h2m = t('call-3d-2m', '2m');
+    const h4m = t('call-3d-4m', '4m');
+    const d3m = t('call-3d-target-3m', '3m');
+
+    const callView: StateView = {
+      ...baseView,
+      phase: 'awaiting_responses',
+      responseRemainingMs: 8000,
+      myHand: [h2m, h4m, ...baseView.myHand.slice(2)],
+      players: baseView.players.map((p, idx) =>
+        idx === 3
+          ? {
+              ...p,
+              discards: [
+                {
+                  tile: d3m,
+                  isTsumogiri: false,
+                  isRiichiDeclaration: false,
+                },
+              ],
+            }
+          : p,
+      ),
+      myCallOptions: {
+        discardedTile: d3m,
+        discarderSeatIndex: 3,
+        canRon: false,
+        canPon: false,
+        canDaiminkan: false,
+        chiOptions: [{ tiles: [h2m, h4m] }],
+      },
+    };
+
+    renderGameTable(container, callView, handlers, {
+      riichiSelectingMode: false,
+      autoTsumogiriEnabled: true,
+      enable3dTable: true,
+      cameraPreset: 'standard',
+    });
+
+    const chiBtn = container.querySelector<HTMLButtonElement>('.btn-call-chi')!;
+    expect(chiBtn).not.toBeNull();
+    chiBtn.dispatchEvent(new Event('mouseenter'));
+    rafCallback!(performance.now() + 30);
+    expect(tracker.drawCalls).toBeGreaterThan(0);
+
+    chiBtn.dispatchEvent(new Event('mouseleave'));
+    rafCallback!(performance.now() + 60);
+
+    container.remove();
+  });
 });

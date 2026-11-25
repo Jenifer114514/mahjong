@@ -15,6 +15,14 @@ export type Table3DCameraPreset = 'standard' | 'high' | 'low';
 
 export type SeatSide3D = 'self' | 'right' | 'top' | 'left';
 
+export interface Table3DRonEffect {
+  key: string;
+  winnerSides: readonly SeatSide3D[];
+  loserSide: SeatSide3D | null;
+  winningTileIds: readonly string[];
+  isFresh: boolean;
+}
+
 export interface Table3DCallbacks {
   onClickHandTile?: (tileId: string) => void;
   onClickTableVoid?: () => void;
@@ -32,6 +40,7 @@ export interface Table3DSyncParams {
   newlyDiscardedSides?: ReadonlySet<SeatSide3D>;
   newlyDrawnSides?: ReadonlySet<SeatSide3D>;
   newlyRevealedDoraIndices?: ReadonlySet<number>;
+  ronEffect?: Table3DRonEffect | null;
 }
 
 interface MeshBuffers {
@@ -357,6 +366,38 @@ void main() {
   float skyPanel = smoothstep(0.30, 0.88, R.y) * smoothstep(-0.35, 0.72, R.z * 0.65 - R.x * 0.45);
   float coatGloss = skyPanel * 0.08 + specBroad * 0.075 + specSharp * 0.25 + specSide * 0.11;
 
+  // ロン専用 3D ショックウェーブ・閃光レーザー帯（shadowMesh / vZone > 5.5）
+  if (vZone > 5.5 && uDoraGlow > 4.5) {
+    float prog = uColor.r;
+    float wave = sin(vUv.y * 28.0 - uTime * 32.0) * 0.14;
+    float distCenter = abs((vUv.x - 0.5) * 2.0 + wave);
+    float core = exp(-distCenter * distCenter * 22.0);
+    float haloBeam = exp(-distCenter * distCenter * 4.5);
+    float headDist = vUv.y - prog;
+    float trailMask = smoothstep(-0.75, -0.05, headDist) * (1.0 - smoothstep(0.0, 0.16, headDist));
+    float fullFlash = max(trailMask, smoothstep(0.0, 0.35, prog) * (1.0 - smoothstep(0.65, 1.35, prog)) * 0.48);
+    float endFade = smoothstep(0.0, 0.08, vUv.y) * smoothstep(1.0, 0.92, vUv.y);
+    vec3 beamCol = mix(vec3(1.0, 0.24, 0.14), vec3(1.0, 0.88, 0.42), core);
+    float intensity = (core * 1.45 + haloBeam * 0.65) * fullFlash * endFade * uColor.a;
+    outColor = vec4(beamCol * intensity, clamp(intensity, 0.0, 1.0));
+    return;
+  }
+
+  if (vZone > 5.5 && uDoraGlow > 3.5) {
+    float ringProg = clamp(uColor.r, 0.0, 1.0);
+    float r = length(vUv - vec2(0.5)) * 2.0;
+    float outerRadius = mix(0.22, 0.94, ringProg);
+    float innerRadius = outerRadius * 0.58;
+    float ring1 = exp(-pow(r - outerRadius, 2.0) * 58.0);
+    float ring2 = exp(-pow(r - innerRadius, 2.0) * 44.0);
+    float centerBurst = exp(-r * r * 12.0) * (1.0 - ringProg) * 0.85;
+    float edgeMask = smoothstep(1.0, 0.86, r);
+    vec3 col = vec3(1.0, 0.28, 0.15) * ring1 + vec3(1.0, 0.84, 0.36) * (ring2 + centerBurst);
+    float a = (ring1 + ring2 * 0.85 + centerBurst) * edgeMask * uColor.a;
+    outColor = vec4(col * a * 1.35, clamp(a, 0.0, 1.0));
+    return;
+  }
+
   // ドラ・赤ドラの外周加算オーラ（shadowMesh / vZone > 5.5）
   if (vZone > 5.5 && uDoraGlow > 0.5) {
     float isRedDora = step(1.5, uDoraGlow);
@@ -475,10 +516,17 @@ void main() {
     }
   }
 
-  // 選択・ホバー・リーチ候補ハイライト
+  // 選択・ホバー・リーチ候補・ロン放銃/和了ハイライト
   if (uHighlight > 0.01) {
     float pulse = 0.85 + 0.15 * sin(uTime * 4.5);
-    if (uHighlight > 1.5) {
+    if (uHighlight > 2.8) {
+      // ロン放銃牌: 紅蓮フラッシュ強調
+      float fastPulse = 0.72 + 0.28 * sin(uTime * 11.0);
+      lit = mix(lit, vec3(1.0, 0.28, 0.16), 0.36 * fastPulse) + vec3(0.26, 0.05, 0.03) * fastPulse;
+    } else if (uHighlight > 2.4) {
+      // ロン和了牌・勝者手牌: 黄金の輝き
+      lit = mix(lit, vec3(1.0, 0.88, 0.44), 0.30 * pulse) + vec3(0.18, 0.12, 0.02) * pulse;
+    } else if (uHighlight > 1.5) {
       // リーチ候補: ゴールド寄りの強調
       lit = mix(lit, vec3(1.0, 0.84, 0.40), 0.24 * pulse);
     } else if (uHighlight > 0.65) {
@@ -917,8 +965,10 @@ export class Mahjong3DScene {
   private callbacks: Table3DCallbacks = {};
   private selectedTileId: string | null = null;
   private hoveredTileId: string | null = null;
+  private callPreviewTileIds = new Set<string>();
   private hoverProgress = new Map<string, number>();
   private selectProgress = new Map<string, number>();
+  private callPreviewProgress = new Map<string, number>();
   private handHitBoxes: HandHitBox[] = [];
 
   private throwAnims: ThrowAnimState[] = [];
@@ -957,6 +1007,9 @@ export class Mahjong3DScene {
   private lastTickTime = 0;
   private elapsed = 0;
   private activeDoraKinds = new Set<TileKind>();
+  private lastRonEffectKey: string | null = null;
+  private ronEffectStartTime: number | null = null;
+  private ronSourcePos: [number, number, number] | null = null;
 
   private readonly onPointerDownBound = (e: PointerEvent) => this.handlePointerDown(e);
   private readonly onPointerMoveBound = (e: PointerEvent) => this.handlePointerMove(e);
@@ -1142,6 +1195,10 @@ export class Mahjong3DScene {
     this.selectedTileId = tileId;
   }
 
+  setCallPreviewTileIds(tileIds: readonly string[]): void {
+    this.callPreviewTileIds = new Set(tileIds);
+  }
+
   resetCamera(): void {
     this.userYawOffset = 0;
     this.userPitchOffset = 0;
@@ -1165,6 +1222,9 @@ export class Mahjong3DScene {
   syncView(nextParams: Table3DSyncParams): void {
     this.params = nextParams;
     this.selectedTileId = nextParams.selectedTileId;
+    if (!nextParams.view.myCallOptions) {
+      this.callPreviewTileIds.clear();
+    }
     this.cameraPreset = nextParams.cameraPreset;
     this.consoleDirty = true;
 
@@ -1277,6 +1337,19 @@ export class Mahjong3DScene {
           duration: 0.34,
         });
       }
+    }
+
+    if (nextParams.ronEffect) {
+      if (
+        nextParams.ronEffect.isFresh &&
+        this.lastRonEffectKey !== nextParams.ronEffect.key
+      ) {
+        this.lastRonEffectKey = nextParams.ronEffect.key;
+        this.ronEffectStartTime = now;
+      }
+    } else {
+      this.lastRonEffectKey = null;
+      this.ronEffectStartTime = null;
     }
 
     this.syncCanvasSize();
@@ -1913,12 +1986,27 @@ export class Mahjong3DScene {
     this.currentYaw += (targetYaw - this.currentYaw) * lerp;
     this.currentZoom += (targetZoom - this.currentZoom) * lerp;
 
-    const dist = 18.8 * this.currentZoom;
+    const ronAge =
+      this.ronEffectStartTime !== null && params.ronEffect
+        ? Math.max(0, now - this.ronEffectStartTime)
+        : -1;
+    const ronZoomFactor =
+      ronAge >= 0 && ronAge < 1.5
+        ? 1 - 0.065 * Math.sin((ronAge / 1.5) * Math.PI)
+        : 1;
+    const dist = 18.8 * this.currentZoom * ronZoomFactor;
     const targetY = this.cameraPreset === 'high' ? -0.1 : -0.15;
     const baseTargetZ = this.cameraPreset === 'low' ? 1.35 : 1.15;
     const targetZ =
       aspect < 1.1 ? baseTargetZ * Math.max(0.45, aspect / 1.1) : baseTargetZ;
-    const target: [number, number, number] = [0, targetY, targetZ];
+    let shakeX = 0;
+    let shakeY = 0;
+    if (ronAge >= 0 && ronAge < 0.52) {
+      const shakeEnv = Math.pow(1 - ronAge / 0.52, 2);
+      shakeX = Math.sin(ronAge * 64) * 0.24 * shakeEnv;
+      shakeY = Math.cos(ronAge * 52) * 0.14 * shakeEnv;
+    }
+    const target: [number, number, number] = [shakeX, targetY + shakeY, targetZ];
 
     const ey = Math.sin(this.currentPitch) * dist + target[1];
     const hDist = Math.cos(this.currentPitch) * dist;
@@ -2068,11 +2156,17 @@ export class Mahjong3DScene {
     }
 
     // 3. 河（最大4席・3人時は3席）
+    this.ronSourcePos = null;
+    const ronEffect = params.ronEffect ?? null;
+    const ronAge =
+      this.ronEffectStartTime !== null && ronEffect
+        ? Math.max(0, now - this.ronEffectStartTime)
+        : -1;
     const sides: SeatSide3D[] = ['self', 'right', 'top', 'left'];
     for (const side of sides) {
       const player = bySide.get(side);
       if (!player) continue;
-      this.populateRiver(side, player, now);
+      this.populateRiver(side, player, now, ronEffect, ronAge);
       this.populateMeldsAndKita(side, player, view.players.length);
     }
 
@@ -2083,7 +2177,7 @@ export class Mahjong3DScene {
       if (!player) continue;
       const revealed = round?.revealedHands[player.playerId];
       if (revealed && revealed.length > 0) {
-        this.populateRevealedOpponentHand(side, revealed);
+        this.populateRevealedOpponentHand(side, revealed, ronEffect);
       } else {
         this.populateHiddenOpponentHand(side, player, now);
       }
@@ -2095,12 +2189,107 @@ export class Mahjong3DScene {
       const revealedSelf = round?.revealedHands[selfPlayer.playerId];
       if (params.isSpectator) {
         if (revealedSelf && revealedSelf.length > 0) {
-          this.populateRevealedOpponentHand('self', revealedSelf);
+          this.populateRevealedOpponentHand('self', revealedSelf, ronEffect);
         } else {
           this.populateHiddenSelfHand(selfPlayer, now);
         }
       } else {
         this.populateInteractiveSelfHand(params, selfPlayer, now, dt);
+      }
+    }
+
+    // 6. ロン時の稲妻レーザー帯＆和了席インパクトリング
+    if (ronEffect && ronEffect.winnerSides.length > 0) {
+      this.populateRonEffects(ronEffect, ronAge);
+    }
+  }
+
+  private populateRonEffects(
+    ronEffect: Table3DRonEffect,
+    ronAge: number,
+  ): void {
+    const srcPos =
+      this.ronSourcePos ??
+      (ronEffect.loserSide
+        ? this.getHandOriginForSide(ronEffect.loserSide)
+        : ([0, 0.25, 0] as [number, number, number]));
+
+    // 閃光レーザー帯と衝撃リングは演出の最初の 1.55s で大きく爆発し、その後も勝者手牌側の余韻リングを残す
+    const isActiveBurst = ronAge >= 0 && ronAge < 1.65;
+    if (isActiveBurst) {
+      const burstProg = Math.min(1, ronAge / 0.9);
+      const burstAlpha = 1 - Math.pow(Math.min(1, ronAge / 1.55), 1.6);
+      // 放銃位置の紅金ショックウェーブ
+      this.auraQueue.push({
+        mesh: this.shadowMesh,
+        model: mat4Compose(srcPos[0], 0.04, srcPos[2], 0, 0, 0, 3.2, 1, 3.2),
+        color: [burstProg, 0.2, 0.1, burstAlpha],
+        uvRect: [0, 0, 1, 1],
+        useAtlas: 0,
+        useConsole: 0,
+        backTone: 0,
+        highlight: 0,
+        emissive: 0,
+        doraGlow: 4.0,
+        additive: true,
+      });
+    }
+
+    for (const winSide of ronEffect.winnerSides) {
+      const origin = this.getHandOriginForSide(winSide);
+      const dstX = winSide === 'self' ? 0 : origin[0];
+      const dstZ = winSide === 'self' ? 5.25 : origin[2];
+
+      if (isActiveBurst) {
+        const dx = dstX - srcPos[0];
+        const dz = dstZ - srcPos[2];
+        const len = Math.max(0.25, Math.hypot(dx, dz));
+        const angle = Math.atan2(dx, dz);
+        const beamProg = Math.min(1.4, ronAge / 0.26);
+        const beamAlpha = 1 - Math.pow(Math.min(1, ronAge / 1.1), 1.4);
+
+        this.auraQueue.push({
+          mesh: this.shadowMesh,
+          model: mat4Compose(
+            (srcPos[0] + dstX) * 0.5,
+            0.34,
+            (srcPos[2] + dstZ) * 0.5,
+            0,
+            angle,
+            0,
+            1.45,
+            1,
+            len,
+          ),
+          color: [beamProg, 0.5, 0.2, beamAlpha],
+          uvRect: [0, 0, 1, 1],
+          useAtlas: 0,
+          useConsole: 0,
+          backTone: 0,
+          highlight: 0,
+          emissive: 0,
+          doraGlow: 5.0,
+          additive: true,
+        });
+
+        const impactAge = Math.max(0, ronAge - 0.16);
+        if (impactAge > 0 && impactAge < 1.3) {
+          const impProg = Math.min(1, impactAge / 0.72);
+          const impAlpha = (1 - impactAge / 1.3) * 0.92;
+          this.auraQueue.push({
+            mesh: this.shadowMesh,
+            model: mat4Compose(dstX, 0.04, dstZ, 0, 0, 0, 4.2, 1, 4.2),
+            color: [impProg, 0.8, 0.2, impAlpha],
+            uvRect: [0, 0, 1, 1],
+            useAtlas: 0,
+            useConsole: 0,
+            backTone: 0,
+            highlight: 0,
+            emissive: 0,
+            doraGlow: 4.0,
+            additive: true,
+          });
+        }
       }
     }
   }
@@ -2263,6 +2452,8 @@ export class Mahjong3DScene {
     side: SeatSide3D,
     player: PublicPlayerView,
     now: number,
+    ronEffect: Table3DRonEffect | null = null,
+    ronAge = -1,
   ): void {
     const ry =
       side === 'self'
@@ -2320,10 +2511,29 @@ export class Mahjong3DScene {
         this.lastDiscardTarget.playerId === player.playerId &&
         this.lastDiscardTarget.tileId === entry.tile.id;
 
+      const isRonTargetTile =
+        ronEffect !== null &&
+        ronEffect.loserSide === side &&
+        (ronEffect.winningTileIds.includes(entry.tile.id) ||
+          idx === player.discards.length - 1);
+
+      const isCallTargetTile =
+        !isRonTargetTile &&
+        !this.params?.isSpectator &&
+        this.params?.view.phase === 'awaiting_responses' &&
+        this.params.view.myCallOptions !== null &&
+        this.params.view.myCallOptions.discardedTile.id === entry.tile.id;
+
+      if (isRonTargetTile) {
+        this.ronSourcePos = [wx, 0.22, wz];
+      }
+
       const tileRy = ry + (isRiichi ? Math.PI / 2 : 0);
-      const tint: [number, number, number, number] = entry.isTsumogiri
-        ? [0.85, 0.87, 0.91, 1]
-        : [1, 1, 1, 1];
+      const tint: [number, number, number, number] = isRonTargetTile
+        ? [1, 0.94, 0.9, 1]
+        : entry.isTsumogiri
+          ? [0.85, 0.87, 0.91, 1]
+          : [1, 1, 1, 1];
 
       this.drawTileWithShadow(
         mat4Compose(wx, wy, wz, throwArcRot, tileRy, 0, sc, sc, sc),
@@ -2334,23 +2544,54 @@ export class Mahjong3DScene {
         this.getTileUv(entry.tile.kind, entry.tile.isRed),
         {
           tint,
-          highlight: isLatest ? 0.95 : 0,
+          highlight: isRonTargetTile ? 3.0 : isCallTargetTile ? 2.2 : isLatest ? 0.95 : 0,
           doraGlow: this.getTileDoraGlow(entry.tile),
         },
       );
 
-      if (isLatest && wy < 0.08) {
-        const bob = Math.sin(this.elapsed * 4.2) * 0.07;
-        this.animQueue.push({
-          mesh: this.markerMesh,
-          model: mat4Compose(wx, 0.72 + bob, wz, 0, this.elapsed * 2.4, 0, 0.56, 0.56, 0.56),
-          color: [0.35, 0.76, 1.0, 0.96],
+      if (isRonTargetTile) {
+        const pulseProg = ronAge >= 0 ? (ronAge * 0.95) % 1 : (this.elapsed * 0.8) % 1;
+        this.auraQueue.push({
+          mesh: this.shadowMesh,
+          model: mat4Compose(wx, 0.032, wz, 0, tileRy, 0, w * 2.5, 1, h * 2.5),
+          color: [pulseProg, 0.24, 0.12, 0.92],
           uvRect: [0, 0, 1, 1],
           useAtlas: 0,
           useConsole: 0,
           backTone: 0,
           highlight: 0,
-          emissive: 0.78,
+          emissive: 0,
+          doraGlow: 4.0,
+          additive: true,
+        });
+      }
+
+      if ((isLatest || isCallTargetTile) && wy < 0.08) {
+        const bob = Math.sin(this.elapsed * (isCallTargetTile ? 6.5 : 4.2)) * 0.07;
+        this.animQueue.push({
+          mesh: this.markerMesh,
+          model: mat4Compose(
+            wx,
+            (isCallTargetTile ? 0.82 : 0.72) + bob,
+            wz,
+            0,
+            this.elapsed * (isCallTargetTile ? 3.8 : 2.4),
+            0,
+            isCallTargetTile ? 0.68 : 0.56,
+            isCallTargetTile ? 0.68 : 0.56,
+            isCallTargetTile ? 0.68 : 0.56,
+          ),
+          color: isRonTargetTile
+            ? [1.0, 0.28, 0.16, 0.98]
+            : isCallTargetTile
+              ? [1.0, 0.84, 0.28, 0.98]
+              : [0.35, 0.76, 1.0, 0.96],
+          uvRect: [0, 0, 1, 1],
+          useAtlas: 0,
+          useConsole: 0,
+          backTone: 0,
+          highlight: 0,
+          emissive: isRonTargetTile || isCallTargetTile ? 0.95 : 0.78,
           doraGlow: 0,
         });
       }
@@ -2622,6 +2863,7 @@ export class Mahjong3DScene {
   private populateRevealedOpponentHand(
     side: SeatSide3D,
     tiles: readonly Tile[],
+    ronEffect: Table3DRonEffect | null = null,
   ): void {
     const ry =
       side === 'right'
@@ -2636,10 +2878,13 @@ export class Mahjong3DScene {
     const totalW = (tiles.length - 1) * step;
     const startX = -totalW / 2;
     const dist = side === 'self' ? 5.35 : 5.75;
+    const isRonWinner = ronEffect !== null && ronEffect.winnerSides.includes(side);
 
     tiles.forEach((tile, i) => {
       const lx = startX + i * step;
       const [wx, wz] = rotatePointXZ(lx, dist, ry);
+      const isWinTile =
+        isRonWinner && ronEffect!.winningTileIds.includes(tile.id);
       this.drawTileWithShadow(
         mat4Compose(wx, 0, wz, 0, ry, 0, sc, sc, sc),
         wx,
@@ -2647,7 +2892,10 @@ export class Mahjong3DScene {
         ry,
         sc,
         this.getTileUv(tile.kind, tile.isRed),
-        { doraGlow: this.getTileDoraGlow(tile) },
+        {
+          doraGlow: this.getTileDoraGlow(tile),
+          highlight: isWinTile ? 2.6 : isRonWinner ? 0.5 : 0,
+        },
       );
     });
   }
@@ -2730,6 +2978,7 @@ export class Mahjong3DScene {
 
       const isSelected = clickable && this.selectedTileId === tile.id;
       const isHovered = clickable && this.hoveredTileId === tile.id;
+      const isCallPreview = this.callPreviewTileIds.has(tile.id);
 
       const prevSel = this.selectProgress.get(tile.id) ?? 0;
       const nextSel = prevSel + ((isSelected ? 1 : 0) - prevSel) * lerpRate;
@@ -2739,9 +2988,14 @@ export class Mahjong3DScene {
       const nextHov = prevHov + ((isHovered ? 1 : 0) - prevHov) * lerpRate;
       this.hoverProgress.set(tile.id, nextHov);
 
+      const prevCall = this.callPreviewProgress.get(tile.id) ?? 0;
+      const nextCall = prevCall + ((isCallPreview ? 1 : 0) - prevCall) * lerpRate;
+      this.callPreviewProgress.set(tile.id, nextCall);
+
       const lift =
         nextSel * 0.24 +
         nextHov * 0.08 +
+        nextCall * 0.24 +
         (isRiichiCandidate ? 0.07 : 0) +
         (isDrawn ? drawYOffset : 0);
 
@@ -2750,16 +3004,28 @@ export class Mahjong3DScene {
       const tz = baseZ - lift * cosP;
       this.lastSelfTilePos.set(tile.id, [x, ty + 0.2, tz]);
 
+      const isSelfRonWinner =
+        params.ronEffect !== null &&
+        params.ronEffect !== undefined &&
+        params.ronEffect.winnerSides.includes('self');
+      const isSelfRonWinTile =
+        isSelfRonWinner &&
+        params.ronEffect!.winningTileIds.includes(tile.id);
+
       const tint: [number, number, number, number] = blocked
         ? [0.58, 0.6, 0.66, 1]
         : [1, 1, 1, 1];
       const highlight = isSelected
         ? 1.0
-        : isRiichiCandidate
-          ? 2.0
-          : isHovered
-            ? 0.45
-            : 0;
+        : isSelfRonWinTile
+          ? 2.6
+          : isCallPreview
+            ? 2.1
+            : isRiichiCandidate
+              ? 2.0
+              : isHovered || isSelfRonWinner
+                ? 0.45
+                : 0;
 
       const doraGlow = this.getTileDoraGlow(tile);
       if (doraGlow > 0) {

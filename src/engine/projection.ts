@@ -54,6 +54,8 @@ function cloneAgariWinner(w: RoundAgariWinner): RoundAgariWinner {
 export interface ToStateViewOptions {
   perspectiveSeatIndex?: number;
   hostEpoch?: number;
+  /** 指定プレイヤーに限り他家の手牌を公開する（裏設定 Peek 用、観戦者には非適用） */
+  revealOpponentHands?: boolean;
 }
 
 export function toStateView(
@@ -198,7 +200,19 @@ export function toStateView(
                   tiles.map((t) => ({ ...t })),
                 ]),
               )
-            : {},
+            : options.revealOpponentHands && viewer
+              ? Object.fromEntries(
+                  state.players
+                    .filter((p) => p.playerId !== viewer.playerId)
+                    .map((p) => [
+                      p.playerId,
+                      [
+                        ...p.hand.map((t) => ({ ...t })),
+                        ...(p.drawnTile ? [{ ...p.drawnTile }] : []),
+                      ],
+                    ]),
+                )
+              : {},
         kyotakuWinnerPlayerId: state.round.kyotakuWinnerPlayerId,
         kyotakuPointsAwarded: state.round.kyotakuPointsAwarded,
         roundScoreDeltas: { ...state.round.roundScoreDeltas },

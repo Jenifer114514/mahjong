@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { isCpuPlayerId } from '../../cpu/player';
+import { countsFromTiles, handShanten, KIND_COUNT } from '../../cpu/shanten';
+import { createStartedCustomGame } from '../../engine/__tests__/testHelpers';
 import type { HostMessage, StateView } from '../../types/message';
 import type { RuleConfig } from '../../types/rule';
 
@@ -824,5 +826,340 @@ describe('HostSession の CPU 統合', () => {
     );
     expect(callable.guestViewAfter.myDrawnTile).not.toBeNull();
     expect(nonCallable.guestViewAfter.myDrawnTile).not.toBeNull();
+  });
+
+  it('裏設定(Peek・Luck)はオンライン対局のホスト・ゲスト双方およびオフライン戦で有効になり、使った本人のみに透視が返る', () => {
+    peerInstances.length = 0;
+    const hostViews: StateView[] = [];
+    const guestSent: HostMessage[] = [];
+    const otherGuestSent: HostMessage[] = [];
+
+    const session = new HostSession(
+      'ホスト',
+      { playerCount: 4, gameLength: 'tonpuu', responseTimeoutMs: 0 },
+      {
+        onViewChange: (v) => hostViews.push(v),
+        onStatusChange: () => {},
+        onError: () => {},
+      },
+      { cpuCount: 1, cpuDelayMs: 0, cpuScheduler: () => {} },
+    );
+    session.start();
+    const peer = peerInstances.at(-1)!;
+    peer.emit('open', peer.id);
+
+    const makeGuestConn = (peerId: string, sink: HostMessage[]) => ({
+      peer: peerId,
+      open: true,
+      handlers: {} as Record<string, Array<(...args: unknown[]) => void>>,
+      on(event: string, cb: (...args: unknown[]) => void) {
+        this.handlers[event] = this.handlers[event] ?? [];
+        this.handlers[event]!.push(cb);
+      },
+      emit(event: string, ...args: unknown[]) {
+        for (const cb of this.handlers[event] ?? []) cb(...args);
+      },
+      send(msg: unknown) {
+        sink.push(msg as HostMessage);
+      },
+      close() {
+        this.open = false;
+      },
+    });
+
+    const g1 = makeGuestConn('guest-peer-1', guestSent);
+    const g2 = makeGuestConn('guest-peer-2', otherGuestSent);
+    peer.emit('connection', g1);
+    g1.emit('open');
+    g1.emit('data', { kind: 'JOIN', playerName: 'ゲスト1' });
+    peer.emit('connection', g2);
+    g2.emit('open');
+    g2.emit('data', { kind: 'JOIN', playerName: 'ゲスト2' });
+
+    expect(session.startGame()).toBe(true);
+    expect(hostViews.at(-1)?.phase).toBe('playing');
+    expect(hostViews.at(-1)?.round?.revealedHands).toEqual({});
+
+    // ゲスト1が SECRET_OPTION で peek=true と luck='god' を送る
+    guestSent.length = 0;
+    otherGuestSent.length = 0;
+    const hostBeforeLen = hostViews.length;
+    g1.emit('data', { kind: 'SECRET_OPTION', peek: true, luck: 'god' });
+
+    // ゲスト1本人だけ即座に他3人分の revealedHands を受け取る
+    const g1Views = guestSent.filter(
+      (m): m is Extract<HostMessage, { kind: 'STATE_VIEW' }> =>
+        m.kind === 'STATE_VIEW',
+    );
+    expect(g1Views).toHaveLength(1);
+    const g1PeekView = g1Views[0]!.payload;
+    expect(Object.keys(g1PeekView.round?.revealedHands ?? {})).toHaveLength(3);
+    expect(
+      g1PeekView.round?.revealedHands[g1PeekView.viewerPlayerId],
+    ).toBeUndefined();
+
+    // ホストやゲスト2には漏洩しない
+    expect(hostViews.length).toBe(hostBeforeLen);
+    expect(otherGuestSent).toHaveLength(0);
+
+    // ホスト自身もオンラインで setSecretPeek(true) / setSecretLuck('god', targetId) を全プレイヤーに使用可能
+    expect(session.setSecretPeek(true)).toBe(true);
+    expect(session.getSecretPeek()).toBe(true);
+    expect(session.setSecretLuck('god')).toBe(true);
+    expect(session.getSecretLuck()).toBe('god');
+    const hostPeek = hostViews.at(-1)!;
+    expect(Object.keys(hostPeek.round?.revealedHands ?? {})).toHaveLength(3);
+
+    // 他プレイヤー(ゲスト2・CPU席)の luck もホスト・ゲスト双方から個別に変更し、SECRET_STATE で同期できる
+    const g2Id = hostPeek.players.find((p) => p.name === 'ゲスト2')!.playerId;
+    const cpuId = hostPeek.players.find((p) => isCpuPlayerId(p.playerId))!.playerId;
+    expect(session.setSecretLuck('good', cpuId)).toBe(true);
+    expect(session.getSecretLuck(cpuId)).toBe('good');
+
+    guestSent.length = 0;
+    otherGuestSent.length = 0;
+    g1.emit('data', {
+      kind: 'SECRET_OPTION',
+      luck: 'god',
+      luckTargetPlayerId: g2Id,
+    });
+    expect(session.getSecretLuck(g2Id)).toBe('god');
+    const g1SyncMsg = guestSent.find(
+      (m): m is Extract<HostMessage, { kind: 'SECRET_STATE' }> =>
+        m.kind === 'SECRET_STATE',
+    );
+    expect(g1SyncMsg?.payload.peek).toBe(true);
+    expect(g1SyncMsg?.payload.luckByPlayer[g2Id]).toBe('god');
+    expect(g1SyncMsg?.payload.luckByPlayer[cpuId]).toBe('good');
+    expect(otherGuestSent).toHaveLength(0);
+
+    // 存在しない対象IDでは PLAYER_NOT_FOUND エラー
+    guestSent.length = 0;
+    g1.emit('data', {
+      kind: 'SECRET_OPTION',
+      luck: 'god',
+      luckTargetPlayerId: 'nonexistent-player',
+    });
+    expect(
+      guestSent.some(
+        (m) => m.kind === 'ERROR' && m.payload.code === 'PLAYER_NOT_FOUND',
+      ),
+    ).toBe(true);
+
+    // clearAllLuck で全プレイヤーの luck を通常に戻せる
+    guestSent.length = 0;
+    g1.emit('data', { kind: 'SECRET_OPTION', clearAllLuck: true });
+    expect(session.getSecretLuck(g2Id)).toBe('normal');
+    expect(session.getSecretLuck(cpuId)).toBe('normal');
+    expect(session.getSecretLuck()).toBe('normal');
+
+    // ゲスト1が peek=false に戻すと透視解除される
+    guestSent.length = 0;
+    g1.emit('data', { kind: 'SECRET_OPTION', peek: false });
+    const g1Closed = guestSent.find(
+      (m): m is Extract<HostMessage, { kind: 'STATE_VIEW' }> =>
+        m.kind === 'STATE_VIEW',
+    )!;
+    expect(g1Closed.payload.round?.revealedHands).toEqual({});
+
+    // 観戦者の SECRET_OPTION は拒否される
+    const specSent: HostMessage[] = [];
+    const spec = makeGuestConn('spec-peer', specSent);
+    peer.emit('connection', spec);
+    spec.emit('open');
+    spec.emit('data', { kind: 'JOIN', playerName: '観戦者', preferSpectate: true });
+    specSent.length = 0;
+    spec.emit('data', { kind: 'SECRET_OPTION', peek: true });
+    expect(
+      specSent.some(
+        (m) => m.kind === 'ERROR' && m.payload.code === 'UNAUTHORIZED_ACTION',
+      ),
+    ).toBe(true);
+
+    session.destroy();
+  });
+
+  it('裏設定 Luck(god/good) は対局中の次ツモから牌山内の有利な牌（有効牌・ツモ和了牌）を引き当て、総枚数も保存される', () => {
+    peerInstances.length = 0;
+    const views: StateView[] = [];
+    const guestSent: HostMessage[] = [];
+    const session = new HostSession(
+      'ホスト',
+      { playerCount: 4, gameLength: 'tonpuu', responseTimeoutMs: 0 },
+      {
+        onViewChange: (v) => views.push(v),
+        onStatusChange: () => {},
+        onError: () => {},
+      },
+      { cpuCount: 0, cpuDelayMs: 0, cpuScheduler: () => {} },
+    );
+    session.start();
+    const peer = peerInstances.at(-1)!;
+    peer.emit('open', peer.id);
+
+    const g1 = {
+      peer: 'guest-luck-1',
+      open: true,
+      handlers: {} as Record<string, Array<(...args: unknown[]) => void>>,
+      on(event: string, cb: (...args: unknown[]) => void) {
+        this.handlers[event] = this.handlers[event] ?? [];
+        this.handlers[event]!.push(cb);
+      },
+      emit(event: string, ...args: unknown[]) {
+        for (const cb of this.handlers[event] ?? []) cb(...args);
+      },
+      send(msg: unknown) {
+        guestSent.push(msg as HostMessage);
+      },
+      close() {
+        this.open = false;
+      },
+    };
+    peer.emit('connection', g1);
+    g1.emit('open');
+    g1.emit('data', { kind: 'JOIN', playerName: 'ゲスト1' });
+
+    // p0(ホスト): 打牌 -> p1(ゲスト1): 6p8p カンチャン待ち（残り7p 3枚はp2の手牌にあり、最後の1枚の7pだけが山底、山頭は4z）
+    const customBase = createStartedCustomGame(4, {
+      hands: {
+        0: ['1m', '2m', '3m', '4m', '5m', '6m', '7m', '8m', '9m', '1p', '2p', '3p', '9s'],
+        // ゲスト1 (seat 1): 1s1s 2m3m4m 5s6s7s 7z7z7z 6p8p（唯一の待ち牌 7p ツモで即ツモ和了！）
+        1: ['1s', '1s', '2m', '3m', '4m', '5s', '6s', '7s', '7z', '7z', '7z', '6p', '8p'],
+        2: ['1z', '1z', '2z', '2z', '3z', '3z', '5z', '5z', '6z', '6z', '7p', '7p', '7p'],
+        3: ['1m', '2m', '3m', '4p', '5p', '6p', '2s', '3s', '4s', '8m', '9m', '8s', '9s'],
+      },
+      dealerDrawnKind: '9s',
+      liveWallHeadKinds: ['4z', '4z', '4z', '4z'],
+      wallTailKinds: ['7p'],
+    });
+
+    const hostInternals = session as unknown as {
+      state: import('../../types/state').GameState;
+      commitState: (next: import('../../types/state').GameState) => void;
+    };
+    const fixedState: import('../../types/state').GameState = {
+      ...customBase,
+      ruleConfig: { ...customBase.ruleConfig, responseTimeoutMs: 0 },
+      hostPlayerId: peer.id,
+      players: customBase.players.map((p, idx) => {
+        if (idx === 0) return { ...p, playerId: peer.id };
+        if (idx === 1) {
+          const mappedId = views.at(-1)!.players[1]!.playerId;
+          return { ...p, playerId: mappedId };
+        }
+        return p;
+      }),
+    };
+    hostInternals.commitState(fixedState);
+
+    const wallBefore = hostInternals.state.round!.wall.length;
+
+    // ゲスト1が Luck(god) を送信（オンラインクライアント）
+    g1.emit('data', { kind: 'SECRET_OPTION', luck: 'god' });
+
+    // ホストが不要牌を打牌 → 次のツモ番のゲスト1は本来山頭 '4z' のところ、山底の '7p' をツモり即ツモ和了可能に！
+    guestSent.length = 0;
+    session.discardTile(fixedState.players[0]!.drawnTile!.id);
+
+    const g1AfterDraw = guestSent
+      .filter(
+        (m): m is Extract<HostMessage, { kind: 'STATE_VIEW' }> =>
+          m.kind === 'STATE_VIEW',
+      )
+      .at(-1)!.payload;
+
+    expect(g1AfterDraw.myDrawnTile?.kind).toBe('7p');
+    expect(g1AfterDraw.mySelfActions?.canTsumo).toBe(true);
+    // 牌山の残り枚数は通常どおりちょうど1枚だけ減っている（スワップのみで枚数完全保存）
+    expect(hostInternals.state.round!.wall.length).toBe(wallBefore - 1);
+
+    // 次にゲスト1が Luck(normal) に戻した状態でノーテン1シャンテン盤面では山頭をそのまま引き、
+    // Luck(god) なら有効牌を引いてシャンテンが前進することを確認する
+    const iishantenBase = createStartedCustomGame(4, {
+      hands: {
+        0: ['1m', '2m', '3m', '4m', '5m', '6m', '7m', '8m', '9m', '1p', '2p', '3p', '9s'],
+        // ゲスト1 (seat 1): 1s1s 2m3m4m 5s6s7s 7z7z 6p8p 9p（1シャンテン: 7z 2枚 + 6p8p + 9p）
+        1: ['1s', '1s', '2m', '3m', '4m', '5s', '6s', '7s', '7z', '7z', '6p', '8p', '9p'],
+        2: ['1z', '1z', '2z', '2z', '3z', '3z', '5z', '5z', '6z', '6z', '4p', '4p', '4p'],
+        3: ['1m', '2m', '3m', '5p', '5p', '5p', '2s', '3s', '4s', '8m', '9m', '8s', '9s'],
+      },
+      dealerDrawnKind: '9s',
+      liveWallHeadKinds: ['4z', '4z', '4z', '4z'],
+      wallTailKinds: ['7z'],
+    });
+    const iishantenState: import('../../types/state').GameState = {
+      ...iishantenBase,
+      ruleConfig: { ...iishantenBase.ruleConfig, responseTimeoutMs: 0 },
+      hostPlayerId: peer.id,
+      players: iishantenBase.players.map((p, idx) => {
+        if (idx === 0) return { ...p, playerId: peer.id };
+        if (idx === 1) {
+          const mappedId = views.at(-1)!.players[1]!.playerId;
+          return { ...p, playerId: mappedId };
+        }
+        return p;
+      }),
+    };
+
+    // Luck(normal) では通常の山頭 '4z' を引き、1シャンテンのまま
+    const calcMinShantenAfterDiscard = (view: StateView): number => {
+      const counts = countsFromTiles([
+        ...view.myHand,
+        ...(view.myDrawnTile ? [view.myDrawnTile] : []),
+      ]);
+      let minS = 99;
+      for (let i = 0; i < KIND_COUNT; i++) {
+        if (counts[i]! <= 0) continue;
+        counts[i] = counts[i]! - 1;
+        minS = Math.min(minS, handShanten(counts, view.players[1]!.melds.length));
+        counts[i] = counts[i]! + 1;
+      }
+      return minS;
+    };
+
+    g1.emit('data', { kind: 'SECRET_OPTION', luck: 'normal' });
+    hostInternals.commitState(iishantenState);
+    guestSent.length = 0;
+    session.discardTile(iishantenState.players[0]!.drawnTile!.id);
+    const g1NormalDraw = guestSent
+      .filter(
+        (m): m is Extract<HostMessage, { kind: 'STATE_VIEW' }> =>
+          m.kind === 'STATE_VIEW',
+      )
+      .at(-1)!.payload;
+    expect(g1NormalDraw.myDrawnTile?.kind).toBe('4z');
+    expect(calcMinShantenAfterDiscard(g1NormalDraw)).toBe(1);
+
+    // Luck(god) に切り替えると 1シャンテン盤面でも山から有効牌を引き当てて即テンパイ (shanten=0) する
+    g1.emit('data', { kind: 'SECRET_OPTION', luck: 'god' });
+    hostInternals.commitState(iishantenState);
+    guestSent.length = 0;
+    session.discardTile(iishantenState.players[0]!.drawnTile!.id);
+    const g1LuckyDraw = guestSent
+      .filter(
+        (m): m is Extract<HostMessage, { kind: 'STATE_VIEW' }> =>
+          m.kind === 'STATE_VIEW',
+      )
+      .at(-1)!.payload;
+    expect(g1LuckyDraw.myDrawnTile?.kind).not.toBe('4z');
+    expect(calcMinShantenAfterDiscard(g1LuckyDraw)).toBe(0);
+
+    // ホスト側から他プレイヤー（ゲスト1）に対して setSecretLuck('god', guestId) を設定した場合も同様にツモ運が反映される
+    session.clearAllSecretLuck();
+    const guestId = iishantenState.players[1]!.playerId;
+    expect(session.setSecretLuck('god', guestId)).toBe(true);
+    hostInternals.commitState(iishantenState);
+    guestSent.length = 0;
+    session.discardTile(iishantenState.players[0]!.drawnTile!.id);
+    const g1HostBoostedDraw = guestSent
+      .filter(
+        (m): m is Extract<HostMessage, { kind: 'STATE_VIEW' }> =>
+          m.kind === 'STATE_VIEW',
+      )
+      .at(-1)!.payload;
+    expect(g1HostBoostedDraw.myDrawnTile?.kind).not.toBe('4z');
+    expect(calcMinShantenAfterDiscard(g1HostBoostedDraw)).toBe(0);
+
+    session.destroy();
   });
 });

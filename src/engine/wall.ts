@@ -50,11 +50,12 @@ export function sortTiles(tiles: readonly Tile[]): Tile[] {
 export function buildTileDeck(rules: DerivedRules): Tile[] {
   const deck: Tile[] = [];
   for (const kind of rules.allowedTileKinds) {
+    const isFive = kind === '5m' || kind === '5p' || kind === '5s';
     for (let copy = 0; copy < rules.tileSet.copiesPerKind; copy++) {
       deck.push({
         id: `${kind}-${copy}`,
         kind,
-        isRed: false,
+        isRed: isFive && copy < rules.redDoraPerFive,
       });
     }
   }

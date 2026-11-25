@@ -355,6 +355,70 @@ class MahjongSoundEngine {
     });
   }
 
+  /** ロン和了時の重厚な衝撃＋和風ファンファーレ音 */
+  playRon(
+    options: {
+      ronCount?: number;
+      isYakuman?: boolean;
+      isHighHand?: boolean;
+    } = {},
+  ): void {
+    const ronCount = options.ronCount ?? 1;
+    const isHeavy =
+      ronCount >= 2 || Boolean(options.isYakuman) || Boolean(options.isHighHand);
+
+    this.runWithDelay(0, (ctx) => {
+      // 1. 稲妻・斬撃の鋭い衝撃アタック（ドンッ＋バシィッ）
+      this.playTone(ctx, {
+        type: 'sine',
+        freqStart: 138,
+        freqEnd: 42,
+        duration: 0.26,
+        gain: 0.25,
+      });
+      this.playNoiseBurst(ctx, {
+        filterType: 'bandpass',
+        freq: 3300,
+        q: 1.5,
+        duration: 0.085,
+        gain: 0.26,
+      });
+      this.playTone(ctx, {
+        type: 'triangle',
+        freqStart: 1760,
+        freqEnd: 880,
+        duration: 0.09,
+        gain: 0.13,
+      });
+
+      // 2. 決着の力強い和了ファンファーレ和音
+      const baseNotes = isHeavy
+        ? [587.33, 739.99, 880, 1174.66, 1479.98]
+        : [587.33, 783.99, 987.77, 1174.66];
+      baseNotes.forEach((freq, idx) => {
+        const isLast = idx === baseNotes.length - 1;
+        this.playTone(ctx, {
+          type: isLast ? 'triangle' : 'sine',
+          freqStart: freq,
+          startOffset: 0.12 + idx * 0.062,
+          duration: isLast ? 0.56 : 0.22,
+          gain: isLast ? 0.14 : 0.11,
+        });
+      });
+
+      if (ronCount >= 2 || options.isYakuman) {
+        // ダブロン・役満時の厚いオクターブ下支え
+        this.playTone(ctx, {
+          type: 'triangle',
+          freqStart: 293.66,
+          startOffset: 0.18,
+          duration: 0.52,
+          gain: 0.12,
+        });
+      }
+    });
+  }
+
   /** ロン・ツモ和了音 */
   playAgari(isTsumo: boolean): void {
     this.runWithDelay(0, (ctx) => {

@@ -321,6 +321,13 @@ export interface RoomStatusPayload {
   spectatorNames: string[];
 }
 
+export type SecretLuckMode = 'normal' | 'good' | 'god';
+
+export interface SecretStatePayload {
+  peek: boolean;
+  luckByPlayer: Record<string, SecretLuckMode>;
+}
+
 /** クライアント → ホスト（要求のみ送る） */
 export type ClientMessage =
   | {
@@ -335,6 +342,14 @@ export type ClientMessage =
   | {
       kind: 'CHAT';
       text: string;
+    }
+  | {
+      kind: 'SECRET_OPTION';
+      peek?: boolean;
+      luck?: SecretLuckMode;
+      luckTargetPlayerId?: string;
+      clearAllLuck?: boolean;
+      requestSync?: boolean;
     }
   | {
       kind: 'CHECKPOINT_KEY_SHARE';
@@ -401,6 +416,10 @@ export type HostMessage =
   | {
       kind: 'ROOM_STATUS';
       payload: RoomStatusPayload;
+    }
+  | {
+      kind: 'SECRET_STATE';
+      payload: SecretStatePayload;
     }
   | {
       kind: 'ERROR';

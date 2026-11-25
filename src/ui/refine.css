@@ -508,8 +508,14 @@
 }
 
 .table-felt.is-landscape .call-action-bar {
-  border-color: rgba(240, 201, 92, 0.55);
-  border-radius: 12px;
+  border-width: 1.5px;
+  border-color: rgba(255, 214, 104, 0.78);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(16, 26, 48, 0.94) 0%, rgba(8, 14, 28, 0.95) 100%);
+  box-shadow:
+    0 12px 28px rgba(0, 0, 0, 0.68),
+    0 0 22px rgba(255, 208, 92, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.16);
 }
 
 .table-felt.is-landscape .self-action-bar {
@@ -667,6 +673,31 @@
 
 .btn-ron {
   background: linear-gradient(180deg, #df3d38 0%, #a2221f 100%);
+}
+
+.btn-call.btn-call-choice,
+.btn-ron.btn-call-choice {
+  border-radius: 12px;
+}
+
+.btn-call.btn-call-pon {
+  background: linear-gradient(180deg, #ea8a1a 0%, #b35705 100%);
+  border-color: #ffd072;
+}
+
+.btn-call.btn-call-chi {
+  background: linear-gradient(180deg, #1ea38d 0%, #0f6659 100%);
+  border-color: #72f4dc;
+}
+
+.btn-call.btn-call-kan {
+  background: linear-gradient(180deg, #4075ea 0%, #224aa8 100%);
+  border-color: #97beff;
+}
+
+.btn-ron.btn-call-ron {
+  background: linear-gradient(180deg, #ea3d36 0%, #9f1714 100%);
+  border-color: #ffd46c;
 }
 
 /* ---------- ロビー ---------- */
@@ -949,8 +980,21 @@
   .lobby-chat-toast,
   .overlay-backdrop-modal.is-agari-flash,
   .overlay-backdrop-modal.is-agari-flash > .round-end-panel,
+  .overlay-backdrop-modal.is-ron-cutin-done > .round-end-panel,
+  .table-felt.is-ron-shake,
+  .discard-river > .mj-tile.mj-tile-ron-target,
+  .ron-flash-veil,
+  .ron-speedlines,
+  .ron-slash-beam,
+  .ron-cutin-banner,
+  .ron-cutin-word,
+  .ron-cutin-tile-spot,
+  .ron-cutin-tile-ring,
+  .ron-cutin-meta,
   .mj-tile-dora-aura,
-  .mj-tile-dora-sheen::before {
+  .mj-tile-dora-sheen::before,
+  .table-felt.is-landscape .call-action-bar,
+  .discard-river > .mj-tile.mj-tile-call-target {
     animation: none;
   }
 }
@@ -1397,5 +1441,28 @@
   color: #ffea85;
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.98), 0 0 10px rgba(255, 218, 92, 0.7);
 }
+
+/* ---------- チャットUI 洗練 ---------- */
+.table-chat-panel {
+  max-height: min(86dvh, 560px);
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-messages-list {
+  flex: 1 1 auto;
+  min-height: 110px;
+}
+
+@media (max-height: 440px) {
+  .table-chat-panel {
+    max-height: 92dvh;
+  }
+
+  .chat-messages-list {
+    min-height: 72px;
+  }
+}
+
 
 

@@ -1226,4 +1226,373 @@ describe('アプリ起動とローカルCPU対局', () => {
         .getAttribute('aria-checked'),
     ).toBe('true');
   });
+
+  it('ルーム詳細設定で赤ドラ・切り上げ満貫・初期点等を変更して開始でき、//cheat で裏設定画面が開き /peek・/luck コマンドは廃止されている', async () => {
+    localStorage.clear();
+
+    bootApp();
+    await loadMain();
+
+    const root = document.getElementById('app') as HTMLElement;
+
+    // 入口の詳細設定から初期持ち点50000・赤ドラ全5・切り上げ満貫などを設定してCPU対局を開始
+    const setAdv = (key: string, val: string) => {
+      const sel = root.querySelector<HTMLSelectElement>(
+        `select[data-adv-setting="${key}"]`,
+      )!;
+      expect(sel).not.toBeNull();
+      sel.value = val;
+      sel.dispatchEvent(new Event('change'));
+    };
+    setAdv('adv-red-dora', '4');
+    setAdv('adv-kiriage-mangan', 'true');
+    setAdv('adv-kazoe-yakuman', 'false');
+    setAdv('adv-double-wind-fu', '2');
+    setAdv('initialPoints', '50000');
+    setAdv('notenPenaltyTotal', '0');
+    setAdv('adv-response-timeout', '0');
+    setAdv('adv-max-kans', '8');
+
+    expect(clickByText(root, 'button', 'CPU対局をはじめる')).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    // 持ち点50,000点が反映されている
+    const scoreVals = Array.from(
+      root.querySelectorAll<HTMLElement>('.console-score-val'),
+    ).map((n) => n.textContent?.trim());
+    expect(scoreVals).toEqual(['50000', '50000', '50000', '50000']);
+
+    const submitViaChat = (text: string) => {
+      if (!root.querySelector('.table-chat-modal')) {
+        root.querySelector<HTMLButtonElement>('.table-chrome-chat')!.click();
+      }
+      const modal = root.querySelector<HTMLElement>('.table-chat-modal')!;
+      expect(modal).not.toBeNull();
+      expect(modal.querySelector('.chat-help-btn')).toBeNull();
+      expect(modal.querySelector('.chat-cmd-suggestions')).toBeNull();
+      // チャットモーダルに //cheat のヒント文言を出さない
+      expect(modal.textContent).not.toContain('//cheat');
+      const input = modal.querySelector<HTMLInputElement>('.chat-input')!;
+      const form = modal.querySelector<HTMLFormElement>('.chat-input-row')!;
+      input.value = text;
+      input.dispatchEvent(new Event('input'));
+      form.dispatchEvent(new Event('submit', { cancelable: true }));
+    };
+
+    // 廃止された /peek on・/luck god・/red on・通常発言はコマンド実行されず、そのまま通常チャットとして送信される
+    submitViaChat('/peek on');
+    expect(root.querySelector('.table-cheat-modal')).toBeNull();
+    expect(root.querySelectorAll('.opponent-hand.is-revealed')).toHaveLength(0);
+
+    submitViaChat('/luck god');
+    expect(root.querySelector('.table-cheat-modal')).toBeNull();
+
+    submitViaChat('/red on');
+    submitViaChat('よろしく！');
+    {
+      const modal = root.querySelector<HTMLElement>('.table-chat-modal')!;
+      const items = Array.from(modal.querySelectorAll('.chat-message-item')).map(
+        (el) => el.textContent ?? '',
+      );
+      expect(items.some((t) => t.includes('/peek on'))).toBe(true);
+      expect(items.some((t) => t.includes('/luck god'))).toBe(true);
+      expect(items.some((t) => t.includes('/red on'))).toBe(true);
+      expect(items.some((t) => t.includes('よろしく！'))).toBe(true);
+      modal.querySelector<HTMLButtonElement>('.table-modal-close-btn')!.click();
+    }
+
+    // //cheat を送信するとチャット履歴には残らず、裏設定モーダルが開く
+    submitViaChat('//cheat');
+    expect(root.querySelector('.table-chat-modal')).toBeNull();
+    let cheatModal = root.querySelector<HTMLElement>('.table-cheat-modal')!;
+    expect(cheatModal).not.toBeNull();
+
+    // 相手手牌の透視スイッチを ON にすると相手3人の手牌が即座に公開表示される
+    const peekSwitch = cheatModal.querySelector<HTMLButtonElement>(
+      'button[aria-label="相手手牌の透視"]',
+    )!;
+    expect(peekSwitch.getAttribute('aria-checked')).toBe('false');
+    peekSwitch.click();
+    const revealedHands = root.querySelectorAll('.opponent-hand.is-revealed');
+    expect(revealedHands).toHaveLength(3);
+    for (const el of Array.from(revealedHands)) {
+      const count = el.querySelectorAll('.mj-tile:not(.mj-tile-back)').length;
+      expect(count).toBeGreaterThanOrEqual(13);
+      expect(count).toBeLessThanOrEqual(14);
+    }
+
+    // プレイヤー別の配牌・ツモ運行が4人分表示されており、自分(豪運)と他プレイヤー/CPU(好運)を個別に設定できる
+    cheatModal = root.querySelector<HTMLElement>('.table-cheat-modal')!;
+    const playerRows = Array.from(
+      cheatModal.querySelectorAll<HTMLElement>('.cheat-luck-player-row'),
+    );
+    expect(playerRows).toHaveLength(4);
+    const selfPlayerId = playerRows[0]!.dataset.cheatPlayerId!;
+    const otherPlayerId = playerRows[1]!.dataset.cheatPlayerId!;
+
+    cheatModal
+      .querySelector<HTMLButtonElement>(
+        `button[data-luck-mode="god"][data-target-player-id="${selfPlayerId}"]`,
+      )!
+      .click();
+    root
+      .querySelector<HTMLButtonElement>(
+        `.table-cheat-modal button[data-luck-mode="good"][data-target-player-id="${otherPlayerId}"]`,
+      )!
+      .click();
+
+    expect(
+      root
+        .querySelector(
+          `.table-cheat-modal button[data-luck-mode="god"][data-target-player-id="${selfPlayerId}"]`,
+        )!
+        .classList.contains('is-active'),
+    ).toBe(true);
+    expect(
+      root
+        .querySelector(
+          `.table-cheat-modal button[data-luck-mode="good"][data-target-player-id="${otherPlayerId}"]`,
+        )!
+        .classList.contains('is-active'),
+    ).toBe(true);
+
+    root
+      .querySelector<HTMLButtonElement>('.table-cheat-modal .table-modal-close-btn')!
+      .click();
+    expect(root.querySelector('.table-cheat-modal')).toBeNull();
+
+    // もう一度チャットから //cheat で開くと ON / 自分豪運 / 他プレイヤー好運 の設定が保持されており、
+    // 「全員通常」で一括リセットできること・透視OFFで解除されることも確認する
+    submitViaChat('//cheat');
+    cheatModal = root.querySelector<HTMLElement>('.table-cheat-modal')!;
+    expect(cheatModal).not.toBeNull();
+    expect(
+      cheatModal
+        .querySelector<HTMLButtonElement>('button[aria-label="相手手牌の透視"]')!
+        .getAttribute('aria-checked'),
+    ).toBe('true');
+    expect(
+      cheatModal
+        .querySelector<HTMLButtonElement>(
+          `button[data-luck-mode="god"][data-target-player-id="${selfPlayerId}"]`,
+        )!
+        .classList.contains('is-active'),
+    ).toBe(true);
+    expect(
+      cheatModal
+        .querySelector<HTMLButtonElement>(
+          `button[data-luck-mode="good"][data-target-player-id="${otherPlayerId}"]`,
+        )!
+        .classList.contains('is-active'),
+    ).toBe(true);
+
+    cheatModal
+      .querySelector<HTMLButtonElement>('.cheat-luck-reset-btn')!
+      .click();
+    expect(
+      root
+        .querySelector(
+          `.table-cheat-modal button[data-luck-mode="normal"][data-target-player-id="${selfPlayerId}"]`,
+        )!
+        .classList.contains('is-active'),
+    ).toBe(true);
+    expect(
+      root
+        .querySelector(
+          `.table-cheat-modal button[data-luck-mode="normal"][data-target-player-id="${otherPlayerId}"]`,
+        )!
+        .classList.contains('is-active'),
+    ).toBe(true);
+
+    root
+      .querySelector<HTMLButtonElement>(
+        '.table-cheat-modal button[aria-label="相手手牌の透視"]',
+      )!
+      .click();
+    expect(root.querySelectorAll('.opponent-hand.is-revealed')).toHaveLength(0);
+
+    // チャット履歴に //cheat 文字列が残っていないことも確認する
+    root
+      .querySelector<HTMLButtonElement>('.table-cheat-modal .table-modal-close-btn')!
+      .click();
+    root.querySelector<HTMLButtonElement>('.table-chrome-chat')!.click();
+    const chatText =
+      root.querySelector<HTMLElement>('.table-chat-modal .chat-messages-list')!
+        .textContent ?? '';
+    expect(chatText).not.toContain('//cheat');
+  });
+
+  it('オンライン参加クライアント(ClientSession)および待機ロビーでも //cheat で裏設定画面から自他の Peek/Luck を設定・同期でき、観戦時は無効化される', async () => {
+    vi.resetModules();
+    const { createInitialGameState, reduce } = await import('../../engine/reducer');
+    const { deriveRules } = await import('../../engine/rules');
+    const { toStateView } = await import('../../engine/projection');
+    const { buildSeededTestDeck } = await import('../../engine/__tests__/testHelpers');
+
+    const ruleConfig = { playerCount: 4 as const, gameLength: 'tonpuu' as const };
+    const rules = deriveRules(ruleConfig);
+    let lobbyState = createInitialGameState({
+      roomCode: 'NET001',
+      hostPlayerId: 'p0',
+      hostName: 'ホスト',
+      ruleConfig,
+    });
+    for (let i = 1; i < 4; i++) {
+      lobbyState = reduce(lobbyState, {
+        type: 'JOIN_PLAYER',
+        playerId: `p${i}`,
+        name: `P${i}`,
+      });
+    }
+    const lobbyGuestView = toStateView(lobbyState, 'p1', 0);
+    const playingState = reduce(lobbyState, {
+      type: 'START_GAME',
+      shuffledDeck: buildSeededTestDeck(rules, 777),
+    });
+    const playingGuestView = toStateView(playingState, 'p1', 0);
+    const playingWithSpectator = {
+      ...playingState,
+      spectators: [
+        { spectatorId: 'spec-1', name: '観戦者', joinedAt: 1, connected: true },
+      ],
+    };
+    const playingSpectatorView = toStateView(playingWithSpectator, 'spec-1', 0);
+
+    const secretCalls: Array<Record<string, unknown>> = [];
+    let emitClientView: ((v: typeof lobbyGuestView) => void) | null = null;
+    let emitSecretState:
+      | ((s: { peek: boolean; luckByPlayer: Record<string, string> }) => void)
+      | null = null;
+
+    vi.doMock('../../net/client', () => {
+      class MockClientSession {
+        private readonly cb: Record<string, (...args: any[]) => void>;
+        constructor(
+          _roomCode: string,
+          _name: string,
+          callbacks: Record<string, (...args: any[]) => void>,
+        ) {
+          this.cb = callbacks;
+          emitClientView = (v) => this.cb.onViewChange?.(v);
+          emitSecretState = (s) => this.cb.onSecretState?.(s);
+        }
+        connect() {
+          this.cb.onStatusChange?.('connected');
+          this.cb.onViewChange?.(lobbyGuestView);
+        }
+        sendChat() {
+          return true;
+        }
+        setSecretOption(opts: Record<string, unknown>) {
+          secretCalls.push(opts);
+          return true;
+        }
+        destroy() {}
+      }
+      return { ClientSession: MockClientSession };
+    });
+
+    try {
+      document.body.innerHTML = '<div id="app"></div>';
+      await loadMain();
+      const root = document.getElementById('app') as HTMLElement;
+
+      // ルームに参加してゲスト待機ロビーに入る
+      const codeInput = root.querySelector<HTMLInputElement>('#room-code-input')!;
+      codeInput.value = 'NET001';
+      codeInput.dispatchEvent(new Event('input'));
+      expect(clickByText(root, 'button', '参加する')).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      // 待機ロビーのチャットから //cheat で裏設定画面を開き、同期要求と他プレイヤーへの設定ができる
+      root.querySelector<HTMLButtonElement>('.waiting-room-chat-btn')!.click();
+      let chatModal = root.querySelector<HTMLElement>('.table-chat-modal')!;
+      let chatInput = chatModal.querySelector<HTMLInputElement>('.chat-input')!;
+      let chatForm = chatModal.querySelector<HTMLFormElement>('.chat-input-row')!;
+      chatInput.value = '//cheat';
+      chatInput.dispatchEvent(new Event('input'));
+      chatForm.dispatchEvent(new Event('submit', { cancelable: true }));
+
+      let cheatModal = root.querySelector<HTMLElement>('.table-cheat-modal')!;
+      expect(cheatModal).not.toBeNull();
+      expect(secretCalls).toEqual([{ requestSync: true }]);
+
+      // ホストから既存設定（p0 が good）が同期されると表示へ即反映される
+      emitSecretState!({
+        peek: false,
+        luckByPlayer: { p0: 'good', p1: 'normal', p2: 'normal', p3: 'normal' },
+      });
+      expect(
+        root
+          .querySelector(
+            '.table-cheat-modal button[data-luck-mode="good"][data-target-player-id="p0"]',
+          )!
+          .classList.contains('is-active'),
+      ).toBe(true);
+
+      // 自分(p1)と他プレイヤー(p2)の luck をそれぞれ設定できる
+      root
+        .querySelector<HTMLButtonElement>(
+          '.table-cheat-modal button[data-luck-mode="good"][data-target-player-id="p1"]',
+        )!
+        .click();
+      root
+        .querySelector<HTMLButtonElement>(
+          '.table-cheat-modal button[data-luck-mode="god"][data-target-player-id="p2"]',
+        )!
+        .click();
+      expect(secretCalls).toEqual([
+        { requestSync: true },
+        { luck: 'good', luckTargetPlayerId: 'p1' },
+        { luck: 'god', luckTargetPlayerId: 'p2' },
+      ]);
+
+      // 対局中画面へ遷移後、再度 //cheat を開いて Peek ON + 全員通常リセットを送信できる
+      emitClientView!(playingGuestView);
+      expect(root.querySelector('.table-cheat-modal')).toBeNull();
+
+      root.querySelector<HTMLButtonElement>('.table-chrome-chat')!.click();
+      chatModal = root.querySelector<HTMLElement>('.table-chat-modal')!;
+      chatInput = chatModal.querySelector<HTMLInputElement>('.chat-input')!;
+      chatForm = chatModal.querySelector<HTMLFormElement>('.chat-input-row')!;
+      chatInput.value = '／／cheat';
+      chatInput.dispatchEvent(new Event('input'));
+      chatForm.dispatchEvent(new Event('submit', { cancelable: true }));
+
+      cheatModal = root.querySelector<HTMLElement>('.table-cheat-modal')!;
+      cheatModal
+        .querySelector<HTMLButtonElement>('button[aria-label="相手手牌の透視"]')!
+        .click();
+      root
+        .querySelector<HTMLButtonElement>('.table-cheat-modal .cheat-luck-reset-btn')!
+        .click();
+      expect(secretCalls).toEqual([
+        { requestSync: true },
+        { luck: 'good', luckTargetPlayerId: 'p1' },
+        { luck: 'god', luckTargetPlayerId: 'p2' },
+        { requestSync: true },
+        { peek: true },
+        { clearAllLuck: true },
+      ]);
+
+      // 観戦者ビューでは操作ボタンが無効化され、注意メッセージが表示される
+      emitClientView!(playingSpectatorView);
+      const specCheatModal = root.querySelector<HTMLElement>('.table-cheat-modal')!;
+      expect(specCheatModal.querySelector('.cheat-spectator-note')).not.toBeNull();
+      expect(
+        specCheatModal.querySelector<HTMLButtonElement>(
+          'button[aria-label="相手手牌の透視"]',
+        )!.disabled,
+      ).toBe(true);
+      expect(
+        specCheatModal.querySelector<HTMLButtonElement>(
+          'button[data-luck-mode="god"][data-target-player-id="p2"]',
+        )!.disabled,
+      ).toBe(true);
+    } finally {
+      window.dispatchEvent(new Event('beforeunload'));
+      vi.doUnmock('../../net/client');
+      vi.resetModules();
+    }
+  });
 });

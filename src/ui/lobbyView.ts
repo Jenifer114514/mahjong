@@ -71,6 +71,358 @@ export interface LobbyFormState {
   cpuCount: number;
   /** CPU の強さ（既定: 'normal'） */
   cpuLevel?: CpuLevel;
+  /** 赤ドラ枚数（5牌あたり: 0=なし, 1=各1枚, 4=全5赤） */
+  redDoraPerFive?: 0 | 1 | 4;
+  /** 切り上げ満貫 */
+  kiriageMangan?: boolean;
+  /** 数え役満 */
+  allowKazoeYakuman?: boolean;
+  /** 連風牌アタマの符 (2 | 4) */
+  doubleWindPairFu?: 2 | 4;
+  /** 初期持ち点カスタム（undefined で人数ごとの標準） */
+  initialPoints?: number;
+  /** 流局時ノーテン罰符合計 */
+  notenPenaltyTotal?: number;
+  /** 鳴き応答制限時間(ms、0で無制限) */
+  responseTimeoutMs?: number;
+  /** 1局の最大カン回数 */
+  maxKansPerRound?: number;
+}
+
+const ADVANCED_DETAILS_OPEN_BY_CONTAINER = new WeakMap<HTMLElement, boolean>();
+
+const INITIAL_POINTS_PRESETS = [10000, 20000, 25000, 30000, 35000, 50000, 100000] as const;
+const NOTEN_PENALTY_PRESETS = [0, 1500, 3000, 6000, 12000] as const;
+const TIMEOUT_PRESETS_MS = [5000, 10000, 15000, 30000, 60000, 0] as const;
+const MAX_KAN_PRESETS = [1, 2, 4, 8, 12, 16] as const;
+
+interface AdvancedRuleValues {
+  playerCount: PlayerCount;
+  redDoraPerFive: 0 | 1 | 4;
+  kiriageMangan: boolean;
+  allowKazoeYakuman: boolean;
+  doubleWindPairFu: 2 | 4;
+  initialPoints: number | undefined;
+  notenPenaltyTotal: number;
+  responseTimeoutMs: number;
+  maxKansPerRound: number;
+}
+
+function createAdvancedRuleDetails(params: {
+  containerKey?: HTMLElement;
+  values: AdvancedRuleValues;
+  onPatch: (patch: Partial<RuleConfig>) => void;
+}): HTMLDetailsElement {
+  const { containerKey, values, onPatch } = params;
+  const details = document.createElement('details');
+  details.className = 'lobby-advanced-details';
+  if (containerKey && ADVANCED_DETAILS_OPEN_BY_CONTAINER.get(containerKey)) {
+    details.open = true;
+  }
+  details.addEventListener('toggle', () => {
+    if (containerKey) {
+      ADVANCED_DETAILS_OPEN_BY_CONTAINER.set(containerKey, details.open);
+    }
+  });
+
+  const summary = document.createElement('summary');
+  summary.className = 'lobby-advanced-summary';
+  summary.textContent = '詳細設定';
+
+  const grid = document.createElement('div');
+  grid.className = 'advanced-setting-grid';
+
+  const addSelectRow = (
+    id: string,
+    labelText: string,
+    options: Array<{ value: string; label: string }>,
+    currentValue: string,
+    onChange: (val: string) => void,
+  ) => {
+    const row = document.createElement('div');
+    row.className = 'advanced-setting-row';
+    const lbl = document.createElement('label');
+    lbl.htmlFor = id;
+    lbl.textContent = labelText;
+    const select = document.createElement('select');
+    select.id = id;
+    select.className = 'advanced-select';
+    select.dataset.advSetting = id;
+    for (const opt of options) {
+      const o = document.createElement('option');
+      o.value = opt.value;
+      o.textContent = opt.label;
+      select.appendChild(o);
+    }
+    select.value = currentValue;
+    select.addEventListener('change', () => onChange(select.value));
+    row.append(lbl, select);
+    grid.appendChild(row);
+    return { row, select };
+  };
+
+  // 1. 赤ドラ
+  addSelectRow(
+    'adv-red-dora',
+    '赤ドラ',
+    [
+      { value: '0', label: 'なし（標準）' },
+      { value: '1', label: 'あり（各5に1枚）' },
+      { value: '4', label: '全5が赤ドラ' },
+    ],
+    String(values.redDoraPerFive),
+    (val) => {
+      const next: 0 | 1 | 4 = val === '4' ? 4 : val === '1' ? 1 : 0;
+      onPatch({ redDoraPerFive: next });
+    },
+  );
+
+  // 2. 切り上げ満貫
+  addSelectRow(
+    'adv-kiriage-mangan',
+    '切り上げ満貫',
+    [
+      { value: 'false', label: 'なし（標準）' },
+      { value: 'true', label: 'あり（4翻30符・3翻60符→満貫）' },
+    ],
+    String(values.kiriageMangan),
+    (val) => onPatch({ kiriageMangan: val === 'true' }),
+  );
+
+  // 3. 数え役満
+  addSelectRow(
+    'adv-kazoe-yakuman',
+    '数え役満',
+    [
+      { value: 'true', label: 'あり（13翻〜・標準）' },
+      { value: 'false', label: 'なし（上限三倍満）' },
+    ],
+    String(values.allowKazoeYakuman),
+    (val) => onPatch({ allowKazoeYakuman: val === 'true' }),
+  );
+
+  // 4. 連風牌アタマの符
+  addSelectRow(
+    'adv-double-wind-fu',
+    '連風牌アタマの符',
+    [
+      { value: '4', label: '4符（標準）' },
+      { value: '2', label: '2符' },
+    ],
+    String(values.doubleWindPairFu),
+    (val) => onPatch({ doubleWindPairFu: val === '2' ? 2 : 4 }),
+  );
+
+  // 5. 初期持ち点
+  {
+    const curPoints = values.initialPoints;
+    const isDefault = curPoints === undefined;
+    const isPreset =
+      curPoints !== undefined &&
+      (INITIAL_POINTS_PRESETS as readonly number[]).includes(curPoints);
+    const selectVal = isDefault ? 'default' : isPreset ? String(curPoints) : 'custom';
+
+    const row = document.createElement('div');
+    row.className = 'advanced-setting-row';
+    const lbl = document.createElement('label');
+    lbl.htmlFor = 'adv-initial-points';
+    lbl.textContent = '初期持ち点';
+
+    const control = document.createElement('div');
+    control.className = 'advanced-inline-control';
+
+    const select = document.createElement('select');
+    select.id = 'adv-initial-points';
+    select.className = 'advanced-select';
+    select.dataset.advSetting = 'initialPoints';
+
+    const stdLabel =
+      values.playerCount === 3 ? '標準（35,000点）' : '標準（25,000点）';
+    const opts = [
+      { value: 'default', label: stdLabel },
+      ...INITIAL_POINTS_PRESETS.map((n) => ({
+        value: String(n),
+        label: `${n.toLocaleString()}点`,
+      })),
+      { value: 'custom', label: 'カスタム入力' },
+    ];
+    for (const opt of opts) {
+      const o = document.createElement('option');
+      o.value = opt.value;
+      o.textContent = opt.label;
+      select.appendChild(o);
+    }
+    select.value = selectVal;
+
+    const numInput = document.createElement('input');
+    numInput.type = 'number';
+    numInput.className = 'text-input advanced-number-input';
+    numInput.min = '1000';
+    numInput.max = '1000000';
+    numInput.step = '100';
+    numInput.dataset.advSetting = 'initialPointsCustom';
+    numInput.value = String(curPoints ?? (values.playerCount === 3 ? 35000 : 25000));
+    numInput.hidden = selectVal !== 'custom';
+
+    select.addEventListener('change', () => {
+      if (select.value === 'default') {
+        numInput.hidden = true;
+        onPatch({ initialPoints: undefined });
+      } else if (select.value === 'custom') {
+        numInput.hidden = false;
+        const parsed = Math.max(
+          1000,
+          Math.min(1000000, Math.round((Number(numInput.value) || 25000) / 100) * 100),
+        );
+        numInput.value = String(parsed);
+        onPatch({ initialPoints: parsed });
+      } else {
+        numInput.hidden = true;
+        onPatch({ initialPoints: Number(select.value) });
+      }
+    });
+
+    numInput.addEventListener('change', () => {
+      const raw = Number(numInput.value);
+      if (!Number.isFinite(raw)) return;
+      const clamped = Math.max(
+        1000,
+        Math.min(1000000, Math.round(raw / 100) * 100),
+      );
+      numInput.value = String(clamped);
+      onPatch({ initialPoints: clamped });
+    });
+
+    control.append(select, numInput);
+    row.append(lbl, control);
+    grid.appendChild(row);
+  }
+
+  // 6. ノーテン罰符（合計）
+  {
+    const curNoten = values.notenPenaltyTotal;
+    const isPreset = (NOTEN_PENALTY_PRESETS as readonly number[]).includes(curNoten);
+    const selectVal = isPreset ? String(curNoten) : 'custom';
+
+    const row = document.createElement('div');
+    row.className = 'advanced-setting-row';
+    const lbl = document.createElement('label');
+    lbl.htmlFor = 'adv-noten-penalty';
+    lbl.textContent = 'ノーテン罰符（合計）';
+
+    const control = document.createElement('div');
+    control.className = 'advanced-inline-control';
+
+    const select = document.createElement('select');
+    select.id = 'adv-noten-penalty';
+    select.className = 'advanced-select';
+    select.dataset.advSetting = 'notenPenaltyTotal';
+    const opts = [
+      ...NOTEN_PENALTY_PRESETS.map((n) => ({
+        value: String(n),
+        label:
+          n === 3000
+            ? '3,000点（標準）'
+            : n === 0
+              ? '0点（罰符なし）'
+              : `${n.toLocaleString()}点`,
+      })),
+      { value: 'custom', label: 'カスタム入力' },
+    ];
+    for (const opt of opts) {
+      const o = document.createElement('option');
+      o.value = opt.value;
+      o.textContent = opt.label;
+      select.appendChild(o);
+    }
+    select.value = selectVal;
+
+    const numInput = document.createElement('input');
+    numInput.type = 'number';
+    numInput.className = 'text-input advanced-number-input';
+    numInput.min = '0';
+    numInput.max = '12000';
+    numInput.step = '100';
+    numInput.dataset.advSetting = 'notenPenaltyTotalCustom';
+    numInput.value = String(curNoten);
+    numInput.hidden = selectVal !== 'custom';
+
+    select.addEventListener('change', () => {
+      if (select.value === 'custom') {
+        numInput.hidden = false;
+        const parsed = Math.max(
+          0,
+          Math.min(12000, Math.round((Number(numInput.value) || 0) / 100) * 100),
+        );
+        numInput.value = String(parsed);
+        onPatch({ notenPenaltyTotal: parsed });
+      } else {
+        numInput.hidden = true;
+        onPatch({ notenPenaltyTotal: Number(select.value) });
+      }
+    });
+
+    numInput.addEventListener('change', () => {
+      const raw = Number(numInput.value);
+      if (!Number.isFinite(raw)) return;
+      const clamped = Math.max(0, Math.min(12000, Math.round(raw / 100) * 100));
+      numInput.value = String(clamped);
+      onPatch({ notenPenaltyTotal: clamped });
+    });
+
+    control.append(select, numInput);
+    row.append(lbl, control);
+    grid.appendChild(row);
+  }
+
+  // 7. 鳴き制限時間
+  {
+    const timeoutOpts = TIMEOUT_PRESETS_MS.map((ms) => ({
+      value: String(ms),
+      label:
+        ms === 0
+          ? '無制限'
+          : ms === 15000
+            ? '15秒（標準）'
+            : `${Math.round(ms / 1000)}秒`,
+    }));
+    const currentStr = String(values.responseTimeoutMs);
+    if (!timeoutOpts.some((o) => o.value === currentStr)) {
+      timeoutOpts.unshift({
+        value: currentStr,
+        label: `${Math.round(values.responseTimeoutMs / 1000)}秒`,
+      });
+    }
+    addSelectRow(
+      'adv-response-timeout',
+      '鳴き制限時間',
+      timeoutOpts,
+      currentStr,
+      (val) => onPatch({ responseTimeoutMs: Number(val) }),
+    );
+  }
+
+  // 8. 1局のカン上限
+  {
+    const kanOpts = MAX_KAN_PRESETS.map((n) => ({
+      value: String(n),
+      label: n === 4 ? '4回（標準）' : `${n}回`,
+    }));
+    const currentStr = String(values.maxKansPerRound);
+    if (!kanOpts.some((o) => o.value === currentStr)) {
+      kanOpts.unshift({ value: currentStr, label: `${currentStr}回` });
+    }
+    addSelectRow(
+      'adv-max-kans',
+      '1局のカン上限',
+      kanOpts,
+      currentStr,
+      (val) => onPatch({ maxKansPerRound: Number(val) }),
+    );
+  }
+
+  details.append(summary, grid);
+  return details;
 }
 
 function createOnOffToggleField(params: {
@@ -437,6 +789,89 @@ export function renderLobbyEntry(
     allowAtozuke: formState.allowAtozuke,
     honbaBonus: formState.honbaBonus,
     cpuLevel: formState.cpuLevel ?? DEFAULT_CPU_LEVEL,
+    ...(formState.redDoraPerFive !== undefined
+      ? { redDoraPerFive: formState.redDoraPerFive }
+      : {}),
+    ...(formState.kiriageMangan !== undefined
+      ? { kiriageMangan: formState.kiriageMangan }
+      : {}),
+    ...(formState.allowKazoeYakuman !== undefined
+      ? { allowKazoeYakuman: formState.allowKazoeYakuman }
+      : {}),
+    ...(formState.doubleWindPairFu !== undefined
+      ? { doubleWindPairFu: formState.doubleWindPairFu }
+      : {}),
+    ...(formState.initialPoints !== undefined
+      ? { initialPoints: formState.initialPoints }
+      : {}),
+    ...(formState.notenPenaltyTotal !== undefined
+      ? { notenPenaltyTotal: formState.notenPenaltyTotal }
+      : {}),
+    ...(formState.responseTimeoutMs !== undefined
+      ? { responseTimeoutMs: formState.responseTimeoutMs }
+      : {}),
+    ...(formState.maxKansPerRound !== undefined
+      ? { maxKansPerRound: formState.maxKansPerRound }
+      : {}),
+  });
+
+  const entryAdvancedSlot = document.createElement('div');
+  entryAdvancedSlot.className = 'lobby-entry-advanced-slot';
+  const renderEntryAdvanced = () => {
+    const prevDetails = entryAdvancedSlot.querySelector<HTMLDetailsElement>(
+      '.lobby-advanced-details',
+    );
+    const wasOpen = prevDetails?.open ?? false;
+    entryAdvancedSlot.innerHTML = '';
+    const details = createAdvancedRuleDetails({
+      values: {
+        playerCount: formState.playerCount,
+        redDoraPerFive: formState.redDoraPerFive ?? 0,
+        kiriageMangan: formState.kiriageMangan ?? false,
+        allowKazoeYakuman: formState.allowKazoeYakuman ?? true,
+        doubleWindPairFu: formState.doubleWindPairFu ?? 4,
+        initialPoints: formState.initialPoints,
+        notenPenaltyTotal: formState.notenPenaltyTotal ?? 3000,
+        responseTimeoutMs: formState.responseTimeoutMs ?? 15000,
+        maxKansPerRound: formState.maxKansPerRound ?? 4,
+      },
+      onPatch: (patch) => {
+        if ('redDoraPerFive' in patch) {
+          formState.redDoraPerFive = patch.redDoraPerFive;
+        }
+        if ('kiriageMangan' in patch) {
+          formState.kiriageMangan = patch.kiriageMangan;
+        }
+        if ('allowKazoeYakuman' in patch) {
+          formState.allowKazoeYakuman = patch.allowKazoeYakuman;
+        }
+        if ('doubleWindPairFu' in patch) {
+          formState.doubleWindPairFu = patch.doubleWindPairFu;
+        }
+        if ('initialPoints' in patch) {
+          formState.initialPoints = patch.initialPoints;
+        }
+        if ('notenPenaltyTotal' in patch) {
+          formState.notenPenaltyTotal = patch.notenPenaltyTotal;
+        }
+        if ('responseTimeoutMs' in patch) {
+          formState.responseTimeoutMs = patch.responseTimeoutMs;
+        }
+        if ('maxKansPerRound' in patch) {
+          formState.maxKansPerRound = patch.maxKansPerRound;
+        }
+      },
+    });
+    if (wasOpen) {
+      details.open = true;
+    }
+    entryAdvancedSlot.appendChild(details);
+  };
+  renderEntryAdvanced();
+
+  // 人数切替時に初期持ち点「標準」ラベルも連動更新する
+  countSeg.addEventListener('click', () => {
+    renderEntryAdvanced();
   });
 
   const createBtn = document.createElement('button');
@@ -449,7 +884,7 @@ export function renderLobbyEntry(
     handlers.onCreateRoom(formState.playerName, buildBaseRuleConfig(), 0);
   });
 
-  createCard.append(countField, lengthField, createBtn);
+  createCard.append(countField, lengthField, entryAdvancedSlot, createBtn);
 
   // Local (CPU only) game card
   const localCard = document.createElement('div');
@@ -644,6 +1079,12 @@ export function renderWaitingRoom(
   const ruleSummary = document.createElement('div');
   ruleSummary.className = 'hub-sub';
   const lengthLabel = view.ruleConfig.gameLength === 'tonpuu' ? '東風戦' : '半荘戦';
+  const redDoraLabel =
+    rules.redDoraPerFive === 4
+      ? '赤ドラ全5'
+      : rules.redDoraPerFive === 1
+        ? '赤ドラあり'
+        : '赤ドラなし';
   const localDetails = [
     `トビ:${rules.tobi ? 'ON' : 'OFF'}`,
     `喰いタン:${rules.allowKuitan ? 'ON' : 'OFF'}`,
@@ -652,11 +1093,23 @@ export function renderWaitingRoom(
     `ダブロン:${rules.doubleRon ? 'ON' : 'OFF(頭ハネ)'}`,
     `喰い替え禁止:${rules.forbidKuikae ? 'ON' : 'OFF'}`,
     `CPUやさしめ:${rules.cpuLevel === 'easy' ? 'ON' : 'OFF'}`,
+    ...(rules.kiriageMangan ? ['切り上げ満貫:ON'] : []),
+    ...(!rules.allowKazoeYakuman ? ['数え役満:OFF'] : []),
+    ...(rules.doubleWindPairFu !== 4 ? [`連風牌:${rules.doubleWindPairFu}符`] : []),
+    ...(rules.notenPenaltyTotal !== 3000
+      ? [`ノーテン罰符:${rules.notenPenaltyTotal.toLocaleString()}点`]
+      : []),
+    ...(rules.responseTimeoutMs !== 15000
+      ? [
+          `鳴き時間:${rules.responseTimeoutMs === 0 ? '無制限' : `${Math.round(rules.responseTimeoutMs / 1000)}秒`}`,
+        ]
+      : []),
+    ...(rules.maxKansPerRound !== 4 ? [`カン上限:${rules.maxKansPerRound}回`] : []),
     ...(rules.playerCount === 3
       ? [`ツモ損:${rules.tsumoLoss ? 'ON' : 'OFF'}`]
       : []),
   ].join(' / ');
-  ruleSummary.textContent = `ルール: ${rules.playerCount}人麻雀 / ${lengthLabel}（全${rules.totalRounds}局・${rules.totalTiles}枚・初期持ち点 ${rules.initialPoints.toLocaleString()}点・赤ドラなし・${localDetails}）`;
+  ruleSummary.textContent = `ルール: ${rules.playerCount}人麻雀 / ${lengthLabel}（全${rules.totalRounds}局・${rules.totalTiles}枚・初期持ち点 ${rules.initialPoints.toLocaleString()}点・${redDoraLabel}・${localDetails}）`;
   card.appendChild(ruleSummary);
 
   // ルーム作成後の設定編集（ホストのみ操作可）
@@ -743,7 +1196,7 @@ export function renderWaitingRoom(
 
     // それ以外の設定（すべて ON / OFF）
     const togglesGrid = document.createElement('div');
-    togglesGrid.className = 'rule-toggle-grid';
+    togglesGrid.className = 'rule-toggle-grid rule-toggle-grid-switches';
     togglesGrid.style.marginBottom = '0';
 
     togglesGrid.appendChild(
@@ -830,6 +1283,25 @@ export function renderWaitingRoom(
     }
 
     settingsPanel.appendChild(togglesGrid);
+
+    settingsPanel.appendChild(
+      createAdvancedRuleDetails({
+        containerKey: container,
+        values: {
+          playerCount: rules.playerCount,
+          redDoraPerFive: rules.redDoraPerFive,
+          kiriageMangan: rules.kiriageMangan,
+          allowKazoeYakuman: rules.allowKazoeYakuman,
+          doubleWindPairFu: rules.doubleWindPairFu === 2 ? 2 : 4,
+          initialPoints: view.ruleConfig.initialPoints,
+          notenPenaltyTotal: rules.notenPenaltyTotal,
+          responseTimeoutMs: rules.responseTimeoutMs,
+          maxKansPerRound: rules.maxKansPerRound,
+        },
+        onPatch: (patch) => handlers.onUpdateRuleConfig?.(patch),
+      }),
+    );
+
     card.appendChild(settingsPanel);
   }
 

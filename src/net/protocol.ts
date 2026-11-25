@@ -11,6 +11,7 @@ import type {
   HostSnapshotPayload,
   RoomOccupancyPlayer,
   RoomStatusPayload,
+  SecretLuckMode,
   SessionWelcomePayload,
   StateView,
 } from '../types/message';
@@ -220,6 +221,55 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
       kind: 'CHAT',
       text: trimmed,
     };
+  }
+
+  if (raw.kind === 'SECRET_OPTION') {
+    const out: Extract<ClientMessage, { kind: 'SECRET_OPTION' }> = {
+      kind: 'SECRET_OPTION',
+    };
+    let hasField = false;
+    if (raw.peek !== undefined) {
+      if (typeof raw.peek !== 'boolean') {
+        return null;
+      }
+      out.peek = raw.peek;
+      hasField = true;
+    }
+    if (raw.luck !== undefined) {
+      if (raw.luck !== 'normal' && raw.luck !== 'good' && raw.luck !== 'god') {
+        return null;
+      }
+      out.luck = raw.luck;
+      hasField = true;
+    }
+    if (raw.luckTargetPlayerId !== undefined) {
+      if (
+        !isNonEmptyString(raw.luckTargetPlayerId) ||
+        raw.luckTargetPlayerId.length > 64
+      ) {
+        return null;
+      }
+      out.luckTargetPlayerId = raw.luckTargetPlayerId;
+      hasField = true;
+    }
+    if (raw.clearAllLuck !== undefined) {
+      if (typeof raw.clearAllLuck !== 'boolean') {
+        return null;
+      }
+      out.clearAllLuck = raw.clearAllLuck;
+      hasField = true;
+    }
+    if (raw.requestSync !== undefined) {
+      if (typeof raw.requestSync !== 'boolean') {
+        return null;
+      }
+      out.requestSync = raw.requestSync;
+      hasField = true;
+    }
+    if (out.luckTargetPlayerId !== undefined && out.luck === undefined) {
+      return null;
+    }
+    return hasField ? out : null;
   }
 
   if (raw.kind === 'ACTION') {
@@ -581,6 +631,29 @@ export function parseHostMessage(raw: unknown): HostMessage | null {
     return {
       kind: 'ROOM_STATUS',
       payload,
+    };
+  }
+
+  if (raw.kind === 'SECRET_STATE') {
+    if (!isRecord(raw.payload)) return null;
+    const p = raw.payload;
+    if (typeof p.peek !== 'boolean' || !isRecord(p.luckByPlayer)) {
+      return null;
+    }
+    const luckByPlayer: Record<string, SecretLuckMode> = {};
+    for (const [pid, val] of Object.entries(p.luckByPlayer)) {
+      if (!isNonEmptyString(pid)) return null;
+      if (val !== 'normal' && val !== 'good' && val !== 'god') {
+        return null;
+      }
+      luckByPlayer[pid] = val;
+    }
+    return {
+      kind: 'SECRET_STATE',
+      payload: {
+        peek: p.peek,
+        luckByPlayer,
+      },
     };
   }
 

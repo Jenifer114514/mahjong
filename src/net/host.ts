@@ -7,10 +7,17 @@ import {
   toEngineAction,
   type CpuAction,
 } from '../cpu/player';
+import { countsFromTiles, handShanten, KIND_COUNT, kindIndex } from '../cpu/shanten';
+import { evaluateTsumoFromRound } from '../engine/calls';
+import { getActiveDoraKinds, getRevealedDoraIndicators } from '../engine/dora';
 import { toStateView } from '../engine/projection';
 import { applyAction, createInitialGameState } from '../engine/reducer';
-import { deriveRules } from '../engine/rules';
-import { buildTileDeck, shuffleWithCrypto } from '../engine/wall';
+import { deriveRules, getRoundMetadata } from '../engine/rules';
+import {
+  buildTileDeck,
+  dealRoundFromDeck,
+  shuffleWithCrypto,
+} from '../engine/wall';
 import type {
   Action,
   ChatMessage,
@@ -20,6 +27,8 @@ import type {
   HostMigratingPayload,
   HostSnapshotPayload,
   RoomStatusPayload,
+  SecretLuckMode,
+  SecretStatePayload,
   SessionWelcomePayload,
   StateView,
 } from '../types/message';
@@ -130,6 +139,8 @@ export class HostSession {
   /** 設定された CPU 数（ロビーで後から増やせるため可変） */
   private cpuCount: number;
   private readonly cpuDelayMs: number;
+  private readonly peekPlayers = new Set<string>();
+  private readonly luckModeByPlayer = new Map<string, SecretLuckMode>();
   private readonly cpuRandom: () => number;
   private readonly cpuScheduler: (fn: () => void, delayMs: number) => void;
   private cpuToken = 0;
@@ -387,6 +398,270 @@ export class HostSession {
     return true;
   }
 
+  /** 裏設定(Peek): ホスト本人の相手手牌透視モード ON/OFF（オンライン・オフライン両対応） */
+  setSecretPeek(enabled?: boolean): boolean {
+    if (this.destroyed) return false;
+    const targetId = this.state.hostPlayerId;
+    const next = enabled ?? !this.peekPlayers.has(targetId);
+    if (next) {
+      this.peekPlayers.add(targetId);
+    } else {
+      this.peekPlayers.delete(targetId);
+    }
+    this.emitHostView();
+    return next;
+  }
+
+  getSecretPeek(): boolean {
+    return this.peekPlayers.has(this.state.hostPlayerId);
+  }
+
+  /** 裏設定(Luck): 指定プレイヤー（省略時はホスト本人）の配牌・ツモ運ブースト（オンライン・オフライン両対応） */
+  setSecretLuck(mode: SecretLuckMode, targetPlayerId?: string): boolean {
+    if (this.destroyed) return false;
+    const targetId = targetPlayerId ?? this.state.hostPlayerId;
+    if (!this.state.players.some((p) => p.playerId === targetId)) {
+      return false;
+    }
+    if (mode === 'normal') {
+      this.luckModeByPlayer.delete(targetId);
+    } else {
+      this.luckModeByPlayer.set(targetId, mode);
+    }
+    return true;
+  }
+
+  getSecretLuck(targetPlayerId?: string): SecretLuckMode {
+    const targetId = targetPlayerId ?? this.state.hostPlayerId;
+    return this.luckModeByPlayer.get(targetId) ?? 'normal';
+  }
+
+  getSecretLuckByPlayer(): Record<string, SecretLuckMode> {
+    const out: Record<string, SecretLuckMode> = {};
+    for (const p of this.state.players) {
+      out[p.playerId] = this.luckModeByPlayer.get(p.playerId) ?? 'normal';
+    }
+    return out;
+  }
+
+  clearAllSecretLuck(): boolean {
+    if (this.destroyed) return false;
+    this.luckModeByPlayer.clear();
+    return true;
+  }
+
+  private buildSecretStateForViewer(viewerId: string): SecretStatePayload {
+    return {
+      peek: this.peekPlayers.has(viewerId),
+      luckByPlayer: this.getSecretLuckByPlayer(),
+    };
+  }
+
+  private buildDeckForRound(
+    rules: ReturnType<typeof deriveRules>,
+    dealerSeatIndex: number,
+    seatPlayerIds: readonly string[],
+  ): ReturnType<typeof buildTileDeck> {
+    const baseDeck = buildTileDeck(rules);
+    const luckTargets: Array<{ seatIndex: number; weight: number }> = [];
+    let maxTrials = 0;
+    seatPlayerIds.forEach((pid, seatIndex) => {
+      const mode = this.luckModeByPlayer.get(pid);
+      if (mode === 'god') {
+        luckTargets.push({ seatIndex, weight: 2 });
+        maxTrials = Math.max(maxTrials, 40);
+      } else if (mode === 'good') {
+        luckTargets.push({ seatIndex, weight: 1 });
+        maxTrials = Math.max(maxTrials, 15);
+      }
+    });
+    if (luckTargets.length === 0) {
+      return shuffleWithCrypto(baseDeck);
+    }
+    let bestDeck = shuffleWithCrypto(baseDeck);
+    let bestScore = Number.NEGATIVE_INFINITY;
+    for (let i = 0; i < maxTrials; i++) {
+      const candidate = i === 0 ? bestDeck : shuffleWithCrypto(baseDeck);
+      const deal = dealRoundFromDeck(rules, dealerSeatIndex, candidate);
+      let score = 0;
+      for (const target of luckTargets) {
+        const hand = deal.hands[target.seatIndex];
+        if (!hand) continue;
+        const fullHand =
+          target.seatIndex === dealerSeatIndex
+            ? [...hand, deal.dealerDrawnTile]
+            : hand;
+        const shanten = handShanten(countsFromTiles(fullHand), 0);
+        const redBonus = fullHand.filter((t) => t.isRed).length * 0.4;
+        score += (-shanten + redBonus) * target.weight;
+      }
+      if (score > bestScore) {
+        bestScore = score;
+        bestDeck = candidate;
+      }
+    }
+    return bestDeck;
+  }
+
+  /**
+   * 裏設定(Luck)有効プレイヤーが通常ツモを引いた直後、残りのツモ山 (`round.wall`) の中から
+   * 有利なツモ牌を選んで `drawnTile` とスワップする（牌山構成・総枚数・王牌は一切変えない）。
+   */
+  private maybeApplyTsumoLuck(
+    prevState: GameState,
+    nextState: GameState,
+  ): GameState {
+    if (
+      nextState.phase !== 'playing' ||
+      !nextState.round ||
+      nextState.round.wall.length === 0 ||
+      !prevState.round ||
+      prevState.round.roundIndex !== nextState.round.roundIndex ||
+      prevState.round.turnCount === nextState.round.turnCount
+    ) {
+      return nextState;
+    }
+
+    const turnSeat = nextState.round.currentTurnIndex;
+    const turnPlayer = nextState.players.find((p) => p.seatIndex === turnSeat);
+    if (
+      !turnPlayer ||
+      turnPlayer.drawnTile === null ||
+      turnPlayer.isRinshanDraw
+    ) {
+      return nextState;
+    }
+
+    const luckMode = this.luckModeByPlayer.get(turnPlayer.playerId);
+    if (!luckMode || luckMode === 'normal') {
+      return nextState;
+    }
+
+    const prevTurnPlayer = prevState.players.find(
+      (p) => p.playerId === turnPlayer.playerId,
+    );
+    if (prevTurnPlayer && prevTurnPlayer.drawnTile !== null) {
+      return nextState;
+    }
+
+    const round = nextState.round;
+    const wall = round.wall;
+    const currentDrawn = turnPlayer.drawnTile;
+    const rules = deriveRules(nextState.ruleConfig);
+
+    // -1 は現在すでにツモっている牌、0..wall.length-1 は山内のインデックス
+    let candidateIndices: number[];
+    if (luckMode === 'god') {
+      candidateIndices = [-1];
+      for (let i = 0; i < wall.length; i++) {
+        candidateIndices.push(i);
+      }
+    } else {
+      // good: 山の中から最大 6 箇所をサンプリングして最良を選ぶ
+      const picked = new Set<number>();
+      const sampleCount = Math.min(6, wall.length);
+      let guard = 0;
+      while (picked.size < sampleCount && guard < 30) {
+        guard++;
+        const r = Math.min(0.999999, Math.max(0, this.cpuRandom()));
+        picked.add(Math.floor(r * wall.length));
+      }
+      candidateIndices = [-1, ...picked];
+    }
+
+    const doraKinds = new Set(
+      getActiveDoraKinds(getRevealedDoraIndicators(round.deadWall), rules),
+    );
+    const baseCounts = countsFromTiles(turnPlayer.hand);
+    const meldCount = turnPlayer.melds.length;
+    const scoreCache = new Map<string, number>();
+
+    const evaluateCandidate = (tile: (typeof currentDrawn)): number => {
+      const key = `${tile.kind}:${tile.isRed ? 1 : 0}`;
+      const cached = scoreCache.get(key);
+      if (cached !== undefined) return cached;
+
+      const tsumoResult = evaluateTsumoFromRound(
+        { ...turnPlayer, drawnTile: tile },
+        round,
+        rules,
+      );
+      if (tsumoResult !== null) {
+        const winScore = 1_000_000 + tsumoResult.pointsAwarded;
+        scoreCache.set(key, winScore);
+        return winScore;
+      }
+
+      if (turnPlayer.isRiichi) {
+        scoreCache.set(key, 0);
+        return 0;
+      }
+
+      const counts14 = [...baseCounts];
+      const addIdx = kindIndex(tile.kind);
+      counts14[addIdx] = counts14[addIdx]! + 1;
+
+      let bestNextShanten = 99;
+      for (let d = 0; d < KIND_COUNT; d++) {
+        if (counts14[d]! <= 0) continue;
+        counts14[d] = counts14[d]! - 1;
+        const s = handShanten(counts14, meldCount);
+        if (s < bestNextShanten) {
+          bestNextShanten = s;
+        }
+        counts14[d] = counts14[d]! + 1;
+      }
+
+      let bonus = 0;
+      if (tile.isRed) bonus += 40;
+      if (doraKinds.has(tile.kind)) bonus += 50;
+      if (baseCounts[addIdx]! >= 1) bonus += 12;
+      const suit = tile.kind[1];
+      if (suit === 'm' || suit === 'p' || suit === 's') {
+        const rank = Number(tile.kind[0]);
+        if (rank >= 3 && rank <= 7) bonus += 15;
+        else if (rank === 2 || rank === 8) bonus += 8;
+      }
+
+      const totalScore = -bestNextShanten * 10000 + bonus;
+      scoreCache.set(key, totalScore);
+      return totalScore;
+    };
+
+    let bestIdx = -1;
+    let bestScore = evaluateCandidate(currentDrawn);
+    for (const idx of candidateIndices) {
+      if (idx === -1) continue;
+      const cand = wall[idx]!;
+      const score = evaluateCandidate(cand);
+      if (score > bestScore) {
+        bestScore = score;
+        bestIdx = idx;
+      }
+    }
+
+    if (bestIdx < 0) {
+      return nextState;
+    }
+
+    const nextWall = [...wall];
+    const chosenTile = nextWall[bestIdx]!;
+    nextWall[bestIdx] = currentDrawn;
+
+    return {
+      ...nextState,
+      players: nextState.players.map((p) =>
+        p.playerId === turnPlayer.playerId
+          ? { ...p, drawnTile: chosenTile }
+          : p,
+      ),
+      round: {
+        ...round,
+        wall: nextWall,
+      },
+    };
+  }
+
   /** 人数が揃っているロビーからホストが明示的に対局を開始する */
   startGame(): boolean {
     if (this.destroyed || this.state.phase !== 'lobby') return false;
@@ -610,7 +885,7 @@ export class HostSession {
     const shuffledPlayerIds = shuffleWithCrypto(
       nextState.players.map((p) => p.playerId),
     );
-    const shuffledDeck = shuffleWithCrypto(buildTileDeck(rules));
+    const shuffledDeck = this.buildDeckForRound(rules, 0, shuffledPlayerIds);
     const startResult = applyAction(nextState, {
       type: 'START_GAME',
       shuffledDeck,
@@ -629,6 +904,14 @@ export class HostSession {
     if (prevToken !== undefined) {
       this.playerTokens.delete(prevId);
       this.playerTokens.set(nextId, prevToken);
+    }
+    if (this.peekPlayers.delete(prevId)) {
+      this.peekPlayers.add(nextId);
+    }
+    const prevLuck = this.luckModeByPlayer.get(prevId);
+    if (prevLuck !== undefined) {
+      this.luckModeByPlayer.delete(prevId);
+      this.luckModeByPlayer.set(nextId, prevLuck);
     }
 
     const round = this.state.round;
@@ -1062,6 +1345,46 @@ export class HostSession {
           code: 'UNAUTHORIZED_ACTION',
           message: '観戦中は対局操作を行えません。',
         },
+      });
+      return;
+    }
+
+    if (message.kind === 'SECRET_OPTION') {
+      if (message.peek !== undefined) {
+        if (message.peek) {
+          this.peekPlayers.add(participantId);
+        } else {
+          this.peekPlayers.delete(participantId);
+        }
+        this.sendToConn(conn, {
+          kind: 'STATE_VIEW',
+          payload: this.buildViewForViewer(participantId, Date.now()),
+        });
+      }
+      if (message.clearAllLuck) {
+        this.luckModeByPlayer.clear();
+      }
+      if (message.luck !== undefined) {
+        const targetId = message.luckTargetPlayerId ?? participantId;
+        if (!this.state.players.some((p) => p.playerId === targetId)) {
+          this.sendToConn(conn, {
+            kind: 'ERROR',
+            payload: {
+              code: 'PLAYER_NOT_FOUND',
+              message: '指定されたプレイヤーが見つかりません。',
+            },
+          });
+          return;
+        }
+        if (message.luck === 'normal') {
+          this.luckModeByPlayer.delete(targetId);
+        } else {
+          this.luckModeByPlayer.set(targetId, message.luck);
+        }
+      }
+      this.sendToConn(conn, {
+        kind: 'SECRET_STATE',
+        payload: this.buildSecretStateForViewer(participantId),
       });
       return;
     }
@@ -1594,10 +1917,21 @@ export class HostSession {
 
   advanceRound(): void {
     const rules = deriveRules(this.state.ruleConfig);
+    const nextRoundIndex =
+      this.state.round?.nextRoundDecision?.nextRoundIndex ??
+      (this.state.round ? this.state.round.roundIndex + 1 : 0);
+    const dealerSeat = getRoundMetadata(
+      nextRoundIndex,
+      this.state.initialDealerIndex,
+      rules,
+    ).dealerIndex;
+    const seatPlayerIds = [...this.state.players]
+      .sort((a, b) => a.seatIndex - b.seatIndex)
+      .map((p) => p.playerId);
     this.dispatchHostAction({
       type: 'ADVANCE_ROUND',
       playerId: this.state.hostPlayerId,
-      shuffledDeck: shuffleWithCrypto(buildTileDeck(rules)),
+      shuffledDeck: this.buildDeckForRound(rules, dealerSeat, seatPlayerIds),
     });
   }
 
@@ -1605,7 +1939,8 @@ export class HostSession {
     nextState: GameState,
     options: { fromDiscard?: boolean } = {},
   ): void {
-    this.state = nextState;
+    const tunedState = this.maybeApplyTsumoLuck(this.state, nextState);
+    this.state = tunedState;
     this.postDiscardHoldToken++;
     this.postDiscardHoldActive = false;
     this.postDiscardHoldDeadlineMs = null;
@@ -1613,7 +1948,7 @@ export class HostSession {
 
     if (
       options.fromDiscard &&
-      nextState.phase === 'playing' &&
+      tunedState.phase === 'playing' &&
       this.cpuDelayMs > 0 &&
       this.hasAnyCpu()
     ) {
@@ -2119,6 +2454,7 @@ export class HostSession {
   private buildViewForViewer(viewerId: string, now: number): StateView {
     const view = toStateView(this.state, viewerId, now, {
       hostEpoch: this.hostEpoch,
+      revealOpponentHands: viewerId !== '' && this.peekPlayers.has(viewerId),
     });
     if (
       this.postDiscardHoldActive &&

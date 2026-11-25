@@ -1,5 +1,6 @@
 import './ui/styles.css';
 import './ui/refine.css';
+import { isCpuPlayerId } from './cpu/player';
 import {
   ClientSession,
   type ClientSessionCallbacks,
@@ -46,6 +47,10 @@ import {
 } from './ui/tableView';
 import { soundEngine } from './ui/sound';
 import { prewarmTileSpriteSheet, waitForTileFonts } from './ui/tileTexture';
+import {
+  isCheatModalCommand,
+  type LocalLuckMode,
+} from './ui/chatCommands';
 import {
   createRotateOverlay,
   enterLandscapeFullscreen,
@@ -137,8 +142,11 @@ class MahjongApp {
   private roundEndStep: RoundEndStep = 'details';
   private leaveConfirmPending = false;
   private settingsOpen = false;
+  private cheatOpen = false;
   private chatOpen = false;
   private chatMessages: ChatMessage[] = [];
+  private secretPeekEnabled = false;
+  private secretLuckByPlayer: Record<string, LocalLuckMode> = {};
   private unreadChatCount = 0;
   private chatDraft = '';
   private chatBubbles = new Map<string, ActiveChatBubbleEntry>();
@@ -424,6 +432,14 @@ class MahjongApp {
           this.render();
         }
       },
+      onSecretState: (secretState) => {
+        if (sessionSeq !== this.sessionSeq) return;
+        this.secretPeekEnabled = secretState.peek;
+        this.secretLuckByPlayer = { ...secretState.luckByPlayer };
+        if (this.cheatOpen) {
+          this.renderFloating();
+        }
+      },
     };
   }
 
@@ -550,6 +566,10 @@ class MahjongApp {
     );
 
     this.activeSession = { role: 'host', session: host };
+    if (this.secretPeekEnabled) host.setSecretPeek(true);
+    for (const [pid, mode] of Object.entries(this.secretLuckByPlayer)) {
+      if (mode !== 'normal') host.setSecretLuck(mode, pid);
+    }
     host.start();
   }
 
@@ -587,6 +607,10 @@ class MahjongApp {
     );
 
     this.activeSession = { role: 'host', session: host };
+    if (this.secretPeekEnabled) host.setSecretPeek(true);
+    for (const [pid, mode] of Object.entries(this.secretLuckByPlayer)) {
+      if (mode !== 'normal') host.setSecretLuck(mode, pid);
+    }
     host.start();
   }
 
@@ -744,13 +768,26 @@ class MahjongApp {
     this.currentView = view;
     if (prevView?.phase === 'lobby' && view.phase !== 'lobby') {
       this.clearLobbyChatToast();
+      if (this.cheatOpen) {
+        this.cheatOpen = false;
+        this.renderFloating();
+      }
     } else if (view.phase === 'lobby') {
       this.leaveConfirmPending = false;
       if (prevView && prevView.phase !== 'lobby') {
         this.clearChatBubbles();
         this.settingsOpen = false;
+        this.cheatOpen = false;
         this.renderFloating();
       }
+    }
+    if (
+      this.cheatOpen &&
+      (prevView?.isSpectator !== view.isSpectator ||
+        prevView?.players.map((p) => p.playerId).join(',') !==
+          view.players.map((p) => p.playerId).join(','))
+    ) {
+      this.renderFloating();
     }
     if (
       view.phase === 'awaiting_responses' &&
@@ -1069,8 +1106,11 @@ class MahjongApp {
       this.stopCountdownTicker();
       this.leaveConfirmPending = false;
       this.settingsOpen = false;
+      this.cheatOpen = false;
       this.chatOpen = false;
       this.chatMessages = [];
+      this.secretPeekEnabled = false;
+      this.secretLuckByPlayer = {};
       this.unreadChatCount = 0;
       this.chatDraft = '';
       this.clearChatOverlays();
@@ -1186,6 +1226,7 @@ class MahjongApp {
     toast.addEventListener('click', () => {
       this.chatOpen = true;
       this.settingsOpen = false;
+      this.cheatOpen = false;
       this.clearLobbyChatToast();
       if (this.unreadChatCount > 0) {
         this.unreadChatCount = 0;
@@ -1254,12 +1295,121 @@ class MahjongApp {
   }
 
   private sendChatMessage(text: string): boolean {
+    if (isCheatModalCommand(text)) {
+      this.chatDraft = '';
+      this.chatOpen = false;
+      this.settingsOpen = false;
+      this.cheatOpen = true;
+      if (
+        this.activeSession?.role === 'client' &&
+        !this.currentView?.isSpectator
+      ) {
+        this.activeSession.session.setSecretOption({ requestSync: true });
+      }
+      soundEngine.playSelect();
+      this.renderFloating();
+      return true;
+    }
     if (!this.activeSession) return false;
     const ok = this.activeSession.session.sendChat(text);
     if (ok) {
       this.chatDraft = '';
     }
     return ok;
+  }
+
+  private getCurrentSecretPeek(): boolean {
+    if (this.activeSession?.role === 'host') {
+      const host = this.activeSession.session as HostSession & {
+        getSecretPeek?: () => boolean;
+      };
+      if (typeof host.getSecretPeek === 'function') {
+        return host.getSecretPeek();
+      }
+    }
+    return this.secretPeekEnabled;
+  }
+
+  private getCurrentSecretLuckByPlayer(): Record<string, LocalLuckMode> {
+    if (this.activeSession?.role === 'host') {
+      const host = this.activeSession.session as HostSession & {
+        getSecretLuckByPlayer?: () => Record<string, LocalLuckMode>;
+        getSecretLuck?: (targetId?: string) => LocalLuckMode;
+      };
+      if (typeof host.getSecretLuckByPlayer === 'function') {
+        return host.getSecretLuckByPlayer();
+      }
+      if (typeof host.getSecretLuck === 'function') {
+        const out: Record<string, LocalLuckMode> = { ...this.secretLuckByPlayer };
+        for (const p of this.currentView?.players ?? []) {
+          out[p.playerId] = host.getSecretLuck(p.playerId);
+        }
+        return out;
+      }
+    }
+    return { ...this.secretLuckByPlayer };
+  }
+
+  private setCheatPeek(enabled: boolean): void {
+    if (!this.activeSession || this.currentView?.isSpectator) return;
+    if (this.activeSession.role === 'host') {
+      const applied = this.activeSession.session.setSecretPeek(enabled);
+      this.secretPeekEnabled = applied;
+    } else {
+      this.secretPeekEnabled = enabled;
+      this.activeSession.session.setSecretOption({ peek: enabled });
+    }
+    soundEngine.playSelect();
+    this.renderFloating();
+  }
+
+  private setCheatLuck(mode: LocalLuckMode, targetPlayerId: string): void {
+    if (!this.activeSession || this.currentView?.isSpectator) return;
+    if (this.activeSession.role === 'host') {
+      const host = this.activeSession.session as HostSession & {
+        setSecretLuck: (mode: LocalLuckMode, targetId?: string) => boolean;
+      };
+      host.setSecretLuck(mode, targetPlayerId);
+      this.secretLuckByPlayer = this.getCurrentSecretLuckByPlayer();
+    } else {
+      this.secretLuckByPlayer = {
+        ...this.secretLuckByPlayer,
+        [targetPlayerId]: mode,
+      };
+      this.activeSession.session.setSecretOption({
+        luck: mode,
+        luckTargetPlayerId: targetPlayerId,
+      });
+    }
+    soundEngine.playSelect();
+    this.renderFloating();
+  }
+
+  private resetAllCheatLuck(): void {
+    if (!this.activeSession || this.currentView?.isSpectator) return;
+    if (this.activeSession.role === 'host') {
+      const host = this.activeSession.session as HostSession & {
+        clearAllSecretLuck?: () => boolean;
+        setSecretLuck: (mode: LocalLuckMode, targetId?: string) => boolean;
+      };
+      if (typeof host.clearAllSecretLuck === 'function') {
+        host.clearAllSecretLuck();
+      } else {
+        for (const p of this.currentView?.players ?? []) {
+          host.setSecretLuck('normal', p.playerId);
+        }
+      }
+      this.secretLuckByPlayer = this.getCurrentSecretLuckByPlayer();
+    } else {
+      const next: Record<string, LocalLuckMode> = {};
+      for (const p of this.currentView?.players ?? []) {
+        next[p.playerId] = 'normal';
+      }
+      this.secretLuckByPlayer = next;
+      this.activeSession.session.setSecretOption({ clearAllLuck: true });
+    }
+    soundEngine.playSelect();
+    this.renderFloating();
   }
 
   private async setFullscreenEnabled(enabled: boolean): Promise<void> {
@@ -1418,6 +1568,7 @@ class MahjongApp {
         this.settingsOpen = !this.settingsOpen;
         if (this.settingsOpen) {
           this.chatOpen = false;
+          this.cheatOpen = false;
           this.fullscreenError = null;
         }
         this.renderFloating();
@@ -1578,6 +1729,7 @@ class MahjongApp {
       onOpenChat: () => {
         this.chatOpen = !this.chatOpen;
         this.settingsOpen = false;
+        this.cheatOpen = false;
         if (this.chatOpen && this.unreadChatCount > 0) {
           this.unreadChatCount = 0;
           this.render();
@@ -1609,12 +1761,14 @@ class MahjongApp {
           onOpenSettings: () => {
             this.settingsOpen = !this.settingsOpen;
             this.chatOpen = false;
+            this.cheatOpen = false;
             this.fullscreenError = null;
             this.renderFloating();
           },
           onOpenChat: () => {
             this.chatOpen = !this.chatOpen;
             this.settingsOpen = false;
+            this.cheatOpen = false;
             if (this.chatOpen && this.unreadChatCount > 0) {
               this.unreadChatCount = 0;
               this.render();
@@ -1751,6 +1905,11 @@ class MahjongApp {
 
     if (!this.currentView) return;
 
+    if (this.cheatOpen) {
+      this.floatingLayer.appendChild(this.renderCheatModal());
+      return;
+    }
+
     if (this.chatOpen) {
       const modal = this.renderChatModal();
       this.floatingLayer.appendChild(modal);
@@ -1759,6 +1918,211 @@ class MahjongApp {
         this.scrollChatMessagesToBottom(list);
       }
     }
+  }
+
+  private renderCheatModal(): HTMLElement {
+    const backdrop = document.createElement('div');
+    backdrop.className = 'overlay-backdrop overlay-backdrop-modal table-cheat-modal';
+    backdrop.setAttribute('role', 'dialog');
+    backdrop.setAttribute('aria-modal', 'true');
+    backdrop.setAttribute('aria-label', '裏設定');
+    backdrop.addEventListener('click', (e) => {
+      if (e.target === backdrop) {
+        this.cheatOpen = false;
+        this.renderFloating();
+      }
+    });
+
+    const panel = document.createElement('div');
+    panel.className = 'overlay-panel table-cheat-panel';
+
+    const header = document.createElement('div');
+    header.className = 'table-modal-header';
+
+    const titleWrap = document.createElement('div');
+    titleWrap.className = 'cheat-modal-title-wrap';
+
+    const title = document.createElement('h3');
+    title.textContent = '裏設定';
+
+    const badge = document.createElement('span');
+    badge.className = 'cheat-secret-badge';
+    badge.textContent = 'SECRET';
+
+    titleWrap.append(title, badge);
+
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'btn btn-secondary table-modal-close-btn';
+    closeBtn.textContent = '閉じる';
+    closeBtn.addEventListener('click', () => {
+      this.cheatOpen = false;
+      this.renderFloating();
+    });
+
+    header.append(titleWrap, closeBtn);
+    panel.appendChild(header);
+
+    const isSpectator = Boolean(this.currentView?.isSpectator);
+    if (isSpectator) {
+      const note = document.createElement('div');
+      note.className = 'cheat-spectator-note';
+      note.textContent =
+        '観戦中は裏設定を変更できません（対局参加中のプレイヤー本人のみ有効です）。';
+      panel.appendChild(note);
+    }
+
+    // 1. Peek（相手手牌透視）
+    const peekRow = document.createElement('div');
+    peekRow.className = 'setting-toggle-row cheat-setting-row';
+
+    const peekLabel = document.createElement('div');
+    peekLabel.className = 'setting-toggle-label';
+    peekLabel.innerHTML =
+      '<strong>相手手牌の透視（Peek）</strong><span class="hub-sub">対局中、他家の手牌とツモ牌を自分だけに公開表示します</span>';
+
+    const peekOn = this.getCurrentSecretPeek();
+    const peekBtn = document.createElement('button');
+    peekBtn.type = 'button';
+    peekBtn.className = `toggle-switch setting-toggle-controls cheat-peek-switch${peekOn ? ' is-on' : ''}`;
+    peekBtn.setAttribute('role', 'switch');
+    peekBtn.setAttribute('aria-checked', peekOn ? 'true' : 'false');
+    peekBtn.setAttribute('aria-label', '相手手牌の透視');
+    peekBtn.disabled = isSpectator;
+
+    const peekTrack = document.createElement('span');
+    peekTrack.className = 'toggle-track';
+    peekTrack.setAttribute('aria-hidden', 'true');
+    const peekThumb = document.createElement('span');
+    peekThumb.className = 'toggle-thumb';
+    peekTrack.appendChild(peekThumb);
+
+    const peekStateText = document.createElement('span');
+    peekStateText.className = 'toggle-state-text';
+    peekStateText.textContent = peekOn ? 'ON' : 'OFF';
+
+    peekBtn.append(peekTrack, peekStateText);
+    peekBtn.addEventListener('click', () => {
+      this.setCheatPeek(!peekOn);
+    });
+
+    peekRow.append(peekLabel, peekBtn);
+    panel.appendChild(peekRow);
+
+    // 2. Luck（プレイヤー別 配牌・ツモ運ブースト）
+    const luckSection = document.createElement('div');
+    luckSection.className = 'setting-camera-row cheat-luck-section';
+
+    const luckHeaderRow = document.createElement('div');
+    luckHeaderRow.className = 'cheat-luck-header-row';
+
+    const luckLabel = document.createElement('div');
+    luckLabel.className = 'setting-toggle-label';
+    luckLabel.innerHTML =
+      '<strong>プレイヤー別 配牌・ツモ運（Luck）</strong><span class="hub-sub">自分・他プレイヤー・CPUごとに配牌とツモ運を切り替えられます</span>';
+
+    const luckByPlayer = this.getCurrentSecretLuckByPlayer();
+    const players = this.currentView?.players ?? [];
+    const hasCustomLuck = players.some(
+      (p) => (luckByPlayer[p.playerId] ?? 'normal') !== 'normal',
+    );
+
+    const resetAllBtn = document.createElement('button');
+    resetAllBtn.type = 'button';
+    resetAllBtn.className = 'btn btn-secondary cheat-luck-reset-btn';
+    resetAllBtn.textContent = '全員通常';
+    resetAllBtn.disabled = isSpectator || !hasCustomLuck;
+    resetAllBtn.addEventListener('click', () => {
+      this.resetAllCheatLuck();
+    });
+
+    luckHeaderRow.append(luckLabel, resetAllBtn);
+
+    const playerList = document.createElement('div');
+    playerList.className = 'cheat-luck-player-list';
+
+    const luckOptions: ReadonlyArray<{ mode: LocalLuckMode; label: string }> = [
+      { mode: 'normal', label: '通常' },
+      { mode: 'good', label: '好運' },
+      { mode: 'god', label: '豪運' },
+    ];
+
+    const viewerId = this.currentView?.viewerPlayerId;
+    const hostId = this.currentView?.hostPlayerId;
+
+    for (const player of players) {
+      const isSelf = player.playerId === viewerId;
+      const isCpu = isCpuPlayerId(player.playerId);
+      const isHost = player.playerId === hostId;
+      const playerLuck = luckByPlayer[player.playerId] ?? 'normal';
+
+      const row = document.createElement('div');
+      row.className = `cheat-luck-player-row${isSelf ? ' is-self' : ''}${
+        playerLuck !== 'normal' ? ` is-luck-${playerLuck}` : ''
+      }`;
+      row.dataset.cheatPlayerId = player.playerId;
+
+      const meta = document.createElement('div');
+      meta.className = 'cheat-luck-player-meta';
+
+      const nameEl = document.createElement('span');
+      nameEl.className = 'cheat-luck-player-name';
+      nameEl.textContent = player.name;
+      meta.appendChild(nameEl);
+
+      if (isSelf) {
+        const tag = document.createElement('span');
+        tag.className = 'cheat-player-tag is-self';
+        tag.textContent = 'あなた';
+        meta.appendChild(tag);
+      } else if (isCpu) {
+        const tag = document.createElement('span');
+        tag.className = 'cheat-player-tag is-cpu';
+        tag.textContent = 'CPU';
+        meta.appendChild(tag);
+      } else if (isHost) {
+        const tag = document.createElement('span');
+        tag.className = 'cheat-player-tag is-host';
+        tag.textContent = 'ホスト';
+        meta.appendChild(tag);
+      }
+
+      const btns = document.createElement('div');
+      btns.className = 'cheat-luck-player-btns';
+
+      for (const opt of luckOptions) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        const active = playerLuck === opt.mode;
+        btn.className = `btn btn-secondary cheat-luck-btn${
+          active ? ` is-active is-mode-${opt.mode}` : ''
+        }`;
+        btn.dataset.luckMode = opt.mode;
+        btn.dataset.targetPlayerId = player.playerId;
+        btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+        btn.setAttribute('aria-label', `${player.name}の運を${opt.label}に設定`);
+        btn.disabled = isSpectator;
+        btn.textContent = opt.label;
+        btn.addEventListener('click', () => {
+          this.setCheatLuck(opt.mode, player.playerId);
+        });
+        btns.appendChild(btn);
+      }
+
+      row.append(meta, btns);
+      playerList.appendChild(row);
+    }
+
+    const luckDesc = document.createElement('div');
+    luckDesc.className = 'cheat-luck-desc';
+    luckDesc.textContent =
+      '通常: 牌山順 / 好運: 配牌優遇＋一部山から好ツモ / 豪運: 最良配牌＋全山から最強ツモ（ツモ運は次巡から即反映）';
+
+    luckSection.append(luckHeaderRow, playerList, luckDesc);
+    panel.appendChild(luckSection);
+
+    backdrop.appendChild(panel);
+    return backdrop;
   }
 
   private renderSettingsModal(): HTMLElement {

@@ -8,6 +8,8 @@ import type {
   HostCheckpointPayload,
   HostMigratingPayload,
   HostSnapshotPayload,
+  SecretLuckMode,
+  SecretStatePayload,
   SessionWelcomePayload,
   StateView,
 } from '../types/message';
@@ -58,6 +60,7 @@ export interface ClientSessionCallbacks {
   onNoHostAvailable?: (roomCode: string) => void;
   onMigrated?: (migration: HostMigratingPayload) => void;
   onHostAwayChange?: (away: boolean) => void;
+  onSecretState?: (state: SecretStatePayload) => void;
 }
 
 export interface ClientSessionOptions {
@@ -387,6 +390,11 @@ export class ClientSession {
         return;
       }
 
+      if (msg.kind === 'SECRET_STATE') {
+        this.callbacks.onSecretState?.(msg.payload);
+        return;
+      }
+
       if (msg.kind === 'ERROR') {
         this.clearTimeout();
         this.callbacks.onError(msg.payload);
@@ -612,6 +620,19 @@ export class ClientSession {
       text: trimmed,
     });
     return true;
+  }
+
+  setSecretOption(options: {
+    peek?: boolean;
+    luck?: SecretLuckMode;
+    luckTargetPlayerId?: string;
+    clearAllLuck?: boolean;
+    requestSync?: boolean;
+  }): void {
+    this.send({
+      kind: 'SECRET_OPTION',
+      ...options,
+    });
   }
 
   private send(msg: ClientMessage): void {
