@@ -111,8 +111,9 @@ describe('アプリ起動とローカルCPU対局', () => {
           b.classList.contains('is-active'),
       ),
     ).toBe(true);
-    // 入口画面には詳細トグルを出さず、4択（4人/3人、東風/半荘）のみ
+    // 入口画面には詳細トグル・詳細設定を出さず、4択（4人/3人、東風/半荘）のみ
     expect(root.querySelector('.rule-toggle-field')).toBeNull();
+    expect(root.querySelector('.lobby-advanced-details')).toBeNull();
     expect(root.querySelectorAll('.seg-btn')).toHaveLength(4);
   });
 
@@ -130,7 +131,13 @@ describe('アプリ起動とローカルCPU対局', () => {
     // 3人麻雀にするとツモ損トグルも出る
     expect(root.textContent).toContain('ツモ損');
 
-    // CPU を 2 体追加しても自動開局せず、開始ボタンが有効になって押すと開局する
+    // 空席それぞれに「CPU を追加」ボタンが表示され、追加後の CPU 席には「CPU を削除」ボタンが表示される
+    expect(root.querySelectorAll('.player-slot.is-empty')).toHaveLength(2);
+    expect(root.querySelectorAll('.lobby-cpu-add-btn')).toHaveLength(2);
+    expect(clickByText(root, 'button', 'CPU を追加')).toBe(true);
+    expect(root.querySelectorAll('.lobby-cpu-remove-btn')).toHaveLength(1);
+    expect(clickByText(root, 'button', 'CPU を削除')).toBe(true);
+    expect(root.querySelectorAll('.lobby-cpu-remove-btn')).toHaveLength(0);
     expect(clickByText(root, 'button', 'CPU を追加')).toBe(true);
     expect(clickByText(root, 'button', 'CPU を追加')).toBe(true);
     await new Promise((resolve) => setTimeout(resolve, 40));
@@ -582,6 +589,66 @@ describe('アプリ起動とローカルCPU対局', () => {
         .querySelector<HTMLFormElement>('.chat-input-row')!
         .dispatchEvent(new Event('submit', { cancelable: true }));
       expect(list.scrollTop).toBe(480);
+
+      // レイアウト確定遅延(30ms〜100ms)で高さが増えた場合もユーザーが上にスクロールしていなければ追従する
+      const origClientHeightDesc = Object.getOwnPropertyDescriptor(
+        Element.prototype,
+        'clientHeight',
+      );
+      let dynamicHeight = 640;
+      Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
+        configurable: true,
+        get(this: HTMLElement) {
+          if (this.classList?.contains('chat-messages-list')) {
+            return this.isConnected ? dynamicHeight : 0;
+          }
+          return origScrollHeightDesc?.get?.call(this) ?? 0;
+        },
+      });
+      Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
+        configurable: true,
+        get(this: HTMLElement) {
+          if (this.classList?.contains('chat-messages-list')) {
+            return 160;
+          }
+          return origClientHeightDesc?.get?.call(this) ?? 0;
+        },
+      });
+      try {
+        root.querySelector<HTMLButtonElement>('.table-modal-close-btn')!.click();
+        root.querySelector<HTMLButtonElement>('.table-chrome-chat')!.click();
+        const listReopened = root.querySelector<HTMLElement>('.chat-messages-list')!;
+        expect(listReopened.scrollTop).toBe(640);
+
+        dynamicHeight = 760;
+        await new Promise((resolve) => setTimeout(resolve, 120));
+        expect(listReopened.scrollTop).toBe(760);
+
+        // ユーザーが手動で上へスクロールしたら途中位置を維持し、閉じ直して再度開けばまた一番下へ行く
+        listReopened.dispatchEvent(new Event('wheel'));
+        listReopened.scrollTop = 120;
+        listReopened.dispatchEvent(new Event('scroll'));
+        dynamicHeight = 820;
+        await new Promise((resolve) => setTimeout(resolve, 120));
+        expect(listReopened.scrollTop).toBe(120);
+
+        root.querySelector<HTMLButtonElement>('.table-modal-close-btn')!.click();
+        root.querySelector<HTMLButtonElement>('.table-chrome-chat')!.click();
+        const listReopenedAgain =
+          root.querySelector<HTMLElement>('.chat-messages-list')!;
+        expect(listReopenedAgain.scrollTop).toBe(820);
+      } finally {
+        if (origClientHeightDesc) {
+          Object.defineProperty(
+            HTMLElement.prototype,
+            'clientHeight',
+            origClientHeightDesc,
+          );
+        } else {
+          delete (HTMLElement.prototype as unknown as Record<string, unknown>)
+            .clientHeight;
+        }
+      }
     } finally {
       if (origScrollHeightDesc) {
         Object.defineProperty(
@@ -1227,7 +1294,7 @@ describe('アプリ起動とローカルCPU対局', () => {
     ).toBe('true');
   });
 
-  it('ルーム詳細設定で赤ドラ・切り上げ満貫・初期点等を変更して開始でき、//cheat で裏設定画面が開き /peek・/luck コマンドは廃止されている', async () => {
+  it('作成後の待機ロビーの詳細設定で赤ドラ・切り上げ満貫・初期点等を変更して開始でき、//cheat で裏設定画面が開き /peek・/luck コマンドは廃止されている', async () => {
     localStorage.clear();
 
     bootApp();
@@ -1235,7 +1302,14 @@ describe('アプリ起動とローカルCPU対局', () => {
 
     const root = document.getElementById('app') as HTMLElement;
 
-    // 入口の詳細設定から初期持ち点50000・赤ドラ全5・切り上げ満貫などを設定してCPU対局を開始
+    // 部屋作成前の入口画面には詳細設定ボタンを出さない
+    expect(root.querySelector('.lobby-advanced-details')).toBeNull();
+
+    // 部屋を作成して待機ロビーへ入り、詳細設定から初期持ち点50000・赤ドラ全5・切り上げ満貫などを設定してCPU対局を開始
+    expect(clickByText(root, 'button', '部屋を作成')).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(root.querySelector('.lobby-advanced-details')).not.toBeNull();
     const setAdv = (key: string, val: string) => {
       const sel = root.querySelector<HTMLSelectElement>(
         `select[data-adv-setting="${key}"]`,
@@ -1253,7 +1327,11 @@ describe('アプリ起動とローカルCPU対局', () => {
     setAdv('adv-response-timeout', '0');
     setAdv('adv-max-kans', '8');
 
-    expect(clickByText(root, 'button', 'CPU対局をはじめる')).toBe(true);
+    for (let i = 0; i < 3; i++) {
+      expect(clickByText(root, 'button', 'CPU を追加')).toBe(true);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    root.querySelector<HTMLButtonElement>('.lobby-start-btn')!.click();
     await new Promise((resolve) => setTimeout(resolve, 40));
 
     // 持ち点50,000点が反映されている
@@ -1308,11 +1386,17 @@ describe('アプリ起動とローカルCPU対局', () => {
     expect(cheatModal).not.toBeNull();
 
     // 相手手牌の透視スイッチを ON にすると相手3人の手牌が即座に公開表示される
+    // またスクロール途中位置を設定していても、Peek・Luck・全員通常など各種設定変更で一番上に戻らない
+    const cheatPanel = cheatModal.querySelector<HTMLElement>('.table-cheat-panel')!;
+    cheatPanel.scrollTop = 180;
+
     const peekSwitch = cheatModal.querySelector<HTMLButtonElement>(
       'button[aria-label="相手手牌の透視"]',
     )!;
     expect(peekSwitch.getAttribute('aria-checked')).toBe('false');
     peekSwitch.click();
+    expect(cheatModal.querySelector('.table-cheat-panel')).toBe(cheatPanel);
+    expect(cheatPanel.scrollTop).toBe(180);
     const revealedHands = root.querySelectorAll('.opponent-hand.is-revealed');
     expect(revealedHands).toHaveLength(3);
     for (const el of Array.from(revealedHands)) {
@@ -1335,11 +1419,14 @@ describe('アプリ起動とローカルCPU対局', () => {
         `button[data-luck-mode="god"][data-target-player-id="${selfPlayerId}"]`,
       )!
       .click();
+    expect(cheatPanel.scrollTop).toBe(180);
     root
       .querySelector<HTMLButtonElement>(
         `.table-cheat-modal button[data-luck-mode="good"][data-target-player-id="${otherPlayerId}"]`,
       )!
       .click();
+    expect(cheatPanel.scrollTop).toBe(180);
+    expect(root.querySelector('.table-cheat-panel')).toBe(cheatPanel);
 
     expect(
       root
@@ -1365,6 +1452,9 @@ describe('アプリ起動とローカルCPU対局', () => {
     // 「全員通常」で一括リセットできること・透視OFFで解除されることも確認する
     submitViaChat('//cheat');
     cheatModal = root.querySelector<HTMLElement>('.table-cheat-modal')!;
+    const reopenedCheatPanel =
+      cheatModal.querySelector<HTMLElement>('.table-cheat-panel')!;
+    reopenedCheatPanel.scrollTop = 160;
     expect(cheatModal).not.toBeNull();
     expect(
       cheatModal
@@ -1389,6 +1479,7 @@ describe('アプリ起動とローカルCPU対局', () => {
     cheatModal
       .querySelector<HTMLButtonElement>('.cheat-luck-reset-btn')!
       .click();
+    expect(reopenedCheatPanel.scrollTop).toBe(160);
     expect(
       root
         .querySelector(
@@ -1404,6 +1495,22 @@ describe('アプリ起動とローカルCPU対局', () => {
         .classList.contains('is-active'),
     ).toBe(true);
 
+    root
+      .querySelector<HTMLButtonElement>(
+        '.table-cheat-modal button[aria-label="相手手牌の透視"]',
+      )!
+      .click();
+    expect(reopenedCheatPanel.scrollTop).toBe(160);
+    expect(root.querySelectorAll('.opponent-hand.is-revealed')).toHaveLength(0);
+
+    // インプレース更新後も同一ボタンを再度クリックすれば再び ON に戻せる
+    root
+      .querySelector<HTMLButtonElement>(
+        '.table-cheat-modal button[aria-label="相手手牌の透視"]',
+      )!
+      .click();
+    expect(reopenedCheatPanel.scrollTop).toBe(160);
+    expect(root.querySelectorAll('.opponent-hand.is-revealed')).toHaveLength(3);
     root
       .querySelector<HTMLButtonElement>(
         '.table-cheat-modal button[aria-label="相手手牌の透視"]',
@@ -1517,11 +1624,15 @@ describe('アプリ起動とローカルCPU対局', () => {
       expect(cheatModal).not.toBeNull();
       expect(secretCalls).toEqual([{ requestSync: true }]);
 
-      // ホストから既存設定（p0 が good）が同期されると表示へ即反映される
+      // ホストから既存設定（p0 が good）が同期されると表示へ即反映され、スクロール位置も維持される
+      const guestCheatPanel =
+        cheatModal.querySelector<HTMLElement>('.table-cheat-panel')!;
+      guestCheatPanel.scrollTop = 140;
       emitSecretState!({
         peek: false,
         luckByPlayer: { p0: 'good', p1: 'normal', p2: 'normal', p3: 'normal' },
       });
+      expect(guestCheatPanel.scrollTop).toBe(140);
       expect(
         root
           .querySelector(
@@ -1530,17 +1641,20 @@ describe('アプリ起動とローカルCPU対局', () => {
           .classList.contains('is-active'),
       ).toBe(true);
 
-      // 自分(p1)と他プレイヤー(p2)の luck をそれぞれ設定できる
+      // 自分(p1)と他プレイヤー(p2)の luck をそれぞれ設定でき、スクロール位置も維持される
       root
         .querySelector<HTMLButtonElement>(
           '.table-cheat-modal button[data-luck-mode="good"][data-target-player-id="p1"]',
         )!
         .click();
+      expect(guestCheatPanel.scrollTop).toBe(140);
       root
         .querySelector<HTMLButtonElement>(
           '.table-cheat-modal button[data-luck-mode="god"][data-target-player-id="p2"]',
         )!
         .click();
+      expect(guestCheatPanel.scrollTop).toBe(140);
+      expect(root.querySelector('.table-cheat-panel')).toBe(guestCheatPanel);
       expect(secretCalls).toEqual([
         { requestSync: true },
         { luck: 'good', luckTargetPlayerId: 'p1' },
@@ -1589,6 +1703,510 @@ describe('アプリ起動とローカルCPU対局', () => {
           'button[data-luck-mode="god"][data-target-player-id="p2"]',
         )!.disabled,
       ).toBe(true);
+    } finally {
+      window.dispatchEvent(new Event('beforeunload'));
+      vi.doUnmock('../../net/client');
+      vi.resetModules();
+    }
+  });
+
+  it('ホスト/ローカル対局でルール変更・CPU追加・//cheat の履歴を //check モーダルで閲覧でき、通常チャットには残らない', async () => {
+    document.body.innerHTML = '<div id="app"></div>';
+    await loadMain();
+    const root = document.getElementById('app') as HTMLElement;
+
+    expect(clickByText(root, 'button', '部屋を作成')).toBe(true);
+
+    // ルーム作成後の待機ロビーでトビ設定・詳細設定（赤ドラ）・CPU追加を変更
+    const tobiSwitch = root.querySelector<HTMLButtonElement>(
+      'button[aria-label="トビ終了（0点未満で終局）"]',
+    )!;
+    tobiSwitch.click();
+
+    const advDetails = root.querySelector<HTMLDetailsElement>(
+      '.lobby-advanced-details',
+    )!;
+    advDetails.open = true;
+    const redSelect = root.querySelector<HTMLSelectElement>('#adv-red-dora')!;
+    redSelect.value = '4';
+    redSelect.dispatchEvent(new Event('change'));
+
+    for (let i = 0; i < 3; i++) {
+      root.querySelector<HTMLButtonElement>('.lobby-cpu-add-btn')!.click();
+    }
+    expect(clickByText(root, 'button', '対局を開始する')).toBe(true);
+
+    // 対局中に //cheat を開いて Peek ON + 自分へ豪運設定
+    root.querySelector<HTMLButtonElement>('.table-chrome-chat')!.click();
+    let chatModal = root.querySelector<HTMLElement>('.table-chat-modal')!;
+    let chatInput = chatModal.querySelector<HTMLInputElement>('.chat-input')!;
+    let chatForm = chatModal.querySelector<HTMLFormElement>('.chat-input-row')!;
+    chatInput.value = '//cheat';
+    chatInput.dispatchEvent(new Event('input'));
+    chatForm.dispatchEvent(new Event('submit', { cancelable: true }));
+
+    root
+      .querySelector<HTMLButtonElement>(
+        '.table-cheat-modal button[aria-label="相手手牌の透視"]',
+      )!
+      .click();
+    root
+      .querySelector<HTMLButtonElement>(
+        '.table-cheat-modal button[data-luck-mode="god"]',
+      )!
+      .click();
+    root
+      .querySelector<HTMLButtonElement>('.table-cheat-modal .table-modal-close-btn')!
+      .click();
+
+    // チャットから //check を入力すると履歴チェックモーダルが開く
+    root.querySelector<HTMLButtonElement>('.table-chrome-chat')!.click();
+    chatModal = root.querySelector<HTMLElement>('.table-chat-modal')!;
+    chatInput = chatModal.querySelector<HTMLInputElement>('.chat-input')!;
+    chatForm = chatModal.querySelector<HTMLFormElement>('.chat-input-row')!;
+    chatInput.value = '//check';
+    chatInput.dispatchEvent(new Event('input'));
+    chatForm.dispatchEvent(new Event('submit', { cancelable: true }));
+
+    const checkModal = root.querySelector<HTMLElement>('.table-check-modal')!;
+    expect(checkModal).not.toBeNull();
+    expect(root.querySelector('.table-chat-modal')).toBeNull();
+    expect(root.querySelector('.table-cheat-modal')).toBeNull();
+
+    const items = Array.from(
+      checkModal.querySelectorAll<HTMLElement>('.check-history-item'),
+    );
+    expect(items.length).toBeGreaterThanOrEqual(7);
+    const allText = checkModal.textContent ?? '';
+    expect(allText).toContain('ルール設定「トビ終了」');
+    expect(allText).toContain('ルール設定「赤ドラ」');
+    expect(allText).toContain('CPUの追加');
+    expect(allText).toContain('相手手牌の透視（Peek）');
+    expect(allText).toContain('配牌・ツモ運（Luck）');
+    expect(allText).toContain('全5赤');
+    expect(allText).toContain('豪運');
+
+    // 種別フィルタで //cheat のみ・設定のみを切り替えられる
+    checkModal
+      .querySelector<HTMLButtonElement>('button[data-check-category-filter="cheat"]')!
+      .click();
+    const cheatOnlyItems = checkModal.querySelectorAll('.check-history-item');
+    expect(cheatOnlyItems.length).toBe(2);
+
+    checkModal
+      .querySelector<HTMLButtonElement>('button[data-check-category-filter="settings"]')!
+      .click();
+    const settingsOnlyItems = checkModal.querySelectorAll('.check-history-item');
+    expect(settingsOnlyItems.length).toBe(items.length - 2);
+
+    // 閉じても通常チャット履歴に //check が残っていないことを確認
+    checkModal
+      .querySelector<HTMLButtonElement>('.table-modal-close-btn')!
+      .click();
+    expect(root.querySelector('.table-check-modal')).toBeNull();
+
+    root.querySelector<HTMLButtonElement>('.table-chrome-chat')!.click();
+    const chatText =
+      root.querySelector<HTMLElement>('.table-chat-modal .chat-messages-list')!
+        .textContent ?? '';
+    expect(chatText).not.toContain('//check');
+    expect(chatText).not.toContain('//cheat');
+  });
+
+  it('オンライン参加クライアントで //check により他プレイヤーの変更履歴確認・他プレイヤーフィルタ・リアルタイム更新時のスクロール保持・watch解除・観戦閲覧ができる', async () => {
+    vi.resetModules();
+    const { createInitialGameState, reduce } = await import('../../engine/reducer');
+    const { deriveRules } = await import('../../engine/rules');
+    const { toStateView } = await import('../../engine/projection');
+    const { buildSeededTestDeck } = await import('../../engine/__tests__/testHelpers');
+
+    const ruleConfig = { playerCount: 4 as const, gameLength: 'tonpuu' as const };
+    const rules = deriveRules(ruleConfig);
+    let lobbyState = createInitialGameState({
+      roomCode: 'CHK001',
+      hostPlayerId: 'p0',
+      hostName: 'ホスト',
+      ruleConfig,
+    });
+    for (let i = 1; i < 4; i++) {
+      lobbyState = reduce(lobbyState, {
+        type: 'JOIN_PLAYER',
+        playerId: `p${i}`,
+        name: `P${i}`,
+      });
+    }
+    const playingState = reduce(lobbyState, {
+      type: 'START_GAME',
+      shuffledDeck: buildSeededTestDeck(rules, 888),
+    });
+    const playingGuestView = toStateView(playingState, 'p1', 0);
+    const playingSpectatorView = toStateView(
+      {
+        ...playingState,
+        spectators: [
+          { spectatorId: 'spec-1', name: '観戦者', connected: true },
+        ],
+      },
+      'spec-1',
+      0,
+    );
+
+    const watchCalls: Array<boolean | undefined> = [];
+    let emitClientView: ((v: typeof playingGuestView) => void) | null = null;
+    let emitChangeHistory:
+      | ((h: import('../../types/message').ChangeHistoryEntry[]) => void)
+      | null = null;
+
+    vi.doMock('../../net/client', () => {
+      class MockClientSession {
+        private readonly cb: Record<string, (...args: any[]) => void>;
+        constructor(
+          _roomCode: string,
+          _name: string,
+          callbacks: Record<string, (...args: any[]) => void>,
+        ) {
+          this.cb = callbacks;
+          emitClientView = (v) => this.cb.onViewChange?.(v);
+          emitChangeHistory = (h) => this.cb.onChangeHistory?.(h);
+        }
+        connect() {
+          this.cb.onStatusChange?.('connected');
+          this.cb.onViewChange?.(playingGuestView);
+        }
+        sendChat() {
+          return true;
+        }
+        setSecretOption() {}
+        requestChangeHistory(watch?: boolean) {
+          watchCalls.push(watch);
+        }
+        destroy() {}
+      }
+      return { ClientSession: MockClientSession };
+    });
+
+    try {
+      document.body.innerHTML = '<div id="app"></div>';
+      await loadMain();
+      const root = document.getElementById('app') as HTMLElement;
+
+      const codeInput = root.querySelector<HTMLInputElement>('#room-code-input')!;
+      codeInput.value = 'CHK001';
+      codeInput.dispatchEvent(new Event('input'));
+      expect(clickByText(root, 'button', '参加する')).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      // 全角スラッシュ混在 ／／check でも開ける
+      root.querySelector<HTMLButtonElement>('.table-chrome-chat')!.click();
+      let chatModal = root.querySelector<HTMLElement>('.table-chat-modal')!;
+      let chatInput = chatModal.querySelector<HTMLInputElement>('.chat-input')!;
+      let chatForm = chatModal.querySelector<HTMLFormElement>('.chat-input-row')!;
+      chatInput.value = '／／check';
+      chatInput.dispatchEvent(new Event('input'));
+      chatForm.dispatchEvent(new Event('submit', { cancelable: true }));
+
+      expect(watchCalls).toEqual([true]);
+      const checkModal = root.querySelector<HTMLElement>('.table-check-modal')!;
+      const checkPanel =
+        checkModal.querySelector<HTMLElement>('.table-check-panel')!;
+      const checkList =
+        checkModal.querySelector<HTMLElement>('.check-history-list')!;
+
+      // ホスト(p0)・別ゲスト(p2)・自分(p1) の変更履歴を受信して表示
+      const baseHistory: import('../../types/message').ChangeHistoryEntry[] = [
+        {
+          id: 'chg-1',
+          timestamp: 1700000001000,
+          actorPlayerId: 'p0',
+          actorName: 'ホスト',
+          category: 'settings',
+          kind: 'rule_config',
+          phaseLabel: 'ロビー',
+          settingLabel: 'ルール設定「赤ドラ」',
+          beforeValue: '各1枚',
+          afterValue: '全5赤',
+        },
+        {
+          id: 'chg-2',
+          timestamp: 1700000002000,
+          actorPlayerId: 'p1',
+          actorName: 'P1',
+          category: 'cheat',
+          kind: 'cheat_peek',
+          phaseLabel: '東1局',
+          settingLabel: '相手手牌の透視（Peek）',
+          beforeValue: 'OFF',
+          afterValue: 'ON',
+        },
+        {
+          id: 'chg-3',
+          timestamp: 1700000003000,
+          actorPlayerId: 'p2',
+          actorName: 'P2',
+          category: 'cheat',
+          kind: 'cheat_luck',
+          phaseLabel: '東1局',
+          targetName: 'P2',
+          settingLabel: 'P2 の配牌・ツモ運（Luck）',
+          beforeValue: '通常',
+          afterValue: '豪運',
+        },
+      ];
+      emitChangeHistory!(baseHistory);
+
+      expect(
+        checkModal.querySelector<HTMLElement>('.check-summary-text')!.textContent,
+      ).toContain('全 3 件（うち他プレイヤー 2 件）');
+      expect(
+        checkList.querySelectorAll('.check-history-item.is-other-player'),
+      ).toHaveLength(2);
+      expect(
+        checkList.querySelectorAll('.check-history-item.is-self'),
+      ).toHaveLength(1);
+
+      // リストを途中までスクロールした状態でリアルタイム更新が届いても、DOMノードと scrollTop が維持される
+      checkList.scrollTop = 120;
+      emitChangeHistory!([
+        ...baseHistory,
+        {
+          id: 'chg-4',
+          timestamp: 1700000004000,
+          actorPlayerId: 'p0',
+          actorName: 'ホスト',
+          category: 'cheat',
+          kind: 'cheat_peek',
+          phaseLabel: '東1局',
+          settingLabel: '相手手牌の透視（Peek）',
+          beforeValue: 'OFF',
+          afterValue: 'ON',
+        },
+      ]);
+      expect(root.querySelector('.table-check-panel')).toBe(checkPanel);
+      expect(root.querySelector('.check-history-list')).toBe(checkList);
+      expect(checkList.scrollTop).toBe(120);
+      expect(checkList.querySelectorAll('.check-history-item')).toHaveLength(4);
+
+      // 「他プレイヤーのみ」フィルタで p1(あなた) を除いた 3 件だけが表示される
+      checkModal
+        .querySelector<HTMLButtonElement>('button[data-check-actor-filter="others"]')!
+        .click();
+      expect(checkList.querySelectorAll('.check-history-item')).toHaveLength(3);
+      expect(checkList.querySelectorAll('.check-history-item.is-self')).toHaveLength(0);
+
+      // モーダルを閉じると watch: false が送信される
+      checkModal
+        .querySelector<HTMLButtonElement>('.table-modal-close-btn')!
+        .click();
+      expect(watchCalls).toEqual([true, false]);
+      expect(root.querySelector('.table-check-modal')).toBeNull();
+
+      // 観戦者ビューでも //check で閲覧できる
+      emitClientView!(playingSpectatorView);
+      root.querySelector<HTMLButtonElement>('.table-chrome-chat')!.click();
+      chatModal = root.querySelector<HTMLElement>('.table-chat-modal')!;
+      chatInput = chatModal.querySelector<HTMLInputElement>('.chat-input')!;
+      chatForm = chatModal.querySelector<HTMLFormElement>('.chat-input-row')!;
+      chatInput.value = '//check';
+      chatInput.dispatchEvent(new Event('input'));
+      chatForm.dispatchEvent(new Event('submit', { cancelable: true }));
+      expect(root.querySelector('.table-check-modal')).not.toBeNull();
+      expect(watchCalls).toEqual([true, false, true]);
+    } finally {
+      window.dispatchEvent(new Event('beforeunload'));
+      vi.doUnmock('../../net/client');
+      vi.resetModules();
+    }
+  });
+
+  it('ローカル/ホスト対局およびオンラインクライアントで //stop により全員の //cheat 効果が標準へリセットされ履歴にも残る', async () => {
+    document.body.innerHTML = '<div id="app"></div>';
+    await loadMain();
+    const root = document.getElementById('app') as HTMLElement;
+
+    expect(clickByText(root, 'button', 'CPU対局をはじめる')).toBe(true);
+
+    // //cheat で Peek ON + 他CPUの Luck を豪運に設定
+    root.querySelector<HTMLButtonElement>('.table-chrome-chat')!.click();
+    let chatModal = root.querySelector<HTMLElement>('.table-chat-modal')!;
+    let chatInput = chatModal.querySelector<HTMLInputElement>('.chat-input')!;
+    let chatForm = chatModal.querySelector<HTMLFormElement>('.chat-input-row')!;
+    chatInput.value = '//cheat';
+    chatInput.dispatchEvent(new Event('input'));
+    chatForm.dispatchEvent(new Event('submit', { cancelable: true }));
+
+    root
+      .querySelector<HTMLButtonElement>(
+        '.table-cheat-modal button[aria-label="相手手牌の透視"]',
+      )!
+      .click();
+    root
+      .querySelector<HTMLButtonElement>(
+        '.table-cheat-modal button[data-luck-mode="god"][data-target-player-id="cpu-1"]',
+      )!
+      .click();
+    expect(root.querySelectorAll('.opponent-hand.is-revealed')).toHaveLength(3);
+    root
+      .querySelector<HTMLButtonElement>('.table-cheat-modal .table-modal-close-btn')!
+      .click();
+
+    // チャット欄で //stop を送信すると即座に透視と Luck が標準へ戻る
+    root.querySelector<HTMLButtonElement>('.table-chrome-chat')!.click();
+    chatModal = root.querySelector<HTMLElement>('.table-chat-modal')!;
+    chatInput = chatModal.querySelector<HTMLInputElement>('.chat-input')!;
+    chatForm = chatModal.querySelector<HTMLFormElement>('.chat-input-row')!;
+    chatInput.value = '//stop';
+    chatInput.dispatchEvent(new Event('input'));
+    chatForm.dispatchEvent(new Event('submit', { cancelable: true }));
+
+    expect(root.querySelector('.table-chat-modal')).toBeNull();
+    expect(root.querySelectorAll('.opponent-hand.is-revealed')).toHaveLength(0);
+
+    // 再度 //cheat を開くと Peek OFF・全員「通常」に戻っている
+    root.querySelector<HTMLButtonElement>('.table-chrome-chat')!.click();
+    chatModal = root.querySelector<HTMLElement>('.table-chat-modal')!;
+    chatInput = chatModal.querySelector<HTMLInputElement>('.chat-input')!;
+    chatForm = chatModal.querySelector<HTMLFormElement>('.chat-input-row')!;
+    chatInput.value = '//cheat';
+    chatInput.dispatchEvent(new Event('input'));
+    chatForm.dispatchEvent(new Event('submit', { cancelable: true }));
+
+    expect(
+      root
+        .querySelector<HTMLButtonElement>(
+          '.table-cheat-modal button[aria-label="相手手牌の透視"]',
+        )!
+        .getAttribute('aria-checked'),
+    ).toBe('false');
+    expect(
+      root
+        .querySelector(
+          '.table-cheat-modal button[data-luck-mode="normal"][data-target-player-id="cpu-1"]',
+        )!
+        .classList.contains('is-active'),
+    ).toBe(true);
+    root
+      .querySelector<HTMLButtonElement>('.table-cheat-modal .table-modal-close-btn')!
+      .click();
+
+    // //check で //stop 履歴が確認でき、通常チャットには //stop が残っていない
+    root.querySelector<HTMLButtonElement>('.table-chrome-chat')!.click();
+    chatModal = root.querySelector<HTMLElement>('.table-chat-modal')!;
+    chatInput = chatModal.querySelector<HTMLInputElement>('.chat-input')!;
+    chatForm = chatModal.querySelector<HTMLFormElement>('.chat-input-row')!;
+    chatInput.value = '//check';
+    chatInput.dispatchEvent(new Event('input'));
+    chatForm.dispatchEvent(new Event('submit', { cancelable: true }));
+    expect(
+      root.querySelector<HTMLElement>('.table-check-modal')!.textContent ?? '',
+    ).toContain('//stop');
+    root
+      .querySelector<HTMLButtonElement>('.table-check-modal .table-modal-close-btn')!
+      .click();
+
+    root.querySelector<HTMLButtonElement>('.table-chrome-chat')!.click();
+    const chatText =
+      root.querySelector<HTMLElement>('.table-chat-modal .chat-messages-list')!
+        .textContent ?? '';
+    expect(chatText).not.toContain('//stop');
+
+    // オンライン参加クライアント側でも ／／stop が送信され、観戦時は送信されない
+    vi.resetModules();
+    const { createInitialGameState, reduce } = await import('../../engine/reducer');
+    const { deriveRules } = await import('../../engine/rules');
+    const { toStateView } = await import('../../engine/projection');
+    const { buildSeededTestDeck } = await import('../../engine/__tests__/testHelpers');
+
+    const ruleConfig = { playerCount: 4 as const, gameLength: 'tonpuu' as const };
+    const rules = deriveRules(ruleConfig);
+    let lobbyState = createInitialGameState({
+      roomCode: 'STP001',
+      hostPlayerId: 'p0',
+      hostName: 'ホスト',
+      ruleConfig,
+    });
+    for (let i = 1; i < 4; i++) {
+      lobbyState = reduce(lobbyState, {
+        type: 'JOIN_PLAYER',
+        playerId: `p${i}`,
+        name: `P${i}`,
+      });
+    }
+    const playingState = reduce(lobbyState, {
+      type: 'START_GAME',
+      shuffledDeck: buildSeededTestDeck(rules, 999),
+    });
+    const playingGuestView = toStateView(playingState, 'p1', 0);
+    const playingSpectatorView = toStateView(
+      {
+        ...playingState,
+        spectators: [{ spectatorId: 'spec-1', name: '観戦者', connected: true }],
+      },
+      'spec-1',
+      0,
+    );
+
+    const secretCalls: Array<Record<string, unknown>> = [];
+    let emitClientView: ((v: typeof playingGuestView) => void) | null = null;
+    vi.doMock('../../net/client', () => {
+      class MockClientSession {
+        private readonly cb: Record<string, (...args: any[]) => void>;
+        constructor(
+          _roomCode: string,
+          _name: string,
+          callbacks: Record<string, (...args: any[]) => void>,
+        ) {
+          this.cb = callbacks;
+          emitClientView = (v) => this.cb.onViewChange?.(v);
+        }
+        connect() {
+          this.cb.onStatusChange?.('connected');
+          this.cb.onViewChange?.(playingGuestView);
+        }
+        sendChat() {
+          return true;
+        }
+        setSecretOption(opts: Record<string, unknown>) {
+          secretCalls.push(opts);
+        }
+        requestChangeHistory() {}
+        destroy() {}
+      }
+      return { ClientSession: MockClientSession };
+    });
+
+    try {
+      document.body.innerHTML = '<div id="app"></div>';
+      await loadMain();
+      const onlineRoot = document.getElementById('app') as HTMLElement;
+      const codeInput =
+        onlineRoot.querySelector<HTMLInputElement>('#room-code-input')!;
+      codeInput.value = 'STP001';
+      codeInput.dispatchEvent(new Event('input'));
+      expect(clickByText(onlineRoot, 'button', '参加する')).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      onlineRoot.querySelector<HTMLButtonElement>('.table-chrome-chat')!.click();
+      let oChatModal =
+        onlineRoot.querySelector<HTMLElement>('.table-chat-modal')!;
+      let oChatInput =
+        oChatModal.querySelector<HTMLInputElement>('.chat-input')!;
+      let oChatForm =
+        oChatModal.querySelector<HTMLFormElement>('.chat-input-row')!;
+      oChatInput.value = '／／stop';
+      oChatInput.dispatchEvent(new Event('input'));
+      oChatForm.dispatchEvent(new Event('submit', { cancelable: true }));
+      expect(secretCalls).toEqual([{ clearAllCheat: true }]);
+
+      // 観戦時は //stop を入力しても通常チャット漏洩も送信もしない
+      emitClientView!(playingSpectatorView);
+      onlineRoot.querySelector<HTMLButtonElement>('.table-chrome-chat')!.click();
+      oChatModal = onlineRoot.querySelector<HTMLElement>('.table-chat-modal')!;
+      oChatInput = oChatModal.querySelector<HTMLInputElement>('.chat-input')!;
+      oChatForm = oChatModal.querySelector<HTMLFormElement>('.chat-input-row')!;
+      oChatInput.value = '//stop';
+      oChatInput.dispatchEvent(new Event('input'));
+      oChatForm.dispatchEvent(new Event('submit', { cancelable: true }));
+      expect(secretCalls).toEqual([{ clearAllCheat: true }]);
     } finally {
       window.dispatchEvent(new Event('beforeunload'));
       vi.doUnmock('../../net/client');

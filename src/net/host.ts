@@ -20,6 +20,9 @@ import {
 } from '../engine/wall';
 import type {
   Action,
+  ChangeHistoryCategory,
+  ChangeHistoryEntry,
+  ChangeHistoryKind,
   ChatMessage,
   GameError,
   HostCheckpointPayload,
@@ -69,6 +72,8 @@ export interface HostSessionCallbacks {
   onError: (error: GameError) => void;
   onChatMessage?: (message: ChatMessage) => void;
   onChatHistory?: (messages: ChatMessage[]) => void;
+  onChangeHistory?: (history: ChangeHistoryEntry[]) => void;
+  onSecretState?: (state: SecretStatePayload) => void;
   onWelcome?: (welcome: SessionWelcomePayload) => void;
   onPermanentRoomClaimConflict?: (roomCode: string) => void;
   onHostSelfDemoted?: (
@@ -141,6 +146,9 @@ export class HostSession {
   private readonly cpuDelayMs: number;
   private readonly peekPlayers = new Set<string>();
   private readonly luckModeByPlayer = new Map<string, SecretLuckMode>();
+  private changeHistory: ChangeHistoryEntry[] = [];
+  private changeHistorySeq = 0;
+  private readonly changeHistoryWatchers = new Set<string>();
   private readonly cpuRandom: () => number;
   private readonly cpuScheduler: (fn: () => void, delayMs: number) => void;
   private cpuToken = 0;
@@ -199,6 +207,7 @@ export class HostSession {
       this.cpuCount = this.state.players.filter((p) =>
         isCpuPlayerId(p.playerId),
       ).length;
+      this.restoreSecretAndHistoryFromSnapshot(snap);
       // 引き継ぎ元の古い接続状態は一旦オンラインとオフラインを整理する
       this.state = {
         ...this.state,
@@ -348,10 +357,14 @@ export class HostSession {
     ) {
       index++;
     }
+    const addedCpuId = cpuPlayerId(index);
+    const addedCpuName = cpuName(index);
+    const prevPlayerCount = this.state.players.length;
+    const prevPhaseLabel = buildPhaseLabel(this.state);
     const result = applyAction(this.state, {
       type: 'JOIN_PLAYER',
-      playerId: cpuPlayerId(index),
-      name: cpuName(index),
+      playerId: addedCpuId,
+      name: addedCpuName,
     });
     if (result.error) return false;
 
@@ -359,32 +372,72 @@ export class HostSession {
     this.commitState(
       this.autoStart ? this.tryStartGame(result.state) : result.state,
     );
+    this.recordChangeHistory({
+      actorPlayerId: this.state.hostPlayerId,
+      category: 'settings',
+      kind: 'cpu_seat',
+      targetName: addedCpuName,
+      settingLabel: 'CPUの追加',
+      beforeValue: `${prevPlayerCount}/${rules.playerCount}人`,
+      afterValue: `${addedCpuName} を追加 (${result.state.players.length}/${rules.playerCount}人)`,
+      phaseLabel: prevPhaseLabel,
+    });
     return true;
   }
 
-  /** ロビーから CPU を 1 体減らす（最後に追加された CPU を抜く） */
-  removeCpu(): boolean {
+  /** ロビーから CPU を 1 体減らす（指定がなければ最後に追加された CPU を抜く） */
+  removeCpu(targetPlayerId?: string): boolean {
     if (this.destroyed || this.state.phase !== 'lobby') return false;
     const cpuPlayers = this.state.players.filter((p) =>
       isCpuPlayerId(p.playerId),
     );
     if (cpuPlayers.length === 0) return false;
-    const target = [...cpuPlayers].sort((a, b) =>
-      b.playerId.localeCompare(a.playerId, 'en', { numeric: true }),
-    )[0]!;
+    const target = targetPlayerId
+      ? cpuPlayers.find((p) => p.playerId === targetPlayerId)
+      : [...cpuPlayers].sort((a, b) =>
+          b.playerId.localeCompare(a.playerId, 'en', { numeric: true }),
+        )[0];
+    if (!target) return false;
+    const prevPlayerCount = this.state.players.length;
+    const maxPlayers = deriveRules(this.state.ruleConfig).playerCount;
+    const prevPhaseLabel = buildPhaseLabel(this.state);
     const result = applyAction(this.state, {
       type: 'LEAVE_LOBBY',
       playerId: target.playerId,
     });
     if (result.error) return false;
-    this.cpuCount = Math.max(0, this.cpuCount - 1);
+    const remainingCpus = result.state.players.filter((p) =>
+      isCpuPlayerId(p.playerId),
+    );
+    this.cpuCount =
+      remainingCpus.length === 0
+        ? 0
+        : Math.max(
+            remainingCpus.length,
+            ...remainingCpus.map((p) => {
+              const num = Number(p.playerId.slice(CPU_PLAYER_ID_PREFIX.length));
+              return Number.isFinite(num) && num > 0 ? num : 0;
+            }),
+          );
     this.commitState(result.state);
+    this.recordChangeHistory({
+      actorPlayerId: this.state.hostPlayerId,
+      category: 'settings',
+      kind: 'cpu_seat',
+      targetName: target.name,
+      settingLabel: 'CPUの削除',
+      beforeValue: `${target.name} (${prevPlayerCount}/${maxPlayers}人)`,
+      afterValue: `削除 (${result.state.players.length}/${maxPlayers}人)`,
+      phaseLabel: prevPhaseLabel,
+    });
     return true;
   }
 
   /** ロビー中にホストがルール設定を変更し、全参加者へ反映する */
   updateRuleConfig(patch: Partial<RuleConfig>): boolean {
     if (this.destroyed || this.state.phase !== 'lobby') return false;
+    const prevRuleConfig = this.state.ruleConfig;
+    const prevPhaseLabel = buildPhaseLabel(this.state);
     const result = applyAction(this.state, {
       type: 'UPDATE_RULE_CONFIG',
       playerId: this.state.hostPlayerId,
@@ -395,6 +448,22 @@ export class HostSession {
       return false;
     }
     this.commitState(result.state);
+    const changes = extractRuleConfigChanges(
+      prevRuleConfig,
+      result.state.ruleConfig,
+      patch,
+    );
+    for (const chg of changes) {
+      this.recordChangeHistory({
+        actorPlayerId: this.state.hostPlayerId,
+        category: 'settings',
+        kind: 'rule_config',
+        settingLabel: `ルール設定「${chg.label}」`,
+        beforeValue: chg.beforeValue,
+        afterValue: chg.afterValue,
+        phaseLabel: prevPhaseLabel,
+      });
+    }
     return true;
   }
 
@@ -402,13 +471,24 @@ export class HostSession {
   setSecretPeek(enabled?: boolean): boolean {
     if (this.destroyed) return false;
     const targetId = this.state.hostPlayerId;
-    const next = enabled ?? !this.peekPlayers.has(targetId);
+    const prevPeek = this.peekPlayers.has(targetId);
+    const next = enabled ?? !prevPeek;
     if (next) {
       this.peekPlayers.add(targetId);
     } else {
       this.peekPlayers.delete(targetId);
     }
     this.emitHostView();
+    if (prevPeek !== next) {
+      this.recordChangeHistory({
+        actorPlayerId: targetId,
+        category: 'cheat',
+        kind: 'cheat_peek',
+        settingLabel: '相手手牌の透視（Peek）',
+        beforeValue: prevPeek ? 'ON' : 'OFF',
+        afterValue: next ? 'ON' : 'OFF',
+      });
+    }
     return next;
   }
 
@@ -420,13 +500,28 @@ export class HostSession {
   setSecretLuck(mode: SecretLuckMode, targetPlayerId?: string): boolean {
     if (this.destroyed) return false;
     const targetId = targetPlayerId ?? this.state.hostPlayerId;
-    if (!this.state.players.some((p) => p.playerId === targetId)) {
+    const targetPlayer = this.state.players.find(
+      (p) => p.playerId === targetId,
+    );
+    if (!targetPlayer) {
       return false;
     }
+    const prevLuck = this.luckModeByPlayer.get(targetId) ?? 'normal';
     if (mode === 'normal') {
       this.luckModeByPlayer.delete(targetId);
     } else {
       this.luckModeByPlayer.set(targetId, mode);
+    }
+    if (prevLuck !== mode) {
+      this.recordChangeHistory({
+        actorPlayerId: this.state.hostPlayerId,
+        category: 'cheat',
+        kind: 'cheat_luck',
+        targetName: targetPlayer.name,
+        settingLabel: `${targetPlayer.name} の配牌・ツモ運（Luck）`,
+        beforeValue: formatLuckMode(prevLuck),
+        afterValue: formatLuckMode(mode),
+      });
     }
     return true;
   }
@@ -446,8 +541,199 @@ export class HostSession {
 
   clearAllSecretLuck(): boolean {
     if (this.destroyed) return false;
+    const affected = this.collectActiveLuckEntries();
     this.luckModeByPlayer.clear();
+    if (affected.length > 0) {
+      this.recordChangeHistory({
+        actorPlayerId: this.state.hostPlayerId,
+        category: 'cheat',
+        kind: 'cheat_luck_reset',
+        settingLabel: '全員の配牌・ツモ運（Luck）をリセット',
+        beforeValue: affected.join(', '),
+        afterValue: '全員 通常',
+      });
+    }
     return true;
+  }
+
+  /** `//stop` コマンド: 全プレイヤーの Peek・Luck 効果を標準へリセットし全画面へ即時反映する */
+  stopAllSecretEffects(actorPlayerId?: string): boolean {
+    if (this.destroyed) return false;
+    const actorId = actorPlayerId ?? this.state.hostPlayerId;
+    if (!this.state.players.some((p) => p.playerId === actorId)) {
+      return false;
+    }
+
+    const prevPeekIds = Array.from(this.peekPlayers);
+    const prevPeekNames = this.state.players
+      .filter((p) => this.peekPlayers.has(p.playerId))
+      .map((p) => p.name);
+    const prevLuckEntries = this.collectActiveLuckEntries();
+
+    this.peekPlayers.clear();
+    this.luckModeByPlayer.clear();
+
+    const now = Date.now();
+    if (prevPeekIds.includes(this.state.hostPlayerId)) {
+      this.emitHostView();
+    }
+    this.callbacks.onSecretState?.(
+      this.buildSecretStateForViewer(this.state.hostPlayerId),
+    );
+
+    if (!this.offline) {
+      for (const player of this.state.players) {
+        if (
+          player.playerId === this.state.hostPlayerId ||
+          this.isCpuPlayer(player.playerId)
+        ) {
+          continue;
+        }
+        const playerConn = this.participantConns.get(player.playerId);
+        if (!playerConn || !playerConn.open) continue;
+        if (prevPeekIds.includes(player.playerId)) {
+          this.sendToConn(playerConn, {
+            kind: 'STATE_VIEW',
+            payload: this.buildViewForViewer(player.playerId, now),
+          });
+        }
+        this.sendToConn(playerConn, {
+          kind: 'SECRET_STATE',
+          payload: this.buildSecretStateForViewer(player.playerId),
+        });
+      }
+    }
+
+    if (prevPeekNames.length > 0 || prevLuckEntries.length > 0) {
+      const details: string[] = [];
+      if (prevPeekNames.length > 0) {
+        details.push(`Peek: ${prevPeekNames.join(', ')}`);
+      }
+      if (prevLuckEntries.length > 0) {
+        details.push(`Luck: ${prevLuckEntries.join(', ')}`);
+      }
+      this.recordChangeHistory({
+        actorPlayerId: actorId,
+        category: 'cheat',
+        kind: 'cheat_stop',
+        settingLabel: '全プレイヤーの //cheat 効果を標準へリセット（//stop）',
+        beforeValue: details.join(' / '),
+        afterValue: '全員 標準（Peek OFF / Luck 通常）',
+      });
+    }
+    return true;
+  }
+
+  getChangeHistory(): ChangeHistoryEntry[] {
+    return [...this.changeHistory];
+  }
+
+  private collectActiveLuckEntries(): string[] {
+    const entries: string[] = [];
+    for (const p of this.state.players) {
+      const mode = this.luckModeByPlayer.get(p.playerId);
+      if (mode && mode !== 'normal') {
+        entries.push(`${p.name}:${formatLuckMode(mode)}`);
+      }
+    }
+    return entries;
+  }
+
+  private resolveParticipantName(participantId: string): string {
+    const player = this.state.players.find((p) => p.playerId === participantId);
+    if (player) return player.name;
+    const spec = (this.state.spectators ?? []).find(
+      (s) => s.spectatorId === participantId,
+    );
+    if (spec) return spec.name;
+    return '不明なプレイヤー';
+  }
+
+  private recordChangeHistory(params: {
+    actorPlayerId: string;
+    category: ChangeHistoryCategory;
+    kind: ChangeHistoryKind;
+    settingLabel: string;
+    targetName?: string;
+    beforeValue?: string;
+    afterValue?: string;
+    phaseLabel?: string;
+  }): void {
+    const entry: ChangeHistoryEntry = {
+      id: `chg-${++this.changeHistorySeq}`,
+      timestamp: Date.now(),
+      actorPlayerId: params.actorPlayerId,
+      actorName: this.resolveParticipantName(params.actorPlayerId),
+      category: params.category,
+      kind: params.kind,
+      phaseLabel: params.phaseLabel ?? buildPhaseLabel(this.state),
+      settingLabel: params.settingLabel,
+      ...(params.targetName !== undefined
+        ? { targetName: params.targetName }
+        : {}),
+      ...(params.beforeValue !== undefined
+        ? { beforeValue: params.beforeValue }
+        : {}),
+      ...(params.afterValue !== undefined
+        ? { afterValue: params.afterValue }
+        : {}),
+    };
+    this.changeHistory.push(entry);
+    if (this.changeHistory.length > MAX_CHANGE_HISTORY_ENTRIES) {
+      this.changeHistory = this.changeHistory.slice(-MAX_CHANGE_HISTORY_ENTRIES);
+    }
+    this.notifyChangeHistoryWatchers();
+  }
+
+  private notifyChangeHistoryWatchers(): void {
+    const snapshot = [...this.changeHistory];
+    this.callbacks.onChangeHistory?.(snapshot);
+    if (this.offline || this.destroyed) return;
+    for (const watcherId of Array.from(this.changeHistoryWatchers)) {
+      const conn = this.participantConns.get(watcherId);
+      if (!conn || !conn.open) {
+        this.changeHistoryWatchers.delete(watcherId);
+        continue;
+      }
+      this.sendToConn(conn, {
+        kind: 'CHANGE_HISTORY',
+        payload: snapshot,
+      });
+    }
+  }
+
+  private restoreSecretAndHistoryFromSnapshot(snap: HostSnapshotPayload): void {
+    this.peekPlayers.clear();
+    if (Array.isArray(snap.peekPlayers)) {
+      for (const pid of snap.peekPlayers) {
+        this.peekPlayers.add(pid);
+      }
+    }
+    this.luckModeByPlayer.clear();
+    if (snap.luckModeByPlayer) {
+      for (const [pid, mode] of Object.entries(snap.luckModeByPlayer)) {
+        if (mode !== 'normal') {
+          this.luckModeByPlayer.set(pid, mode);
+        }
+      }
+    }
+    this.changeHistory = Array.isArray(snap.changeHistory)
+      ? [...snap.changeHistory].slice(-MAX_CHANGE_HISTORY_ENTRIES)
+      : [];
+    let maxSeq =
+      typeof snap.changeHistorySeq === 'number' &&
+      Number.isFinite(snap.changeHistorySeq)
+        ? snap.changeHistorySeq
+        : 0;
+    for (const item of this.changeHistory) {
+      if (item.id.startsWith('chg-')) {
+        const num = Number(item.id.slice(4));
+        if (Number.isFinite(num) && num > maxSeq) {
+          maxSeq = num;
+        }
+      }
+    }
+    this.changeHistorySeq = maxSeq;
   }
 
   private buildSecretStateForViewer(viewerId: string): SecretStatePayload {
@@ -757,6 +1043,18 @@ export class HostSession {
       }
     }
 
+    const oldHostName = this.resolveParticipantName(oldHostId);
+    const chosenName = this.resolveParticipantName(chosenId);
+    this.recordChangeHistory({
+      actorPlayerId: oldHostId,
+      category: 'settings',
+      kind: 'host_transfer',
+      targetName: chosenName,
+      settingLabel: 'ホスト権限の引き継ぎ',
+      beforeValue: oldHostName,
+      afterValue: chosenName,
+    });
+
     const nextEpoch = this.hostEpoch + 1;
     const newHostPeerId = migratedHostPeerId(this.state.roomCode, nextEpoch);
     const snapshot: HostSnapshotPayload = {
@@ -767,6 +1065,10 @@ export class HostSession {
       spectatorTokens: Object.fromEntries(this.spectatorTokens),
       hostEpoch: nextEpoch,
       permanentRoom: isPermanentRoomCode(this.state.roomCode),
+      changeHistory: [...this.changeHistory],
+      changeHistorySeq: this.changeHistorySeq,
+      peekPlayers: Array.from(this.peekPlayers),
+      luckModeByPlayer: Object.fromEntries(this.luckModeByPlayer),
     };
 
     const migratingPayload: HostMigratingPayload = {
@@ -912,6 +1214,11 @@ export class HostSession {
     if (prevLuck !== undefined) {
       this.luckModeByPlayer.delete(prevId);
       this.luckModeByPlayer.set(nextId, prevLuck);
+    }
+    if (this.changeHistory.some((e) => e.actorPlayerId === prevId)) {
+      this.changeHistory = this.changeHistory.map((e) =>
+        e.actorPlayerId === prevId ? { ...e, actorPlayerId: nextId } : e,
+      );
     }
 
     const round = this.state.round;
@@ -1253,6 +1560,7 @@ export class HostSession {
     this.cpuCount = this.state.players.filter((p) =>
       isCpuPlayerId(p.playerId),
     ).length;
+    this.restoreSecretAndHistoryFromSnapshot(snap);
 
     this.pendingTakeover = null;
     const newHostPlayer = this.state.players.find(
@@ -1335,6 +1643,29 @@ export class HostSession {
       return;
     }
 
+    if (message.kind === 'REQUEST_CHANGE_HISTORY') {
+      if (!mapped) {
+        this.sendToConn(conn, {
+          kind: 'ERROR',
+          payload: {
+            code: 'UNAUTHORIZED_ACTION',
+            message: '入室後に履歴を確認できます。',
+          },
+        });
+        return;
+      }
+      if (message.watch === true) {
+        this.changeHistoryWatchers.add(participantId);
+      } else if (message.watch === false) {
+        this.changeHistoryWatchers.delete(participantId);
+      }
+      this.sendToConn(conn, {
+        kind: 'CHANGE_HISTORY',
+        payload: [...this.changeHistory],
+      });
+      return;
+    }
+
     if (
       mapped?.kind === 'spectator' ||
       !this.state.players.some((p) => p.playerId === participantId)
@@ -1350,23 +1681,13 @@ export class HostSession {
     }
 
     if (message.kind === 'SECRET_OPTION') {
-      if (message.peek !== undefined) {
-        if (message.peek) {
-          this.peekPlayers.add(participantId);
-        } else {
-          this.peekPlayers.delete(participantId);
-        }
-        this.sendToConn(conn, {
-          kind: 'STATE_VIEW',
-          payload: this.buildViewForViewer(participantId, Date.now()),
-        });
-      }
-      if (message.clearAllLuck) {
-        this.luckModeByPlayer.clear();
-      }
+      let targetLuckPlayer: { playerId: string; name: string } | undefined;
       if (message.luck !== undefined) {
         const targetId = message.luckTargetPlayerId ?? participantId;
-        if (!this.state.players.some((p) => p.playerId === targetId)) {
+        targetLuckPlayer = this.state.players.find(
+          (p) => p.playerId === targetId,
+        );
+        if (!targetLuckPlayer) {
           this.sendToConn(conn, {
             kind: 'ERROR',
             payload: {
@@ -1376,10 +1697,71 @@ export class HostSession {
           });
           return;
         }
-        if (message.luck === 'normal') {
-          this.luckModeByPlayer.delete(targetId);
+      }
+      if (message.clearAllCheat) {
+        this.stopAllSecretEffects(participantId);
+        if (
+          message.peek === undefined &&
+          message.clearAllLuck === undefined &&
+          message.luck === undefined
+        ) {
+          return;
+        }
+      }
+      if (message.peek !== undefined) {
+        const prevPeek = this.peekPlayers.has(participantId);
+        if (message.peek) {
+          this.peekPlayers.add(participantId);
         } else {
-          this.luckModeByPlayer.set(targetId, message.luck);
+          this.peekPlayers.delete(participantId);
+        }
+        this.sendToConn(conn, {
+          kind: 'STATE_VIEW',
+          payload: this.buildViewForViewer(participantId, Date.now()),
+        });
+        if (prevPeek !== message.peek) {
+          this.recordChangeHistory({
+            actorPlayerId: participantId,
+            category: 'cheat',
+            kind: 'cheat_peek',
+            settingLabel: '相手手牌の透視（Peek）',
+            beforeValue: prevPeek ? 'ON' : 'OFF',
+            afterValue: message.peek ? 'ON' : 'OFF',
+          });
+        }
+      }
+      if (message.clearAllLuck) {
+        const affected = this.collectActiveLuckEntries();
+        this.luckModeByPlayer.clear();
+        if (affected.length > 0) {
+          this.recordChangeHistory({
+            actorPlayerId: participantId,
+            category: 'cheat',
+            kind: 'cheat_luck_reset',
+            settingLabel: '全員の配牌・ツモ運（Luck）をリセット',
+            beforeValue: affected.join(', '),
+            afterValue: '全員 通常',
+          });
+        }
+      }
+      if (message.luck !== undefined && targetLuckPlayer) {
+        const prevLuck =
+          this.luckModeByPlayer.get(targetLuckPlayer.playerId) ?? 'normal';
+        if (message.luck === 'normal') {
+          this.luckModeByPlayer.delete(targetLuckPlayer.playerId);
+        } else {
+          this.luckModeByPlayer.set(targetLuckPlayer.playerId, message.luck);
+        }
+        if (prevLuck !== message.luck) {
+          this.recordChangeHistory({
+            actorPlayerId: participantId,
+            category: 'cheat',
+            kind: 'cheat_luck',
+            targetName: targetLuckPlayer.name,
+            settingLabel: `${targetLuckPlayer.name} の配牌・ツモ運（Luck）`,
+            beforeValue: formatLuckMode(prevLuck),
+            afterValue: formatLuckMode(message.luck),
+          });
         }
       }
       this.sendToConn(conn, {
@@ -1759,6 +2141,7 @@ export class HostSession {
       return;
     }
     this.participantConns.delete(participantId);
+    this.changeHistoryWatchers.delete(participantId);
 
     if (
       entry?.kind === 'spectator' ||
@@ -2364,6 +2747,10 @@ export class HostSession {
       spectatorTokens: Object.fromEntries(this.spectatorTokens),
       hostEpoch: this.hostEpoch,
       permanentRoom: isPermanentRoomCode(this.state.roomCode),
+      changeHistory: [...this.changeHistory],
+      changeHistorySeq: this.changeHistorySeq,
+      peekPlayers: Array.from(this.peekPlayers),
+      luckModeByPlayer: Object.fromEntries(this.luckModeByPlayer),
     };
 
     const encrypted = encryptCheckpoint(JSON.stringify(snapshot));
@@ -2547,6 +2934,7 @@ export class HostSession {
     }
     this.participantConns.clear();
     this.peerToParticipant.clear();
+    this.changeHistoryWatchers.clear();
     if (this.beaconPeer && !this.beaconPeer.destroyed) {
       this.beaconPeer.destroy();
     }
@@ -2557,6 +2945,184 @@ export class HostSession {
     this.peer = null;
     this.callbacks.onStatusChange('closed');
   }
+}
+
+const MAX_CHANGE_HISTORY_ENTRIES = 200;
+
+function formatLuckMode(mode: SecretLuckMode): string {
+  if (mode === 'god') return '豪運';
+  if (mode === 'good') return '好運';
+  return '通常';
+}
+
+function buildPhaseLabel(state: GameState): string {
+  if (state.phase === 'lobby') return 'ロビー';
+  if (state.phase === 'finished') return '終局';
+  const round = state.round;
+  if (!round) return '対局中';
+  const windLabel =
+    round.roundWind === 'E'
+      ? '東'
+      : round.roundWind === 'S'
+        ? '南'
+        : round.roundWind === 'W'
+          ? '西'
+          : '北';
+  const honbaSuffix = round.honba > 0 ? ` ${round.honba}本場` : '';
+  return `${windLabel}${round.kyokuNumber}局${honbaSuffix}`;
+}
+
+function formatRedDora(val: 0 | 1 | 4): string {
+  if (val === 4) return '全5赤';
+  if (val === 1) return '各1枚';
+  return 'なし';
+}
+
+function formatResponseTimeout(ms: number): string {
+  return ms === 0 ? '無制限' : `${Math.round(ms / 1000)}秒`;
+}
+
+function formatKandoraTimingValue(timing: {
+  ankan: string;
+  daiminkan: string;
+  kakan: string;
+}): string {
+  const label = (v: string) => (v === 'immediate' ? '即時' : '打牌後');
+  return `暗槓:${label(timing.ankan)}/大明槓:${label(timing.daiminkan)}/加槓:${label(timing.kakan)}`;
+}
+
+function extractRuleConfigChanges(
+  prevConfig: RuleConfig,
+  nextConfig: RuleConfig,
+  patch: Partial<RuleConfig>,
+): Array<{ label: string; beforeValue: string; afterValue: string }> {
+  const prevRules = deriveRules(prevConfig);
+  const nextRules = deriveRules(nextConfig);
+  const changes: Array<{
+    label: string;
+    beforeValue: string;
+    afterValue: string;
+  }> = [];
+
+  const pushIfChanged = <T>(
+    key: keyof RuleConfig,
+    label: string,
+    beforeVal: T,
+    afterVal: T,
+    format: (v: T) => string,
+  ) => {
+    if (patch[key] === undefined) return;
+    const beforeText = format(beforeVal);
+    const afterText = format(afterVal);
+    if (beforeText !== afterText) {
+      changes.push({ label, beforeValue: beforeText, afterValue: afterText });
+    }
+  };
+
+  pushIfChanged('playerCount', '人数', prevRules.playerCount, nextRules.playerCount, (v) => `${v}人麻雀`);
+  pushIfChanged('gameLength', '対局長さ', prevRules.gameLength, nextRules.gameLength, (v) =>
+    v === 'tonpuu' ? '東風戦' : '半荘戦',
+  );
+  pushIfChanged('tobi', 'トビ終了', prevRules.tobi, nextRules.tobi, (v) => (v ? 'ON' : 'OFF'));
+  pushIfChanged('tsumoLoss', 'ツモ損（3麻）', prevRules.tsumoLoss, nextRules.tsumoLoss, (v) =>
+    v ? 'ON' : 'OFF',
+  );
+  pushIfChanged('allowKuitan', '喰いタン', prevRules.allowKuitan, nextRules.allowKuitan, (v) =>
+    v ? 'ON' : 'OFF',
+  );
+  pushIfChanged('allowAtozuke', '後付け', prevRules.allowAtozuke, nextRules.allowAtozuke, (v) =>
+    v ? 'ON' : 'OFF',
+  );
+  pushIfChanged('honbaBonus', '本場加算', prevRules.honbaBonus, nextRules.honbaBonus, (v) =>
+    v ? 'ON' : 'OFF',
+  );
+  pushIfChanged('doubleRon', 'ダブロン', prevRules.doubleRon, nextRules.doubleRon, (v) =>
+    v ? 'ON' : 'OFF',
+  );
+  pushIfChanged('forbidKuikae', '喰い替え禁止', prevRules.forbidKuikae, nextRules.forbidKuikae, (v) =>
+    v ? 'ON' : 'OFF',
+  );
+  pushIfChanged('cpuLevel', 'CPUの強さ', prevRules.cpuLevel, nextRules.cpuLevel, (v) =>
+    v === 'easy' ? 'やさしめ' : '標準',
+  );
+  pushIfChanged(
+    'redDoraPerFive',
+    '赤ドラ',
+    prevRules.redDoraPerFive,
+    nextRules.redDoraPerFive,
+    formatRedDora,
+  );
+  pushIfChanged(
+    'kiriageMangan',
+    '切り上げ満貫',
+    prevRules.kiriageMangan,
+    nextRules.kiriageMangan,
+    (v) => (v ? 'ON' : 'OFF'),
+  );
+  pushIfChanged(
+    'allowKazoeYakuman',
+    '数え役満',
+    prevRules.allowKazoeYakuman,
+    nextRules.allowKazoeYakuman,
+    (v) => (v ? 'ON' : 'OFF'),
+  );
+  pushIfChanged(
+    'doubleWindPairFu',
+    '連風牌の符',
+    prevRules.doubleWindPairFu,
+    nextRules.doubleWindPairFu,
+    (v) => `${v}符`,
+  );
+  pushIfChanged(
+    'initialPoints',
+    '初期持ち点',
+    prevRules.initialPoints,
+    nextRules.initialPoints,
+    (v) => `${v.toLocaleString()}点`,
+  );
+  pushIfChanged(
+    'notenPenaltyTotal',
+    'ノーテン罰符',
+    prevRules.notenPenaltyTotal,
+    nextRules.notenPenaltyTotal,
+    (v) => `${v.toLocaleString()}点`,
+  );
+  pushIfChanged(
+    'responseTimeoutMs',
+    '鳴き制限時間',
+    prevRules.responseTimeoutMs,
+    nextRules.responseTimeoutMs,
+    formatResponseTimeout,
+  );
+  pushIfChanged(
+    'maxKansPerRound',
+    '1局のカン上限',
+    prevRules.maxKansPerRound,
+    nextRules.maxKansPerRound,
+    (v) => `${v}回`,
+  );
+  pushIfChanged('allowChi', 'チー許可', prevRules.allowChi, nextRules.allowChi, (v) =>
+    v ? 'ON' : 'OFF',
+  );
+  pushIfChanged('allowKita', '北抜き許可', prevRules.allowKita, nextRules.allowKita, (v) =>
+    v ? 'ON' : 'OFF',
+  );
+  pushIfChanged(
+    'tileSetId',
+    '使用牌セット',
+    prevRules.tileSet.id,
+    nextRules.tileSet.id,
+    (v) => (v === 'sanma_no_2m_to_8m_108' ? '三麻108枚' : '136枚'),
+  );
+  pushIfChanged(
+    'kandoraTiming',
+    'カンドラ表示',
+    prevRules.kandoraTiming,
+    nextRules.kandoraTiming,
+    formatKandoraTimingValue,
+  );
+
+  return changes;
 }
 
 function cpuPlayerId(index: number): string {

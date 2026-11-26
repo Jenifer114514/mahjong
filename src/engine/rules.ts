@@ -57,11 +57,11 @@ export function deriveRules(
   const deadWallSize = DEAD_WALL_SIZE_BY_PLAYERS[config.playerCount];
 
   const redDoraPerFive: 0 | 1 | 4 =
+    config.redDoraPerFive === 0 ||
+    config.redDoraPerFive === 1 ||
     config.redDoraPerFive === 4
-      ? 4
-      : config.redDoraPerFive === 1
-        ? 1
-        : DEFAULT_RED_DORA_PER_FIVE;
+      ? config.redDoraPerFive
+      : DEFAULT_RED_DORA_PER_FIVE;
   const notenPenaltyTotal =
     typeof config.notenPenaltyTotal === 'number' &&
     Number.isFinite(config.notenPenaltyTotal) &&

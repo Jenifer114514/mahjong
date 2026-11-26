@@ -10,12 +10,16 @@ import {
 import { buildSeededTestDeck } from './testHelpers';
 
 describe('buildTileDeck & dealRoundFromDeck', () => {
-  it('4人麻雀: 136枚・赤ドラなし・重複なし・王牌(4+5+5=14)・配牌整合性を満たす', () => {
+  it('4人麻雀: 136枚・赤ドラ各5に1枚(計3枚)・重複なし・王牌(4+5+5=14)・配牌整合性を満たす', () => {
     const rules = deriveRules({ playerCount: 4, gameLength: 'tonpuu' });
     const deck = buildTileDeck(rules);
 
     expect(deck).toHaveLength(136);
-    expect(deck.every((t) => t.isRed === false)).toBe(true);
+    expect(deck.filter((t) => t.isRed).map((t) => t.kind).sort()).toEqual([
+      '5m',
+      '5p',
+      '5s',
+    ]);
     expect(new Set(deck.map((t) => t.id)).size).toBe(136);
 
     const shuffled = buildSeededTestDeck(rules, 12345);
@@ -46,12 +50,15 @@ describe('buildTileDeck & dealRoundFromDeck', () => {
     expect(new Set(allDealtIds).size).toBe(136);
   });
 
-  it('3人麻雀: 萬子2〜8を除いた108枚・赤ドラなし・王牌(4+5+5=14)・配牌整合性を満たす', () => {
+  it('3人麻雀: 萬子2〜8を除いた108枚・赤ドラ各5に1枚(計2枚)・王牌(4+5+5=14)・配牌整合性を満たす', () => {
     const rules = deriveRules({ playerCount: 3, gameLength: 'tonpuu' });
     const deck = buildTileDeck(rules);
 
     expect(deck).toHaveLength(108);
-    expect(deck.every((t) => t.isRed === false)).toBe(true);
+    expect(deck.filter((t) => t.isRed).map((t) => t.kind).sort()).toEqual([
+      '5p',
+      '5s',
+    ]);
     expect(new Set(deck.map((t) => t.id)).size).toBe(108);
 
     const excluded = new Set(['2m', '3m', '4m', '5m', '6m', '7m', '8m']);

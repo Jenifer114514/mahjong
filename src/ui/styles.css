@@ -359,7 +359,7 @@ input {
 
 .player-slots {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(165px, 100%), 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(210px, 100%), 1fr));
   gap: 8px;
   margin: 8px 0 10px;
 }
@@ -374,6 +374,11 @@ input {
 .player-slot.is-empty {
   border-style: dashed;
   color: var(--text-muted);
+}
+
+.player-slot-meta {
+  min-width: 0;
+  flex: 1 1 110px;
 }
 
 /* Mahjong Table */
@@ -2695,10 +2700,11 @@ input {
   line-height: 1;
 }
 
-/* ---------- 設定・チャット・裏設定モーダル ---------- */
+/* ---------- 設定・チャット・裏設定・履歴チェックモーダル ---------- */
 .table-settings-panel,
 .table-chat-panel,
-.table-cheat-panel {
+.table-cheat-panel,
+.table-check-panel {
   width: min(440px, 100%);
   padding: 14px 16px;
   gap: 10px;
@@ -2722,7 +2728,8 @@ input {
   color: #9cc6ff;
 }
 
-.table-modal-close-btn {
+.table-modal-close-btn,
+.check-refresh-btn {
   padding: 4px 10px;
   font-size: 0.78rem;
 }
@@ -2920,11 +2927,244 @@ input {
   border: 1px solid rgba(125, 175, 250, 0.18);
 }
 
+/* ---------- //check 変更履歴モーダル ---------- */
+.check-modal-title-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.check-audit-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #a7f3d0;
+  background: rgba(16, 185, 129, 0.14);
+  border: 1px solid rgba(110, 231, 183, 0.42);
+}
+
+.check-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.check-summary-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.75rem;
+  color: #c7dcff;
+  padding: 5px 9px;
+  border-radius: 7px;
+  background: rgba(79, 157, 255, 0.08);
+  border: 1px solid rgba(125, 175, 250, 0.22);
+}
+
+.check-filter-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.check-filter-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.check-filter-btn {
+  padding: 3px 9px;
+  font-size: 0.72rem;
+  border-radius: 999px;
+}
+
+.check-filter-btn.is-active {
+  background: linear-gradient(180deg, rgba(56, 189, 248, 0.3) 0%, rgba(30, 88, 168, 0.34) 100%);
+  border-color: rgba(125, 211, 252, 0.78);
+  color: #eef9ff;
+}
+
+.check-history-list {
+  flex: 1 1 auto;
+  min-height: 110px;
+  max-height: min(360px, 52dvh);
+  overflow-y: auto;
+  overflow-anchor: none;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding-right: 2px;
+}
+
+.check-empty-state {
+  text-align: center;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  padding: 20px 10px;
+  border-radius: 8px;
+  background: rgba(7, 14, 31, 0.56);
+  border: 1px dashed rgba(125, 175, 250, 0.25);
+}
+
+.check-history-item {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(7, 14, 31, 0.62);
+  border: 1px solid rgba(125, 175, 250, 0.2);
+}
+
+.check-history-item.is-other-player {
+  background: rgba(34, 24, 16, 0.54);
+  border-color: rgba(251, 191, 36, 0.44);
+}
+
+.check-history-item.is-other-player.is-cat-cheat {
+  background: rgba(54, 20, 32, 0.52);
+  border-color: rgba(248, 113, 113, 0.52);
+}
+
+.check-item-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.check-item-badges {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  min-width: 0;
+}
+
+.check-cat-badge {
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 0.64rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+}
+
+.check-cat-badge.is-cheat {
+  color: #fecaca;
+  background: rgba(239, 68, 68, 0.22);
+  border: 1px solid rgba(248, 113, 113, 0.55);
+}
+
+.check-cat-badge.is-settings {
+  color: #bae6fd;
+  background: rgba(56, 189, 248, 0.18);
+  border: 1px solid rgba(125, 211, 252, 0.48);
+}
+
+.check-actor-name {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #edf4ff;
+}
+
+.check-actor-tag {
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 0.63rem;
+  font-weight: 700;
+  border: 1px solid rgba(155, 190, 245, 0.3);
+}
+
+.check-actor-tag.is-self {
+  color: #dbeafe;
+  background: rgba(59, 130, 246, 0.18);
+  border-color: rgba(96, 165, 250, 0.48);
+}
+
+.check-actor-tag.is-other {
+  color: #fde68a;
+  background: rgba(245, 158, 11, 0.18);
+  border-color: rgba(251, 191, 36, 0.52);
+}
+
+.check-actor-tag.is-host {
+  color: #93c5fd;
+  background: rgba(59, 130, 246, 0.18);
+  border-color: rgba(96, 165, 250, 0.5);
+}
+
+.check-item-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+}
+
+.check-phase-pill {
+  padding: 1px 6px;
+  border-radius: 6px;
+  font-size: 0.65rem;
+  color: #d6e4ff;
+  background: rgba(148, 163, 184, 0.16);
+  border: 1px solid rgba(148, 163, 184, 0.28);
+}
+
+.check-time-text {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.check-item-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #f4f8ff;
+}
+
+.check-item-diff {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 0.74rem;
+}
+
+.check-diff-before {
+  padding: 1px 7px;
+  border-radius: 5px;
+  color: #cbd5e1;
+  background: rgba(100, 116, 139, 0.2);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+}
+
+.check-diff-arrow {
+  color: #93c5fd;
+  font-weight: 700;
+}
+
+.check-diff-after {
+  padding: 1px 7px;
+  border-radius: 5px;
+  font-weight: 700;
+  color: #fef08a;
+  background: rgba(234, 179, 8, 0.18);
+  border: 1px solid rgba(250, 204, 21, 0.48);
+}
+
 .chat-messages-list {
   flex: 1 1 auto;
   min-height: 90px;
   max-height: 220px;
   overflow-y: auto;
+  overflow-anchor: none;
+  scroll-behavior: auto;
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -2979,10 +3219,6 @@ input {
 }
 
 /* ---------- ルーム詳細設定（<details> 折りたたみUI） ---------- */
-.lobby-entry-advanced-slot {
-  margin-bottom: 12px;
-}
-
 .lobby-advanced-details {
   border-radius: 9px;
   border: 1px solid rgba(125, 175, 250, 0.25);
@@ -3155,35 +3391,6 @@ input {
   height: 100%;
   max-height: 100%;
   border-radius: 0;
-}
-
-/* ---------- ロビーの CPU 後入れ機能 ---------- */
-.lobby-cpu-controls {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin: 4px 0 10px;
-  padding: 9px 12px;
-  border-radius: 10px;
-  background: rgba(79, 157, 255, 0.08);
-  border: 1px dashed rgba(120, 178, 255, 0.38);
-}
-
-.lobby-cpu-buttons {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.lobby-cpu-buttons .btn {
-  flex: 1 1 140px;
-  font-size: 0.84rem;
-  padding: 7px 10px;
-}
-
-.lobby-cpu-buttons .btn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
 }
 
 .lobby-settings-panel {
@@ -3789,12 +3996,14 @@ input {
 
   .table-settings-panel,
   .table-chat-panel,
-  .table-cheat-panel {
+  .table-cheat-panel,
+  .table-check-panel {
     padding: 10px 12px;
     gap: 7px;
   }
 
-  .table-chat-panel {
+  .table-chat-panel,
+  .table-check-panel {
     max-height: calc(100vh - 10px);
     max-height: calc(100dvh - 10px);
   }
@@ -3802,6 +4011,11 @@ input {
   .chat-messages-list {
     min-height: 64px;
     max-height: 120px;
+  }
+
+  .check-history-list {
+    min-height: 80px;
+    max-height: none;
   }
 
   .table-left-actions {
@@ -4114,13 +4328,26 @@ input {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
-.lobby-transfer-btn {
+.lobby-transfer-btn,
+.lobby-slot-btn {
+  flex: 0 0 auto;
   padding: 4px 10px;
   font-size: 0.76rem;
   white-space: nowrap;
+}
+
+.lobby-cpu-add-btn {
+  border-color: rgba(110, 185, 255, 0.45);
+  color: #cfe6ff;
+}
+
+.lobby-cpu-remove-btn {
+  border-color: rgba(229, 110, 110, 0.42);
+  color: #ffc5c5;
 }
 
 .lobby-spectators-line {
@@ -5104,10 +5331,11 @@ input {
   box-shadow: 0 2px 3px rgba(0, 0, 0, 0.5);
 }
 
-/* 10. 設定・チャット・裏設定ポップアップ（卓全体は背後に見えたまま） */
+/* 10. 設定・チャット・裏設定・履歴チェックポップアップ（卓全体は背後に見えたまま） */
 .overlay-backdrop-modal.table-settings-modal,
 .overlay-backdrop-modal.table-chat-modal,
-.overlay-backdrop-modal.table-cheat-modal {
+.overlay-backdrop-modal.table-cheat-modal,
+.overlay-backdrop-modal.table-check-modal {
   align-items: flex-start;
   justify-content: flex-end;
   padding: 46px 16px 12px;
@@ -5117,7 +5345,8 @@ input {
 
 .overlay-backdrop-modal.table-settings-modal > .table-settings-panel,
 .overlay-backdrop-modal.table-chat-modal > .table-chat-panel,
-.overlay-backdrop-modal.table-cheat-modal > .table-cheat-panel {
+.overlay-backdrop-modal.table-cheat-modal > .table-cheat-panel,
+.overlay-backdrop-modal.table-check-modal > .table-check-panel {
   width: min(390px, 100%);
   max-height: calc(100vh - 58px);
   max-height: calc(100dvh - 58px);
@@ -5125,11 +5354,16 @@ input {
   box-shadow: 0 14px 36px rgba(0, 0, 0, 0.72);
 }
 
-.overlay-backdrop-modal.table-cheat-modal > .table-cheat-panel {
+.overlay-backdrop-modal.table-cheat-modal > .table-cheat-panel,
+.overlay-backdrop-modal.table-check-modal > .table-check-panel {
   width: min(440px, 100%);
+  overflow-anchor: none;
 }
 
-.overlay-backdrop-modal.table-chat-modal > .table-chat-panel {
+.overlay-backdrop-modal.table-chat-modal > .table-chat-panel,
+.overlay-backdrop-modal.table-check-modal > .table-check-panel {
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
 }
 
@@ -5314,11 +5548,13 @@ input {
 
   .overlay-backdrop-modal.table-settings-modal,
   .overlay-backdrop-modal.table-chat-modal,
-  .overlay-backdrop-modal.table-cheat-modal {
+  .overlay-backdrop-modal.table-cheat-modal,
+  .overlay-backdrop-modal.table-check-modal {
     padding: 36px 10px 8px;
   }
 
-  .overlay-backdrop-modal.table-chat-modal > .table-chat-panel {
+  .overlay-backdrop-modal.table-chat-modal > .table-chat-panel,
+  .overlay-backdrop-modal.table-check-modal > .table-check-panel {
     max-height: calc(100vh - 44px);
     max-height: calc(100dvh - 44px);
   }

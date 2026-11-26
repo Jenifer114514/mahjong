@@ -81,6 +81,7 @@ describe('deriveRules (RuleConfig)', () => {
       expect(rules.allowKita).toBe(expectedAllowKita);
       expect(rules.doubleRon).toBe(true);
       expect(rules.forbidKuikae).toBe(true);
+      expect(rules.redDoraPerFive).toBe(1);
       expect(rules.responseTimeoutMs).toBe(15000);
       expect(rules.maxKansPerRound).toBe(4);
       expect(rules.kandoraTiming).toEqual({

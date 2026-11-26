@@ -1442,25 +1442,46 @@
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.98), 0 0 10px rgba(255, 218, 92, 0.7);
 }
 
-/* ---------- チャットUI 洗練 ---------- */
-.table-chat-panel {
+/* ---------- チャットUI・履歴チェックUI 洗練 ---------- */
+.overlay-backdrop-modal.table-chat-modal > .table-chat-panel,
+.table-chat-panel,
+.overlay-backdrop-modal.table-check-modal > .table-check-panel,
+.table-check-panel {
   max-height: min(86dvh, 560px);
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .chat-messages-list {
   flex: 1 1 auto;
-  min-height: 110px;
+  min-height: 0;
+  max-height: min(320px, 54dvh);
+  overflow-anchor: none;
+  scroll-behavior: auto;
+}
+
+.check-history-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: min(360px, 52dvh);
+  overflow-anchor: none;
+  scroll-behavior: auto;
 }
 
 @media (max-height: 440px) {
-  .table-chat-panel {
-    max-height: 92dvh;
+  .overlay-backdrop-modal.table-chat-modal > .table-chat-panel,
+  .table-chat-panel,
+  .overlay-backdrop-modal.table-check-modal > .table-check-panel,
+  .table-check-panel {
+    max-height: calc(100vh - 44px);
+    max-height: calc(100dvh - 44px);
   }
 
-  .chat-messages-list {
-    min-height: 72px;
+  .chat-messages-list,
+  .check-history-list {
+    min-height: 0;
+    max-height: none;
   }
 }
 

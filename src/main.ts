@@ -23,6 +23,8 @@ import {
   type SavedSessionRecord,
 } from './net/storage';
 import type {
+  ChangeHistoryCategory,
+  ChangeHistoryEntry,
   ChatMessage,
   GameError,
   HostSnapshotPayload,
@@ -49,6 +51,8 @@ import { soundEngine } from './ui/sound';
 import { prewarmTileSpriteSheet, waitForTileFonts } from './ui/tileTexture';
 import {
   isCheatModalCommand,
+  isCheckModalCommand,
+  isStopCheatCommand,
   type LocalLuckMode,
 } from './ui/chatCommands';
 import {
@@ -143,8 +147,14 @@ class MahjongApp {
   private leaveConfirmPending = false;
   private settingsOpen = false;
   private cheatOpen = false;
+  private checkOpen = false;
   private chatOpen = false;
+  private chatPinnedToBottom = true;
+  private chatAutoScrollCleanup: (() => void) | null = null;
   private chatMessages: ChatMessage[] = [];
+  private changeHistory: ChangeHistoryEntry[] = [];
+  private checkActorFilter: 'all' | 'others' = 'all';
+  private checkCategoryFilter: 'all' | ChangeHistoryCategory = 'all';
   private secretPeekEnabled = false;
   private secretLuckByPlayer: Record<string, LocalLuckMode> = {};
   private unreadChatCount = 0;
@@ -320,6 +330,21 @@ class MahjongApp {
         if (sessionSeq !== this.sessionSeq) return;
         this.handleChatHistory(messages);
       },
+      onChangeHistory: (history) => {
+        if (sessionSeq !== this.sessionSeq) return;
+        this.changeHistory = [...history];
+        if (this.checkOpen) {
+          this.renderFloating();
+        }
+      },
+      onSecretState: (secretState) => {
+        if (sessionSeq !== this.sessionSeq) return;
+        this.secretPeekEnabled = secretState.peek;
+        this.secretLuckByPlayer = { ...secretState.luckByPlayer };
+        if (this.cheatOpen) {
+          this.renderFloating();
+        }
+      },
       onWelcome: (welcome) => {
         if (sessionSeq !== this.sessionSeq) return;
         const host = getHost();
@@ -437,6 +462,13 @@ class MahjongApp {
         this.secretPeekEnabled = secretState.peek;
         this.secretLuckByPlayer = { ...secretState.luckByPlayer };
         if (this.cheatOpen) {
+          this.renderFloating();
+        }
+      },
+      onChangeHistory: (history) => {
+        if (sessionSeq !== this.sessionSeq) return;
+        this.changeHistory = [...history];
+        if (this.checkOpen) {
           this.renderFloating();
         }
       },
@@ -570,7 +602,11 @@ class MahjongApp {
     for (const [pid, mode] of Object.entries(this.secretLuckByPlayer)) {
       if (mode !== 'normal') host.setSecretLuck(mode, pid);
     }
+    this.changeHistory = host.getChangeHistory();
     host.start();
+    if (this.checkOpen) {
+      this.renderFloating();
+    }
   }
 
   private promoteToHostFromCheckpoint(params: PromoteFromCheckpointParams): void {
@@ -661,9 +697,9 @@ class MahjongApp {
   }
 
   /** ロビーから CPU を減らす */
-  private removeCpuFromLobby(): void {
+  private removeCpuFromLobby(targetPlayerId?: string): void {
     if (this.activeSession?.role !== 'host') return;
-    this.activeSession.session.removeCpu();
+    this.activeSession.session.removeCpu(targetPlayerId);
     this.render();
   }
 
@@ -768,8 +804,9 @@ class MahjongApp {
     this.currentView = view;
     if (prevView?.phase === 'lobby' && view.phase !== 'lobby') {
       this.clearLobbyChatToast();
-      if (this.cheatOpen) {
+      if (this.cheatOpen || this.checkOpen) {
         this.cheatOpen = false;
+        this.closeCheckModal();
         this.renderFloating();
       }
     } else if (view.phase === 'lobby') {
@@ -778,11 +815,12 @@ class MahjongApp {
         this.clearChatBubbles();
         this.settingsOpen = false;
         this.cheatOpen = false;
+        this.closeCheckModal();
         this.renderFloating();
       }
     }
     if (
-      this.cheatOpen &&
+      (this.cheatOpen || this.checkOpen) &&
       (prevView?.isSpectator !== view.isSpectator ||
         prevView?.players.map((p) => p.playerId).join(',') !==
           view.players.map((p) => p.playerId).join(','))
@@ -1107,8 +1145,14 @@ class MahjongApp {
       this.leaveConfirmPending = false;
       this.settingsOpen = false;
       this.cheatOpen = false;
+      this.checkOpen = false;
       this.chatOpen = false;
+      this.chatPinnedToBottom = true;
+      this.cleanupChatAutoScroll();
       this.chatMessages = [];
+      this.changeHistory = [];
+      this.checkActorFilter = 'all';
+      this.checkCategoryFilter = 'all';
       this.secretPeekEnabled = false;
       this.secretLuckByPlayer = {};
       this.unreadChatCount = 0;
@@ -1227,6 +1271,7 @@ class MahjongApp {
       this.chatOpen = true;
       this.settingsOpen = false;
       this.cheatOpen = false;
+      this.closeCheckModal();
       this.clearLobbyChatToast();
       if (this.unreadChatCount > 0) {
         this.unreadChatCount = 0;
@@ -1294,11 +1339,47 @@ class MahjongApp {
     }
   }
 
+  private closeCheckModal(options: { notifyRemote?: boolean } = {}): void {
+    if (!this.checkOpen) return;
+    this.checkOpen = false;
+    if (
+      options.notifyRemote !== false &&
+      this.activeSession?.role === 'client'
+    ) {
+      const client = this.activeSession.session as ClientSession & {
+        requestChangeHistory?: (watch?: boolean) => void;
+      };
+      if (typeof client.requestChangeHistory === 'function') {
+        client.requestChangeHistory(false);
+      }
+    }
+  }
+
+  private syncChangeHistory(options: { watch?: boolean } = {}): void {
+    if (!this.activeSession) return;
+    if (this.activeSession.role === 'host') {
+      const host = this.activeSession.session as HostSession & {
+        getChangeHistory?: () => ChangeHistoryEntry[];
+      };
+      if (typeof host.getChangeHistory === 'function') {
+        this.changeHistory = host.getChangeHistory();
+      }
+      return;
+    }
+    const client = this.activeSession.session as ClientSession & {
+      requestChangeHistory?: (watch?: boolean) => void;
+    };
+    if (typeof client.requestChangeHistory === 'function') {
+      client.requestChangeHistory(options.watch);
+    }
+  }
+
   private sendChatMessage(text: string): boolean {
     if (isCheatModalCommand(text)) {
       this.chatDraft = '';
       this.chatOpen = false;
       this.settingsOpen = false;
+      this.closeCheckModal();
       this.cheatOpen = true;
       if (
         this.activeSession?.role === 'client' &&
@@ -1310,10 +1391,50 @@ class MahjongApp {
       this.renderFloating();
       return true;
     }
+    if (isCheckModalCommand(text)) {
+      this.chatDraft = '';
+      this.chatOpen = false;
+      this.settingsOpen = false;
+      this.cheatOpen = false;
+      this.checkOpen = true;
+      this.syncChangeHistory({ watch: true });
+      soundEngine.playSelect();
+      this.renderFloating();
+      return true;
+    }
+    if (isStopCheatCommand(text)) {
+      this.chatDraft = '';
+      this.chatOpen = false;
+      this.settingsOpen = false;
+      this.cheatOpen = false;
+      this.closeCheckModal();
+      if (this.activeSession && !this.currentView?.isSpectator) {
+        if (this.activeSession.role === 'host') {
+          const host = this.activeSession.session as HostSession & {
+            stopAllSecretEffects?: () => boolean;
+          };
+          if (typeof host.stopAllSecretEffects === 'function') {
+            host.stopAllSecretEffects();
+          }
+        } else {
+          this.activeSession.session.setSecretOption({ clearAllCheat: true });
+        }
+        this.secretPeekEnabled = false;
+        const resetLuck: Record<string, LocalLuckMode> = {};
+        for (const p of this.currentView?.players ?? []) {
+          resetLuck[p.playerId] = 'normal';
+        }
+        this.secretLuckByPlayer = resetLuck;
+      }
+      soundEngine.playSelect();
+      this.renderFloating();
+      return true;
+    }
     if (!this.activeSession) return false;
     const ok = this.activeSession.session.sendChat(text);
     if (ok) {
       this.chatDraft = '';
+      this.chatPinnedToBottom = true;
     }
     return ok;
   }
@@ -1569,6 +1690,7 @@ class MahjongApp {
         if (this.settingsOpen) {
           this.chatOpen = false;
           this.cheatOpen = false;
+          this.closeCheckModal();
           this.fullscreenError = null;
         }
         this.renderFloating();
@@ -1716,7 +1838,7 @@ class MahjongApp {
       onDiscardSavedSession: () => this.discardSavedSession(),
       onLeaveLobby: () => this.returnToLobby(),
       onAddCpu: () => this.addCpuToLobby(),
-      onRemoveCpu: () => this.removeCpuFromLobby(),
+      onRemoveCpu: (playerId?: string) => this.removeCpuFromLobby(playerId),
       onUpdateRuleConfig: (patch: Partial<RuleConfig>) =>
         this.updateLobbyRules(patch),
       onStartGame: () => this.startLobbyGame(),
@@ -1730,6 +1852,7 @@ class MahjongApp {
         this.chatOpen = !this.chatOpen;
         this.settingsOpen = false;
         this.cheatOpen = false;
+        this.closeCheckModal();
         if (this.chatOpen && this.unreadChatCount > 0) {
           this.unreadChatCount = 0;
           this.render();
@@ -1762,6 +1885,7 @@ class MahjongApp {
             this.settingsOpen = !this.settingsOpen;
             this.chatOpen = false;
             this.cheatOpen = false;
+            this.closeCheckModal();
             this.fullscreenError = null;
             this.renderFloating();
           },
@@ -1769,6 +1893,7 @@ class MahjongApp {
             this.chatOpen = !this.chatOpen;
             this.settingsOpen = false;
             this.cheatOpen = false;
+            this.closeCheckModal();
             if (this.chatOpen && this.unreadChatCount > 0) {
               this.unreadChatCount = 0;
               this.render();
@@ -1896,17 +2021,120 @@ class MahjongApp {
   }
 
   private renderFloating(): void {
+    const existingSettingsPanel =
+      this.floatingLayer.querySelector<HTMLElement>('.table-settings-panel');
+    const savedSettingsScrollTop = existingSettingsPanel?.scrollTop ?? 0;
+
+    const existingCheatModal =
+      this.floatingLayer.querySelector<HTMLElement>('.table-cheat-modal');
+    const existingCheatPanel =
+      existingCheatModal?.querySelector<HTMLElement>('.table-cheat-panel') ?? null;
+    const savedCheatPanelScrollTop = existingCheatPanel?.scrollTop ?? 0;
+    const savedCheatBackdropScrollTop = existingCheatModal?.scrollTop ?? 0;
+
+    const existingCheckModal =
+      this.floatingLayer.querySelector<HTMLElement>('.table-check-modal');
+    const existingCheckPanel =
+      existingCheckModal?.querySelector<HTMLElement>('.table-check-panel') ?? null;
+    const existingCheckList =
+      existingCheckModal?.querySelector<HTMLElement>('.check-history-list') ?? null;
+    const savedCheckPanelScrollTop = existingCheckPanel?.scrollTop ?? 0;
+    const savedCheckListScrollTop = existingCheckList?.scrollTop ?? 0;
+    const savedCheckBackdropScrollTop = existingCheckModal?.scrollTop ?? 0;
+
+    if (
+      !this.settingsOpen &&
+      this.currentView &&
+      this.cheatOpen &&
+      existingCheatModal &&
+      existingCheatModal.dataset.cheatStructureKey ===
+        this.buildCheatModalStructureKey()
+    ) {
+      this.cleanupChatAutoScroll();
+      this.updateCheatModal(existingCheatModal);
+      return;
+    }
+
+    if (
+      !this.settingsOpen &&
+      !this.cheatOpen &&
+      this.currentView &&
+      this.checkOpen &&
+      existingCheckModal &&
+      existingCheckModal.dataset.checkStructureKey ===
+        this.buildCheckModalStructureKey()
+    ) {
+      this.cleanupChatAutoScroll();
+      this.updateCheckModal(existingCheckModal);
+      return;
+    }
+
+    this.cleanupChatAutoScroll();
     this.floatingLayer.innerHTML = '';
 
     if (this.settingsOpen) {
-      this.floatingLayer.appendChild(this.renderSettingsModal());
+      const modal = this.renderSettingsModal();
+      this.floatingLayer.appendChild(modal);
+      if (existingSettingsPanel && savedSettingsScrollTop > 0) {
+        const newPanel = modal.querySelector<HTMLElement>('.table-settings-panel');
+        if (newPanel) {
+          newPanel.scrollTop = savedSettingsScrollTop;
+        }
+      }
       return;
     }
 
     if (!this.currentView) return;
 
     if (this.cheatOpen) {
-      this.floatingLayer.appendChild(this.renderCheatModal());
+      const modal = this.renderCheatModal();
+      this.floatingLayer.appendChild(modal);
+      if (existingCheatModal) {
+        const newPanel = modal.querySelector<HTMLElement>('.table-cheat-panel');
+        const restoreCheatScroll = () => {
+          if (newPanel && savedCheatPanelScrollTop > 0) {
+            newPanel.scrollTop = savedCheatPanelScrollTop;
+          }
+          if (savedCheatBackdropScrollTop > 0) {
+            modal.scrollTop = savedCheatBackdropScrollTop;
+          }
+        };
+        restoreCheatScroll();
+        if (typeof requestAnimationFrame === 'function') {
+          requestAnimationFrame(() => {
+            if (!modal.isConnected) return;
+            restoreCheatScroll();
+          });
+        }
+      }
+      return;
+    }
+
+    if (this.checkOpen) {
+      const modal = this.renderCheckModal();
+      this.floatingLayer.appendChild(modal);
+      if (existingCheckModal) {
+        const newPanel = modal.querySelector<HTMLElement>('.table-check-panel');
+        const newList = modal.querySelector<HTMLElement>('.check-history-list');
+        const restoreCheckScroll = () => {
+          if (newPanel && savedCheckPanelScrollTop > 0) {
+            newPanel.scrollTop = savedCheckPanelScrollTop;
+          }
+          if (newList && savedCheckListScrollTop > 0) {
+            newList.scrollTop = savedCheckListScrollTop;
+          }
+          if (savedCheckBackdropScrollTop > 0) {
+            modal.scrollTop = savedCheckBackdropScrollTop;
+          }
+        };
+        restoreCheckScroll();
+        if (typeof requestAnimationFrame === 'function') {
+          requestAnimationFrame(() => {
+            if (!modal.isConnected) return;
+            restoreCheckScroll();
+          });
+        }
+      }
       return;
     }
 
@@ -1915,7 +2143,68 @@ class MahjongApp {
       this.floatingLayer.appendChild(modal);
       const list = modal.querySelector<HTMLElement>('.chat-messages-list');
       if (list) {
-        this.scrollChatMessagesToBottom(list);
+        this.scrollChatMessagesToBottom(list, { resetPin: true });
+      }
+    }
+  }
+
+  private buildCheatModalStructureKey(): string {
+    const view = this.currentView;
+    if (!view) return '';
+    const playersKey = view.players
+      .map(
+        (p) =>
+          `${p.playerId}:${p.name}:${p.playerId === view.viewerPlayerId ? 1 : 0}:${p.playerId === view.hostPlayerId ? 1 : 0}`,
+      )
+      .join('|');
+    return `${view.isSpectator ? '1' : '0'}#${playersKey}`;
+  }
+
+  private updateCheatModal(modal: HTMLElement): void {
+    const isSpectator = Boolean(this.currentView?.isSpectator);
+    const peekOn = this.getCurrentSecretPeek();
+
+    const peekBtn = modal.querySelector<HTMLButtonElement>('.cheat-peek-switch');
+    if (peekBtn) {
+      peekBtn.classList.toggle('is-on', peekOn);
+      peekBtn.setAttribute('aria-checked', peekOn ? 'true' : 'false');
+      peekBtn.disabled = isSpectator;
+      const stateText = peekBtn.querySelector<HTMLElement>('.toggle-state-text');
+      if (stateText) {
+        stateText.textContent = peekOn ? 'ON' : 'OFF';
+      }
+    }
+
+    const luckByPlayer = this.getCurrentSecretLuckByPlayer();
+    const players = this.currentView?.players ?? [];
+    const hasCustomLuck = players.some(
+      (p) => (luckByPlayer[p.playerId] ?? 'normal') !== 'normal',
+    );
+
+    const resetAllBtn = modal.querySelector<HTMLButtonElement>(
+      '.cheat-luck-reset-btn',
+    );
+    if (resetAllBtn) {
+      resetAllBtn.disabled = isSpectator || !hasCustomLuck;
+    }
+
+    const rows = modal.querySelectorAll<HTMLElement>('.cheat-luck-player-row');
+    for (const row of Array.from(rows)) {
+      const pid = row.dataset.cheatPlayerId;
+      if (!pid) continue;
+      const playerLuck = luckByPlayer[pid] ?? 'normal';
+      row.classList.toggle('is-luck-good', playerLuck === 'good');
+      row.classList.toggle('is-luck-god', playerLuck === 'god');
+      const btns = row.querySelectorAll<HTMLButtonElement>('.cheat-luck-btn');
+      for (const btn of Array.from(btns)) {
+        const mode = btn.dataset.luckMode as LocalLuckMode | undefined;
+        if (!mode) continue;
+        const active = playerLuck === mode;
+        btn.className = `btn btn-secondary cheat-luck-btn${
+          active ? ` is-active is-mode-${mode}` : ''
+        }`;
+        btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+        btn.disabled = isSpectator;
       }
     }
   }
@@ -1923,6 +2212,7 @@ class MahjongApp {
   private renderCheatModal(): HTMLElement {
     const backdrop = document.createElement('div');
     backdrop.className = 'overlay-backdrop overlay-backdrop-modal table-cheat-modal';
+    backdrop.dataset.cheatStructureKey = this.buildCheatModalStructureKey();
     backdrop.setAttribute('role', 'dialog');
     backdrop.setAttribute('aria-modal', 'true');
     backdrop.setAttribute('aria-label', '裏設定');
@@ -2003,7 +2293,7 @@ class MahjongApp {
 
     peekBtn.append(peekTrack, peekStateText);
     peekBtn.addEventListener('click', () => {
-      this.setCheatPeek(!peekOn);
+      this.setCheatPeek(!this.getCurrentSecretPeek());
     });
 
     peekRow.append(peekLabel, peekBtn);
@@ -2122,6 +2412,322 @@ class MahjongApp {
     panel.appendChild(luckSection);
 
     backdrop.appendChild(panel);
+    return backdrop;
+  }
+
+  private buildCheckModalStructureKey(): string {
+    const view = this.currentView;
+    if (!view) return '';
+    return `${view.viewerPlayerId}|${view.hostPlayerId}|${view.isSpectator ? '1' : '0'}`;
+  }
+
+  private computeCheckHistorySummary(): {
+    allCount: number;
+    othersCount: number;
+    cheatCount: number;
+    settingsCount: number;
+    filtered: ChangeHistoryEntry[];
+  } {
+    const viewerId = this.currentView?.viewerPlayerId ?? '';
+    const all = this.changeHistory;
+    const othersCount = all.filter((e) => e.actorPlayerId !== viewerId).length;
+    const actorFiltered =
+      this.checkActorFilter === 'others'
+        ? all.filter((e) => e.actorPlayerId !== viewerId)
+        : all;
+    const cheatCount = actorFiltered.filter(
+      (e) => e.category === 'cheat',
+    ).length;
+    const settingsCount = actorFiltered.filter(
+      (e) => e.category === 'settings',
+    ).length;
+    const categoryFiltered =
+      this.checkCategoryFilter === 'all'
+        ? actorFiltered
+        : actorFiltered.filter((e) => e.category === this.checkCategoryFilter);
+    return {
+      allCount: all.length,
+      othersCount,
+      cheatCount,
+      settingsCount,
+      filtered: [...categoryFiltered].reverse(),
+    };
+  }
+
+  private updateCheckModal(modal: HTMLElement): void {
+    const { allCount, othersCount, cheatCount, settingsCount, filtered } =
+      this.computeCheckHistorySummary();
+
+    const summaryEl = modal.querySelector<HTMLElement>('.check-summary-text');
+    if (summaryEl) {
+      summaryEl.textContent = `全 ${allCount} 件（うち他プレイヤー ${othersCount} 件）`;
+    }
+
+    const actorBtns = modal.querySelectorAll<HTMLButtonElement>(
+      'button[data-check-actor-filter]',
+    );
+    for (const btn of Array.from(actorBtns)) {
+      const mode = btn.dataset.checkActorFilter as 'all' | 'others' | undefined;
+      if (!mode) continue;
+      const active = this.checkActorFilter === mode;
+      btn.classList.toggle('is-active', active);
+      btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+      btn.textContent =
+        mode === 'all'
+          ? `すべて (${allCount})`
+          : `他プレイヤーのみ (${othersCount})`;
+    }
+
+    const catBtns = modal.querySelectorAll<HTMLButtonElement>(
+      'button[data-check-category-filter]',
+    );
+    for (const btn of Array.from(catBtns)) {
+      const cat = btn.dataset.checkCategoryFilter as
+        | 'all'
+        | ChangeHistoryCategory
+        | undefined;
+      if (!cat) continue;
+      const active = this.checkCategoryFilter === cat;
+      btn.classList.toggle('is-active', active);
+      btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+      if (cat === 'all') {
+        btn.textContent = '全種別';
+      } else if (cat === 'cheat') {
+        btn.textContent = `//cheat (${cheatCount})`;
+      } else {
+        btn.textContent = `設定 (${settingsCount})`;
+      }
+    }
+
+    const list = modal.querySelector<HTMLElement>('.check-history-list');
+    if (list) {
+      this.populateCheckHistoryList(list, filtered, allCount);
+    }
+  }
+
+  private populateCheckHistoryList(
+    list: HTMLElement,
+    filtered: ChangeHistoryEntry[],
+    allCount: number,
+  ): void {
+    const prevScrollTop = list.scrollTop;
+    list.innerHTML = '';
+
+    if (filtered.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'check-empty-state';
+      if (allCount === 0) {
+        empty.textContent = 'まだ //cheat や設定の変更履歴はありません。';
+      } else if (this.checkActorFilter === 'others') {
+        empty.textContent =
+          '他プレイヤーによる該当の変更履歴はありません。';
+      } else {
+        empty.textContent = '該当する変更履歴はありません。';
+      }
+      list.appendChild(empty);
+      return;
+    }
+
+    const viewerId = this.currentView?.viewerPlayerId ?? '';
+    const hostId = this.currentView?.hostPlayerId ?? '';
+
+    for (const entry of filtered) {
+      const isSelf = entry.actorPlayerId === viewerId;
+      const isHostActor = entry.actorPlayerId === hostId;
+
+      const item = document.createElement('div');
+      item.className = `check-history-item${
+        isSelf ? ' is-self' : ' is-other-player'
+      } is-cat-${entry.category}`;
+      item.dataset.entryId = entry.id;
+      item.dataset.actorId = entry.actorPlayerId;
+
+      const topRow = document.createElement('div');
+      topRow.className = 'check-item-top';
+
+      const badges = document.createElement('div');
+      badges.className = 'check-item-badges';
+
+      const catBadge = document.createElement('span');
+      catBadge.className = `check-cat-badge is-${entry.category}`;
+      catBadge.textContent = entry.category === 'cheat' ? '//cheat' : '設定';
+
+      const actorName = document.createElement('span');
+      actorName.className = 'check-actor-name';
+      actorName.textContent = entry.actorName;
+
+      const actorTag = document.createElement('span');
+      actorTag.className = `check-actor-tag ${isSelf ? 'is-self' : 'is-other'}`;
+      actorTag.textContent = isSelf ? 'あなた' : '他プレイヤー';
+
+      badges.append(catBadge, actorName, actorTag);
+      if (isHostActor && !isSelf) {
+        const hostTag = document.createElement('span');
+        hostTag.className = 'check-actor-tag is-host';
+        hostTag.textContent = 'ホスト';
+        badges.appendChild(hostTag);
+      }
+
+      const meta = document.createElement('div');
+      meta.className = 'check-item-meta';
+
+      const phasePill = document.createElement('span');
+      phasePill.className = 'check-phase-pill';
+      phasePill.textContent = entry.phaseLabel;
+
+      const timeEl = document.createElement('span');
+      timeEl.className = 'check-time-text';
+      timeEl.textContent = formatCheckTimestamp(entry.timestamp);
+
+      meta.append(phasePill, timeEl);
+      topRow.append(badges, meta);
+
+      const labelEl = document.createElement('div');
+      labelEl.className = 'check-item-label';
+      labelEl.textContent = entry.settingLabel;
+
+      item.append(topRow, labelEl);
+
+      if (entry.beforeValue !== undefined || entry.afterValue !== undefined) {
+        const diffRow = document.createElement('div');
+        diffRow.className = 'check-item-diff';
+        if (entry.beforeValue !== undefined) {
+          const beforeEl = document.createElement('span');
+          beforeEl.className = 'check-diff-before';
+          beforeEl.textContent = entry.beforeValue;
+          diffRow.appendChild(beforeEl);
+        }
+        if (entry.beforeValue !== undefined && entry.afterValue !== undefined) {
+          const arrowEl = document.createElement('span');
+          arrowEl.className = 'check-diff-arrow';
+          arrowEl.textContent = '→';
+          diffRow.appendChild(arrowEl);
+        }
+        if (entry.afterValue !== undefined) {
+          const afterEl = document.createElement('span');
+          afterEl.className = 'check-diff-after';
+          afterEl.textContent = entry.afterValue;
+          diffRow.appendChild(afterEl);
+        }
+        item.appendChild(diffRow);
+      }
+
+      list.appendChild(item);
+    }
+
+    if (prevScrollTop > 0) {
+      list.scrollTop = prevScrollTop;
+    }
+  }
+
+  private renderCheckModal(): HTMLElement {
+    const backdrop = document.createElement('div');
+    backdrop.className = 'overlay-backdrop overlay-backdrop-modal table-check-modal';
+    backdrop.dataset.checkStructureKey = this.buildCheckModalStructureKey();
+    backdrop.setAttribute('role', 'dialog');
+    backdrop.setAttribute('aria-modal', 'true');
+    backdrop.setAttribute('aria-label', '変更履歴チェック');
+    backdrop.addEventListener('click', (e) => {
+      if (e.target === backdrop) {
+        this.closeCheckModal();
+        this.renderFloating();
+      }
+    });
+
+    const panel = document.createElement('div');
+    panel.className = 'overlay-panel table-check-panel';
+
+    const header = document.createElement('div');
+    header.className = 'table-modal-header';
+
+    const titleWrap = document.createElement('div');
+    titleWrap.className = 'check-modal-title-wrap';
+
+    const title = document.createElement('h3');
+    title.textContent = '変更履歴チェック';
+
+    const badge = document.createElement('span');
+    badge.className = 'check-audit-badge';
+    badge.textContent = 'AUDIT';
+
+    titleWrap.append(title, badge);
+
+    const headerActions = document.createElement('div');
+    headerActions.className = 'check-header-actions';
+
+    const refreshBtn = document.createElement('button');
+    refreshBtn.type = 'button';
+    refreshBtn.className = 'btn btn-secondary check-refresh-btn';
+    refreshBtn.textContent = '更新';
+    refreshBtn.addEventListener('click', () => {
+      this.syncChangeHistory({ watch: true });
+      soundEngine.playSelect();
+      this.renderFloating();
+    });
+
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'btn btn-secondary table-modal-close-btn';
+    closeBtn.textContent = '閉じる';
+    closeBtn.addEventListener('click', () => {
+      this.closeCheckModal();
+      this.renderFloating();
+    });
+
+    headerActions.append(refreshBtn, closeBtn);
+    header.append(titleWrap, headerActions);
+
+    const summaryBar = document.createElement('div');
+    summaryBar.className = 'check-summary-bar';
+    const summaryText = document.createElement('span');
+    summaryText.className = 'check-summary-text';
+    summaryBar.appendChild(summaryText);
+
+    const filterBar = document.createElement('div');
+    filterBar.className = 'check-filter-bar';
+
+    const actorGroup = document.createElement('div');
+    actorGroup.className = 'check-filter-group';
+    actorGroup.setAttribute('role', 'group');
+    actorGroup.setAttribute('aria-label', '変更者フィルタ');
+
+    for (const mode of ['all', 'others'] as const) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn btn-secondary check-filter-btn';
+      btn.dataset.checkActorFilter = mode;
+      btn.addEventListener('click', () => {
+        this.checkActorFilter = mode;
+        this.updateCheckModal(backdrop);
+      });
+      actorGroup.appendChild(btn);
+    }
+
+    const catGroup = document.createElement('div');
+    catGroup.className = 'check-filter-group';
+    catGroup.setAttribute('role', 'group');
+    catGroup.setAttribute('aria-label', '変更種別フィルタ');
+
+    for (const cat of ['all', 'cheat', 'settings'] as const) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn btn-secondary check-filter-btn';
+      btn.dataset.checkCategoryFilter = cat;
+      btn.addEventListener('click', () => {
+        this.checkCategoryFilter = cat;
+        this.updateCheckModal(backdrop);
+      });
+      catGroup.appendChild(btn);
+    }
+
+    filterBar.append(actorGroup, catGroup);
+
+    const list = document.createElement('div');
+    list.className = 'check-history-list';
+
+    panel.append(header, summaryBar, filterBar, list);
+    backdrop.appendChild(panel);
+    this.updateCheckModal(backdrop);
     return backdrop;
   }
 
@@ -2404,7 +3010,7 @@ class MahjongApp {
 
     const list = document.createElement('div');
     list.className = 'chat-messages-list';
-    this.populateChatMessagesList(list);
+    this.populateChatMessagesList(list, { scrollToBottom: false });
 
     const quickBar = document.createElement('div');
     quickBar.className = 'chat-quick-bar';
@@ -2450,7 +3056,13 @@ class MahjongApp {
     return backdrop;
   }
 
-  private populateChatMessagesList(list: HTMLElement): void {
+  private populateChatMessagesList(
+    list: HTMLElement,
+    options: { scrollToBottom?: boolean } = {},
+  ): void {
+    const shouldScroll = options.scrollToBottom ?? true;
+    const prevScrollTop = list.scrollTop;
+
     list.innerHTML = '';
     if (this.chatMessages.length === 0) {
       const empty = document.createElement('div');
@@ -2476,22 +3088,149 @@ class MahjongApp {
       item.append(sender, text);
       list.appendChild(item);
     }
-    this.scrollChatMessagesToBottom(list);
-  }
 
-  private scrollChatMessagesToBottom(list: HTMLElement): void {
-    list.scrollTop = list.scrollHeight;
-    if (typeof requestAnimationFrame === 'function') {
-      requestAnimationFrame(() => {
-        if (!list.isConnected) return;
-        list.scrollTop = list.scrollHeight;
-        requestAnimationFrame(() => {
-          if (!list.isConnected) return;
-          list.scrollTop = list.scrollHeight;
-        });
-      });
+    if (shouldScroll) {
+      if (this.chatPinnedToBottom) {
+        this.scrollChatMessagesToBottom(list);
+      } else {
+        list.scrollTop = prevScrollTop;
+      }
     }
   }
+
+  private cleanupChatAutoScroll(): void {
+    if (this.chatAutoScrollCleanup) {
+      this.chatAutoScrollCleanup();
+      this.chatAutoScrollCleanup = null;
+    }
+  }
+
+  private scrollChatMessagesToBottom(
+    list: HTMLElement,
+    options: { resetPin?: boolean } = {},
+  ): void {
+    this.cleanupChatAutoScroll();
+    if (options.resetPin) {
+      this.chatPinnedToBottom = true;
+    }
+    if (!this.chatPinnedToBottom) return;
+
+    let disposed = false;
+    let applyingProgramScroll = false;
+    let userInteracted = false;
+    const timerIds: Array<ReturnType<typeof setTimeout>> = [];
+    const rafIds: number[] = [];
+    let observer: ResizeObserver | null = null;
+
+    const applyScroll = () => {
+      if (
+        disposed ||
+        !list.isConnected ||
+        !this.chatOpen ||
+        !this.chatPinnedToBottom
+      ) {
+        return;
+      }
+      applyingProgramScroll = true;
+      list.scrollTop = list.scrollHeight;
+      if (typeof queueMicrotask === 'function') {
+        queueMicrotask(() => {
+          applyingProgramScroll = false;
+        });
+      } else {
+        applyingProgramScroll = false;
+      }
+    };
+
+    const markUserInteract = () => {
+      userInteracted = true;
+    };
+
+    const onScroll = () => {
+      if (disposed || applyingProgramScroll || !userInteracted) return;
+      if (list.clientHeight <= 0 || list.scrollHeight <= list.clientHeight) {
+        return;
+      }
+      const distanceFromBottom =
+        list.scrollHeight - (list.scrollTop + list.clientHeight);
+      this.chatPinnedToBottom = distanceFromBottom <= 8;
+    };
+
+    list.addEventListener('wheel', markUserInteract, { passive: true });
+    list.addEventListener('touchstart', markUserInteract, { passive: true });
+    list.addEventListener('pointerdown', markUserInteract, { passive: true });
+    list.addEventListener('scroll', onScroll, { passive: true });
+
+    applyScroll();
+
+    if (typeof queueMicrotask === 'function') {
+      queueMicrotask(applyScroll);
+    }
+
+    if (typeof requestAnimationFrame === 'function') {
+      const id1 = requestAnimationFrame(() => {
+        applyScroll();
+        if (disposed || !list.isConnected) return;
+        const id2 = requestAnimationFrame(() => {
+          applyScroll();
+        });
+        rafIds.push(id2);
+      });
+      rafIds.push(id1);
+    }
+
+    for (const delayMs of [30, 100]) {
+      const tid = setTimeout(() => {
+        applyScroll();
+      }, delayMs);
+      timerIds.push(tid);
+    }
+
+    const fontsReady = (
+      document as Document & { fonts?: { ready?: Promise<unknown> } }
+    ).fonts?.ready;
+    if (fontsReady && typeof fontsReady.then === 'function') {
+      void fontsReady.then(() => {
+        applyScroll();
+      });
+    }
+
+    if (typeof ResizeObserver === 'function') {
+      observer = new ResizeObserver(() => {
+        applyScroll();
+      });
+      observer.observe(list);
+      if (list.lastElementChild) {
+        observer.observe(list.lastElementChild);
+      }
+    }
+
+    this.chatAutoScrollCleanup = () => {
+      disposed = true;
+      list.removeEventListener('wheel', markUserInteract);
+      list.removeEventListener('touchstart', markUserInteract);
+      list.removeEventListener('pointerdown', markUserInteract);
+      list.removeEventListener('scroll', onScroll);
+      for (const tid of timerIds) {
+        clearTimeout(tid);
+      }
+      if (typeof cancelAnimationFrame === 'function') {
+        for (const rid of rafIds) {
+          cancelAnimationFrame(rid);
+        }
+      }
+      observer?.disconnect();
+    };
+  }
+}
+
+function formatCheckTimestamp(ts: number): string {
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return '--:--:--';
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  const ss = String(d.getSeconds()).padStart(2, '0');
+  return `${hh}:${mm}:${ss}`;
 }
 
 const rootEl = document.getElementById('app');

@@ -1,6 +1,7 @@
 import Peer, { type DataConnection } from 'peerjs';
 import { isCpuPlayerId } from '../cpu/player';
 import type {
+  ChangeHistoryEntry,
   ChatMessage,
   CheckpointKeyPayload,
   ClientMessage,
@@ -61,6 +62,7 @@ export interface ClientSessionCallbacks {
   onMigrated?: (migration: HostMigratingPayload) => void;
   onHostAwayChange?: (away: boolean) => void;
   onSecretState?: (state: SecretStatePayload) => void;
+  onChangeHistory?: (history: ChangeHistoryEntry[]) => void;
 }
 
 export interface ClientSessionOptions {
@@ -395,6 +397,11 @@ export class ClientSession {
         return;
       }
 
+      if (msg.kind === 'CHANGE_HISTORY') {
+        this.callbacks.onChangeHistory?.(msg.payload);
+        return;
+      }
+
       if (msg.kind === 'ERROR') {
         this.clearTimeout();
         this.callbacks.onError(msg.payload);
@@ -627,12 +634,25 @@ export class ClientSession {
     luck?: SecretLuckMode;
     luckTargetPlayerId?: string;
     clearAllLuck?: boolean;
+    clearAllCheat?: boolean;
     requestSync?: boolean;
   }): void {
     this.send({
       kind: 'SECRET_OPTION',
       ...options,
     });
+  }
+
+  requestChangeHistory(watch?: boolean): void {
+    if (this.destroyed) return;
+    if (watch === false && (!this.conn || !this.conn.open)) {
+      return;
+    }
+    this.send(
+      watch === undefined
+        ? { kind: 'REQUEST_CHANGE_HISTORY' }
+        : { kind: 'REQUEST_CHANGE_HISTORY', watch },
+    );
   }
 
   private send(msg: ClientMessage): void {

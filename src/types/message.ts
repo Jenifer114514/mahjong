@@ -276,6 +276,10 @@ export interface HostSnapshotPayload {
   spectatorTokens: Record<string, string>;
   hostEpoch: number;
   permanentRoom: boolean;
+  changeHistory?: ChangeHistoryEntry[];
+  changeHistorySeq?: number;
+  peekPlayers?: string[];
+  luckModeByPlayer?: Record<string, SecretLuckMode>;
 }
 
 export interface HostCheckpointPayload {
@@ -328,6 +332,31 @@ export interface SecretStatePayload {
   luckByPlayer: Record<string, SecretLuckMode>;
 }
 
+export type ChangeHistoryCategory = 'cheat' | 'settings';
+
+export type ChangeHistoryKind =
+  | 'cheat_peek'
+  | 'cheat_luck'
+  | 'cheat_luck_reset'
+  | 'cheat_stop'
+  | 'rule_config'
+  | 'cpu_seat'
+  | 'host_transfer';
+
+export interface ChangeHistoryEntry {
+  id: string;
+  timestamp: number;
+  actorPlayerId: string;
+  actorName: string;
+  category: ChangeHistoryCategory;
+  kind: ChangeHistoryKind;
+  phaseLabel: string;
+  targetName?: string;
+  settingLabel: string;
+  beforeValue?: string;
+  afterValue?: string;
+}
+
 /** クライアント → ホスト（要求のみ送る） */
 export type ClientMessage =
   | {
@@ -349,7 +378,12 @@ export type ClientMessage =
       luck?: SecretLuckMode;
       luckTargetPlayerId?: string;
       clearAllLuck?: boolean;
+      clearAllCheat?: boolean;
       requestSync?: boolean;
+    }
+  | {
+      kind: 'REQUEST_CHANGE_HISTORY';
+      watch?: boolean;
     }
   | {
       kind: 'CHECKPOINT_KEY_SHARE';
@@ -420,6 +454,10 @@ export type HostMessage =
   | {
       kind: 'SECRET_STATE';
       payload: SecretStatePayload;
+    }
+  | {
+      kind: 'CHANGE_HISTORY';
+      payload: ChangeHistoryEntry[];
     }
   | {
       kind: 'ERROR';

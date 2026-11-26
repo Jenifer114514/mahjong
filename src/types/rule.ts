@@ -53,7 +53,7 @@ export interface RuleConfig {
   honbaBonus?: boolean;
   /** CPUの強さ（'easy': やさしめ / 'normal': 標準、既定: 'normal'） */
   cpuLevel?: CpuLevel;
-  /** 赤ドラ枚数（5萬・5筒・5索ごとの赤牌数: 0=なし, 1=各1枚, 4=全5赤。既定: 0） */
+  /** 赤ドラ枚数（5萬・5筒・5索ごとの赤牌数: 0=なし, 1=各1枚, 4=全5赤。既定: 1） */
   redDoraPerFive?: 0 | 1 | 4;
   /** 切り上げ満貫（4翻30符・3翻60符を満貫扱い、既定: false） */
   kiriageMangan?: boolean;
@@ -123,7 +123,7 @@ export const DEFAULT_KIRIAGE_MANGAN = false;
 export const DEFAULT_ALLOW_KAZOE_YAKUMAN = true;
 export const DEFAULT_DOUBLE_WIND_PAIR_FU = 4;
 export const DEFAULT_KITA_COUNTS_AS_INDICATOR_DORA = true;
-export const DEFAULT_RED_DORA_PER_FIVE: 0 | 1 | 4 = 0;
+export const DEFAULT_RED_DORA_PER_FIVE: 0 | 1 | 4 = 1;
 
 export const SCORE_LIMIT_BASE_POINTS: ScoreLimitBasePoints = {
   mangan: 2000,

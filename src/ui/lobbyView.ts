@@ -31,8 +31,8 @@ export interface LobbyHandlers {
   onDiscardSavedSession?: () => void;
   /** ロビーに CPU を 1 体追加する（ホストのみ） */
   onAddCpu?: () => void;
-  /** ロビーから CPU を 1 体減らす（ホストのみ） */
-  onRemoveCpu?: () => void;
+  /** ロビーから CPU を 1 体減らす（ホストのみ・対象 playerId 指定可） */
+  onRemoveCpu?: (playerId?: string) => void;
   /** ルーム作成後にルール設定を変更する（ホストのみ） */
   onUpdateRuleConfig?: (patch: Partial<RuleConfig>) => void;
   /** 人数が揃っているロビーから対局を開始する（ホストのみ） */
@@ -166,13 +166,13 @@ function createAdvancedRuleDetails(params: {
     'adv-red-dora',
     '赤ドラ',
     [
-      { value: '0', label: 'なし（標準）' },
-      { value: '1', label: 'あり（各5に1枚）' },
+      { value: '1', label: 'あり（各5に1枚・標準）' },
+      { value: '0', label: 'なし' },
       { value: '4', label: '全5が赤ドラ' },
     ],
     String(values.redDoraPerFive),
     (val) => {
-      const next: 0 | 1 | 4 = val === '4' ? 4 : val === '1' ? 1 : 0;
+      const next: 0 | 1 | 4 = val === '4' ? 4 : val === '0' ? 0 : 1;
       onPatch({ redDoraPerFive: next });
     },
   );
@@ -815,65 +815,6 @@ export function renderLobbyEntry(
       : {}),
   });
 
-  const entryAdvancedSlot = document.createElement('div');
-  entryAdvancedSlot.className = 'lobby-entry-advanced-slot';
-  const renderEntryAdvanced = () => {
-    const prevDetails = entryAdvancedSlot.querySelector<HTMLDetailsElement>(
-      '.lobby-advanced-details',
-    );
-    const wasOpen = prevDetails?.open ?? false;
-    entryAdvancedSlot.innerHTML = '';
-    const details = createAdvancedRuleDetails({
-      values: {
-        playerCount: formState.playerCount,
-        redDoraPerFive: formState.redDoraPerFive ?? 0,
-        kiriageMangan: formState.kiriageMangan ?? false,
-        allowKazoeYakuman: formState.allowKazoeYakuman ?? true,
-        doubleWindPairFu: formState.doubleWindPairFu ?? 4,
-        initialPoints: formState.initialPoints,
-        notenPenaltyTotal: formState.notenPenaltyTotal ?? 3000,
-        responseTimeoutMs: formState.responseTimeoutMs ?? 15000,
-        maxKansPerRound: formState.maxKansPerRound ?? 4,
-      },
-      onPatch: (patch) => {
-        if ('redDoraPerFive' in patch) {
-          formState.redDoraPerFive = patch.redDoraPerFive;
-        }
-        if ('kiriageMangan' in patch) {
-          formState.kiriageMangan = patch.kiriageMangan;
-        }
-        if ('allowKazoeYakuman' in patch) {
-          formState.allowKazoeYakuman = patch.allowKazoeYakuman;
-        }
-        if ('doubleWindPairFu' in patch) {
-          formState.doubleWindPairFu = patch.doubleWindPairFu;
-        }
-        if ('initialPoints' in patch) {
-          formState.initialPoints = patch.initialPoints;
-        }
-        if ('notenPenaltyTotal' in patch) {
-          formState.notenPenaltyTotal = patch.notenPenaltyTotal;
-        }
-        if ('responseTimeoutMs' in patch) {
-          formState.responseTimeoutMs = patch.responseTimeoutMs;
-        }
-        if ('maxKansPerRound' in patch) {
-          formState.maxKansPerRound = patch.maxKansPerRound;
-        }
-      },
-    });
-    if (wasOpen) {
-      details.open = true;
-    }
-    entryAdvancedSlot.appendChild(details);
-  };
-  renderEntryAdvanced();
-
-  // 人数切替時に初期持ち点「標準」ラベルも連動更新する
-  countSeg.addEventListener('click', () => {
-    renderEntryAdvanced();
-  });
-
   const createBtn = document.createElement('button');
   createBtn.type = 'button';
   createBtn.className = 'btn btn-primary';
@@ -884,7 +825,7 @@ export function renderLobbyEntry(
     handlers.onCreateRoom(formState.playerName, buildBaseRuleConfig(), 0);
   });
 
-  createCard.append(countField, lengthField, entryAdvancedSlot, createBtn);
+  createCard.append(countField, lengthField, createBtn);
 
   // Local (CPU only) game card
   const localCard = document.createElement('div');
@@ -1320,10 +1261,23 @@ export function renderWaitingRoom(
         !isSpectator && player.playerId === view.viewerPlayerId ? ' (あなた)' : '';
       const statusLabel = player.connected ? '参加済み' : '切断（再接続待ち）';
       const headerDiv = document.createElement('div');
+      headerDiv.className = 'player-slot-meta';
       headerDiv.innerHTML = `<div><strong>${escapeHtml(player.name)}</strong>${badge}${selfTag}</div><div class="hub-sub">${statusLabel}</div>`;
       slot.appendChild(headerDiv);
 
-      if (
+      if (isHost && isCpuPlayerId(player.playerId) && handlers.onRemoveCpu) {
+        const removeCpuBtn = document.createElement('button');
+        removeCpuBtn.type = 'button';
+        removeCpuBtn.className =
+          'btn btn-secondary lobby-slot-btn lobby-cpu-remove-btn';
+        removeCpuBtn.dataset.cpuPlayerId = player.playerId;
+        removeCpuBtn.textContent = '− CPU を削除';
+        removeCpuBtn.setAttribute('aria-label', `${player.name}を削除`);
+        removeCpuBtn.addEventListener('click', () => {
+          handlers.onRemoveCpu?.(player.playerId);
+        });
+        slot.appendChild(removeCpuBtn);
+      } else if (
         isHost &&
         player.playerId !== view.hostPlayerId &&
         !isCpuPlayerId(player.playerId) &&
@@ -1340,7 +1294,21 @@ export function renderWaitingRoom(
         slot.appendChild(transferBtn);
       }
     } else {
-      slot.textContent = `空席（参加待ち ${i + 1}/${rules.playerCount}）`;
+      const emptyLabel = document.createElement('div');
+      emptyLabel.className = 'player-slot-meta';
+      emptyLabel.textContent = `空席（参加待ち ${i + 1}/${rules.playerCount}）`;
+      slot.appendChild(emptyLabel);
+
+      if (isHost && handlers.onAddCpu) {
+        const addCpuBtn = document.createElement('button');
+        addCpuBtn.type = 'button';
+        addCpuBtn.className =
+          'btn btn-secondary lobby-slot-btn lobby-cpu-add-btn';
+        addCpuBtn.textContent = '＋ CPU を追加';
+        addCpuBtn.setAttribute('aria-label', `空席${i + 1}にCPUを追加`);
+        addCpuBtn.addEventListener('click', () => handlers.onAddCpu?.());
+        slot.appendChild(addCpuBtn);
+      }
     }
     slots.appendChild(slot);
   }
@@ -1383,41 +1351,6 @@ export function renderWaitingRoom(
     startBtn.textContent = '対局を開始する';
     startBtn.addEventListener('click', () => handlers.onStartGame?.());
     card.appendChild(startBtn);
-  }
-
-  // ホストはロビーにいる間、CPU を後から足し引きできる
-  if (isHost && (handlers.onAddCpu || handlers.onRemoveCpu)) {
-    const cpuControls = document.createElement('div');
-    cpuControls.className = 'lobby-cpu-controls';
-
-    const cpuCaption = document.createElement('div');
-    cpuCaption.className = 'hub-sub';
-    const remains = Math.max(0, rules.playerCount - view.players.length);
-    cpuCaption.textContent =
-      remains > 0
-        ? `CPU を追加して人数を埋められます（あと ${remains} 席）`
-        : '席がすべて埋まりました';
-
-    const btnRow = document.createElement('div');
-    btnRow.className = 'lobby-cpu-buttons';
-
-    const addCpuBtn = document.createElement('button');
-    addCpuBtn.type = 'button';
-    addCpuBtn.className = 'btn btn-secondary';
-    addCpuBtn.textContent = '＋ CPU を追加';
-    addCpuBtn.disabled = remains <= 0;
-    addCpuBtn.addEventListener('click', () => handlers.onAddCpu?.());
-
-    const removeCpuBtn = document.createElement('button');
-    removeCpuBtn.type = 'button';
-    removeCpuBtn.className = 'btn btn-secondary';
-    removeCpuBtn.textContent = '− CPU を減らす';
-    removeCpuBtn.disabled = cpuPlayers.length === 0;
-    removeCpuBtn.addEventListener('click', () => handlers.onRemoveCpu?.());
-
-    btnRow.append(addCpuBtn, removeCpuBtn);
-    cpuControls.append(cpuCaption, btnRow);
-    card.appendChild(cpuControls);
   }
 
   const leaveBtn = document.createElement('button');

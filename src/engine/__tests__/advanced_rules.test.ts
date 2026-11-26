@@ -14,39 +14,37 @@ function tile(id: string, kind: TileKind, isRed = false): Tile {
 }
 
 describe('詳細設定ルール（8項目）と裏設定 Peek プロジェクション', () => {
-  it('デフォルトでは赤ドラは0枚で既存挙動と完全一致する', () => {
-    const rules = deriveRules({ playerCount: 4, gameLength: 'tonpuu' });
-    expect(rules.redDoraPerFive).toBe(0);
-    const deck = buildTileDeck(rules);
-    expect(validateDeckForRules(rules, deck)).toBe(true);
-    expect(deck.filter((t) => t.isRed)).toHaveLength(0);
-  });
-
-  it('redDoraPerFive=1 で4麻3枚・3麻2枚、redDoraPerFive=4 で全5牌が赤ドラになり翻数加算される', () => {
-    const r4One = deriveRules({
-      playerCount: 4,
-      gameLength: 'tonpuu',
-      redDoraPerFive: 1,
-    });
-    const deck4One = buildTileDeck(r4One);
-    expect(validateDeckForRules(r4One, deck4One)).toBe(true);
-    expect(deck4One.filter((t) => t.isRed).map((t) => t.kind).sort()).toEqual([
+  it('デフォルトでは赤ドラは各5牌1枚ずつ（4麻3枚・3麻2枚）が標準になる', () => {
+    const rules4 = deriveRules({ playerCount: 4, gameLength: 'tonpuu' });
+    expect(rules4.redDoraPerFive).toBe(1);
+    const deck4 = buildTileDeck(rules4);
+    expect(validateDeckForRules(rules4, deck4)).toBe(true);
+    expect(deck4.filter((t) => t.isRed).map((t) => t.kind).sort()).toEqual([
       '5m',
       '5p',
       '5s',
     ]);
 
-    const r3One = deriveRules({
-      playerCount: 3,
-      gameLength: 'tonpuu',
-      redDoraPerFive: 1,
-    });
-    const deck3One = buildTileDeck(r3One);
-    expect(validateDeckForRules(r3One, deck3One)).toBe(true);
-    expect(deck3One.filter((t) => t.isRed).map((t) => t.kind).sort()).toEqual([
+    const rules3 = deriveRules({ playerCount: 3, gameLength: 'tonpuu' });
+    expect(rules3.redDoraPerFive).toBe(1);
+    const deck3 = buildTileDeck(rules3);
+    expect(validateDeckForRules(rules3, deck3)).toBe(true);
+    expect(deck3.filter((t) => t.isRed).map((t) => t.kind).sort()).toEqual([
       '5p',
       '5s',
     ]);
+  });
+
+  it('redDoraPerFive=0 で赤ドラなし、redDoraPerFive=4 で全5牌が赤ドラになり翻数加算される', () => {
+    const r4Zero = deriveRules({
+      playerCount: 4,
+      gameLength: 'tonpuu',
+      redDoraPerFive: 0,
+    });
+    expect(r4Zero.redDoraPerFive).toBe(0);
+    const deck4Zero = buildTileDeck(r4Zero);
+    expect(validateDeckForRules(r4Zero, deck4Zero)).toBe(true);
+    expect(deck4Zero.filter((t) => t.isRed)).toHaveLength(0);
 
     const r4All = deriveRules({
       playerCount: 4,
