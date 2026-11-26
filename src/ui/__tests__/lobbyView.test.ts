@@ -52,8 +52,8 @@ function clickByText(root: HTMLElement, text: string): boolean {
   return true;
 }
 
-describe('renderWaitingRoom（CPU の後入れ）', () => {
-  it('ホストには CPU 追加・削除ボタンが出て、押すとハンドラが呼ばれる', () => {
+describe('renderWaitingRoom（空席・CPU席ごとの追加/削除ボタン）', () => {
+  it('ホストには空席ごとに CPU 追加ボタン、CPU 席ごとに削除ボタンが出て、押すとハンドラが呼ばれる', () => {
     const { session, latest } = lobbySession(1);
     session.start();
 
@@ -69,16 +69,27 @@ describe('renderWaitingRoom（CPU の後入れ）', () => {
     const root = document.createElement('div');
     renderWaitingRoom(root, latest(), handlers);
 
-    expect(root.querySelector('.lobby-cpu-controls')).not.toBeNull();
-    expect(clickByText(root, 'CPU を追加')).toBe(true);
+    expect(root.querySelector('.lobby-cpu-controls')).toBeNull();
+    const emptySlots = root.querySelectorAll('.player-slot.is-empty');
+    expect(emptySlots).toHaveLength(2);
+    const addBtns = root.querySelectorAll<HTMLButtonElement>('.lobby-cpu-add-btn');
+    expect(addBtns).toHaveLength(2);
+    addBtns[1]!.click();
     expect(handlers.onAddCpu).toHaveBeenCalledTimes(1);
-    expect(clickByText(root, 'CPU を減らす')).toBe(true);
+
+    const removeBtns = root.querySelectorAll<HTMLButtonElement>('.lobby-cpu-remove-btn');
+    expect(removeBtns).toHaveLength(1);
+    expect(removeBtns[0]!.closest('.player-slot')?.textContent).toContain('CPU');
+    removeBtns[0]!.click();
     expect(handlers.onRemoveCpu).toHaveBeenCalledTimes(1);
+    expect(handlers.onRemoveCpu).toHaveBeenCalledWith(
+      latest().players[1]!.playerId,
+    );
 
     session.destroy();
   });
 
-  it('ゲスト（ホスト以外）には CPU 操作ボタンを出さない', () => {
+  it('ゲスト（ホスト以外）には空席・CPU席の追加/削除ボタンを出さない', () => {
     const { session, latest } = lobbySession(1);
     session.start();
 
@@ -98,12 +109,13 @@ describe('renderWaitingRoom（CPU の後入れ）', () => {
       onRemoveCpu: () => {},
     });
 
-    expect(root.querySelector('.lobby-cpu-controls')).toBeNull();
+    expect(root.querySelector('.lobby-cpu-add-btn')).toBeNull();
+    expect(root.querySelector('.lobby-cpu-remove-btn')).toBeNull();
 
     session.destroy();
   });
 
-  it('席が埋まっているときは追加ボタンが無効になる', () => {
+  it('席が埋まっているときは空席と追加ボタンが消え、各 CPU 席に削除ボタンが出る', () => {
     const { session, latest } = lobbySession(3);
     session.start();
 
@@ -119,10 +131,9 @@ describe('renderWaitingRoom（CPU の後入れ）', () => {
 
     // CPU 3 体で 4 人ぶんが埋まる
     expect(latest().players).toHaveLength(4);
-    const addBtn = [...root.querySelectorAll('button')].find((btn) =>
-      btn.textContent?.includes('CPU を追加'),
-    )!;
-    expect(addBtn.hasAttribute('disabled')).toBe(true);
+    expect(root.querySelectorAll('.player-slot.is-empty')).toHaveLength(0);
+    expect(root.querySelectorAll('.lobby-cpu-add-btn')).toHaveLength(0);
+    expect(root.querySelectorAll('.lobby-cpu-remove-btn')).toHaveLength(3);
 
     session.destroy();
   });
@@ -664,7 +675,7 @@ describe('renderWaitingRoom（CPU の後入れ）', () => {
     expect(input?.value).toBe('雀士テスト');
   });
 
-  it('部屋作成時および作成後ロビーの「詳細設定」から赤ドラ・切り上げ満貫・数え役満・連風牌符・初期点・ノーテン罰符・制限時間・カン上限を変更できる', () => {
+  it('部屋作成時には詳細設定を出さず、作成後の待機ロビーの「詳細設定」から赤ドラ・切り上げ満貫・数え役満・連風牌符・初期点・ノーテン罰符・制限時間・カン上限を変更できる', () => {
     const onCreateRoom = vi.fn();
     const formState: LobbyFormState = {
       playerName: 'ホスト',
@@ -693,12 +704,18 @@ describe('renderWaitingRoom（CPU の後入れ）', () => {
       false,
     );
 
-    const details = entryRoot.querySelector<HTMLDetailsElement>(
-      '.lobby-advanced-details',
-    );
-    expect(details).not.toBeNull();
-    expect(details!.querySelector('.lobby-advanced-summary')?.textContent).toBe(
-      '詳細設定',
+    // 部屋作成入口画面には詳細設定UIを表示しない
+    expect(entryRoot.querySelector('.lobby-advanced-details')).toBeNull();
+    expect(entryRoot.querySelector('.lobby-entry-advanced-slot')).toBeNull();
+
+    expect(clickByText(entryRoot, '部屋を作成')).toBe(true);
+    expect(onCreateRoom).toHaveBeenCalledWith(
+      'ホスト',
+      expect.objectContaining({
+        playerCount: 4,
+        gameLength: 'tonpuu',
+      }),
+      0,
     );
 
     const setSelect = (root: HTMLElement, key: string, value: string) => {
@@ -710,32 +727,7 @@ describe('renderWaitingRoom（CPU の後入れ）', () => {
       sel.dispatchEvent(new Event('change'));
     };
 
-    setSelect(entryRoot, 'adv-red-dora', '4');
-    setSelect(entryRoot, 'adv-kiriage-mangan', 'true');
-    setSelect(entryRoot, 'adv-kazoe-yakuman', 'false');
-    setSelect(entryRoot, 'adv-double-wind-fu', '2');
-    setSelect(entryRoot, 'initialPoints', '50000');
-    setSelect(entryRoot, 'notenPenaltyTotal', '0');
-    setSelect(entryRoot, 'adv-response-timeout', '0');
-    setSelect(entryRoot, 'adv-max-kans', '8');
-
-    expect(clickByText(entryRoot, '部屋を作成')).toBe(true);
-    expect(onCreateRoom).toHaveBeenCalledWith(
-      'ホスト',
-      expect.objectContaining({
-        redDoraPerFive: 4,
-        kiriageMangan: true,
-        allowKazoeYakuman: false,
-        doubleWindPairFu: 2,
-        initialPoints: 50000,
-        notenPenaltyTotal: 0,
-        responseTimeoutMs: 0,
-        maxKansPerRound: 8,
-      }),
-      0,
-    );
-
-    // 待機ロビー側でも同じ詳細設定パネルが機能する
+    // 作成後の待機ロビーでは「詳細設定」が表示され、8項目すべてを変更できる
     const { session, latest } = lobbySession(1);
     session.start();
     const onUpdateRuleConfig = vi.fn();
@@ -747,11 +739,36 @@ describe('renderWaitingRoom（CPU の後入れ）', () => {
       onLeaveLobby: () => {},
       onUpdateRuleConfig,
     });
-    expect(waitRoot.querySelector('.lobby-advanced-details')).not.toBeNull();
-    setSelect(waitRoot, 'adv-red-dora', '1');
-    expect(onUpdateRuleConfig).toHaveBeenCalledWith({ redDoraPerFive: 1 });
+    const details = waitRoot.querySelector<HTMLDetailsElement>(
+      '.lobby-advanced-details',
+    );
+    expect(details).not.toBeNull();
+    expect(details!.querySelector('.lobby-advanced-summary')?.textContent).toBe(
+      '詳細設定',
+    );
+    expect(waitRoot.textContent).toContain('赤ドラあり');
+    expect(
+      waitRoot.querySelector<HTMLSelectElement>('select[data-adv-setting="adv-red-dora"]')!
+        .value,
+    ).toBe('1');
+    setSelect(waitRoot, 'adv-red-dora', '0');
+    expect(onUpdateRuleConfig).toHaveBeenCalledWith({ redDoraPerFive: 0 });
+    setSelect(waitRoot, 'adv-red-dora', '4');
+    expect(onUpdateRuleConfig).toHaveBeenCalledWith({ redDoraPerFive: 4 });
+    setSelect(waitRoot, 'adv-kiriage-mangan', 'true');
+    expect(onUpdateRuleConfig).toHaveBeenCalledWith({ kiriageMangan: true });
+    setSelect(waitRoot, 'adv-kazoe-yakuman', 'false');
+    expect(onUpdateRuleConfig).toHaveBeenCalledWith({ allowKazoeYakuman: false });
     setSelect(waitRoot, 'adv-double-wind-fu', '2');
     expect(onUpdateRuleConfig).toHaveBeenCalledWith({ doubleWindPairFu: 2 });
+    setSelect(waitRoot, 'initialPoints', '50000');
+    expect(onUpdateRuleConfig).toHaveBeenCalledWith({ initialPoints: 50000 });
+    setSelect(waitRoot, 'notenPenaltyTotal', '0');
+    expect(onUpdateRuleConfig).toHaveBeenCalledWith({ notenPenaltyTotal: 0 });
+    setSelect(waitRoot, 'adv-response-timeout', '0');
+    expect(onUpdateRuleConfig).toHaveBeenCalledWith({ responseTimeoutMs: 0 });
+    setSelect(waitRoot, 'adv-max-kans', '8');
+    expect(onUpdateRuleConfig).toHaveBeenCalledWith({ maxKansPerRound: 8 });
     session.destroy();
   });
 });

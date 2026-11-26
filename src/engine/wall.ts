@@ -55,7 +55,7 @@ export function buildTileDeck(rules: DerivedRules): Tile[] {
       deck.push({
         id: `${kind}-${copy}`,
         kind,
-        isRed: isFive && copy < rules.redDoraPerFive,
+        isRed: isFive && copy >= rules.tileSet.copiesPerKind - rules.redDoraPerFive,
       });
     }
   }

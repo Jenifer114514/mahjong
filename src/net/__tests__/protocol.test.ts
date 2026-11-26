@@ -371,4 +371,98 @@ describe('net/protocol', () => {
       }),
     ).toBeNull();
   });
+
+  it('REQUEST_CHANGE_HISTORY と CHANGE_HISTORY メッセージを正しくパースし不正値を拒否する', () => {
+    expect(parseClientMessage({ kind: 'REQUEST_CHANGE_HISTORY' })).toEqual({
+      kind: 'REQUEST_CHANGE_HISTORY',
+    });
+    expect(
+      parseClientMessage({ kind: 'REQUEST_CHANGE_HISTORY', watch: true }),
+    ).toEqual({
+      kind: 'REQUEST_CHANGE_HISTORY',
+      watch: true,
+    });
+    expect(
+      parseClientMessage({ kind: 'REQUEST_CHANGE_HISTORY', watch: false }),
+    ).toEqual({
+      kind: 'REQUEST_CHANGE_HISTORY',
+      watch: false,
+    });
+    expect(
+      parseClientMessage({ kind: 'REQUEST_CHANGE_HISTORY', watch: 'yes' }),
+    ).toBeNull();
+
+    const validEntry = {
+      id: 'chg-1',
+      timestamp: 1700000000000,
+      actorPlayerId: 'p1',
+      actorName: 'ゲスト1',
+      category: 'cheat' as const,
+      kind: 'cheat_peek' as const,
+      phaseLabel: '東1局',
+      settingLabel: '相手手牌の透視（Peek）',
+      beforeValue: 'OFF',
+      afterValue: 'ON',
+    };
+
+    expect(
+      parseHostMessage({
+        kind: 'CHANGE_HISTORY',
+        payload: [validEntry],
+      }),
+    ).toEqual({
+      kind: 'CHANGE_HISTORY',
+      payload: [validEntry],
+    });
+    expect(
+      parseHostMessage({
+        kind: 'CHANGE_HISTORY',
+        payload: [],
+      }),
+    ).toEqual({
+      kind: 'CHANGE_HISTORY',
+      payload: [],
+    });
+
+    expect(
+      parseHostMessage({
+        kind: 'CHANGE_HISTORY',
+        payload: 'invalid',
+      }),
+    ).toBeNull();
+    expect(
+      parseHostMessage({
+        kind: 'CHANGE_HISTORY',
+        payload: [{ ...validEntry, category: 'unknown' }],
+      }),
+    ).toBeNull();
+    expect(
+      parseHostMessage({
+        kind: 'CHANGE_HISTORY',
+        payload: [{ ...validEntry, kind: 'unknown_kind' }],
+      }),
+    ).toBeNull();
+    expect(
+      parseHostMessage({
+        kind: 'CHANGE_HISTORY',
+        payload: [{ ...validEntry, id: '' }],
+      }),
+    ).toBeNull();
+
+    expect(
+      parseClientMessage({ kind: 'SECRET_OPTION', clearAllCheat: true }),
+    ).toEqual({ kind: 'SECRET_OPTION', clearAllCheat: true });
+    expect(
+      parseClientMessage({ kind: 'SECRET_OPTION', clearAllCheat: 'yes' }),
+    ).toBeNull();
+    expect(
+      parseHostMessage({
+        kind: 'CHANGE_HISTORY',
+        payload: [{ ...validEntry, kind: 'cheat_stop' }],
+      }),
+    ).toEqual({
+      kind: 'CHANGE_HISTORY',
+      payload: [{ ...validEntry, kind: 'cheat_stop' }],
+    });
+  });
 });

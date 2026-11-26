@@ -1,5 +1,8 @@
 import type { PeerOptions } from 'peerjs';
 import type {
+  ChangeHistoryCategory,
+  ChangeHistoryEntry,
+  ChangeHistoryKind,
   ChatMessage,
   CheckpointKeyPayload,
   ClientMessage,
@@ -259,6 +262,13 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
       out.clearAllLuck = raw.clearAllLuck;
       hasField = true;
     }
+    if (raw.clearAllCheat !== undefined) {
+      if (typeof raw.clearAllCheat !== 'boolean') {
+        return null;
+      }
+      out.clearAllCheat = raw.clearAllCheat;
+      hasField = true;
+    }
     if (raw.requestSync !== undefined) {
       if (typeof raw.requestSync !== 'boolean') {
         return null;
@@ -270,6 +280,15 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
       return null;
     }
     return hasField ? out : null;
+  }
+
+  if (raw.kind === 'REQUEST_CHANGE_HISTORY') {
+    if (raw.watch !== undefined && typeof raw.watch !== 'boolean') {
+      return null;
+    }
+    return raw.watch === undefined
+      ? { kind: 'REQUEST_CHANGE_HISTORY' }
+      : { kind: 'REQUEST_CHANGE_HISTORY', watch: raw.watch };
   }
 
   if (raw.kind === 'ACTION') {
@@ -657,6 +676,22 @@ export function parseHostMessage(raw: unknown): HostMessage | null {
     };
   }
 
+  if (raw.kind === 'CHANGE_HISTORY') {
+    if (!Array.isArray(raw.payload)) {
+      return null;
+    }
+    const entries: ChangeHistoryEntry[] = [];
+    for (const item of raw.payload) {
+      const parsed = parseChangeHistoryEntry(item);
+      if (!parsed) return null;
+      entries.push(parsed);
+    }
+    return {
+      kind: 'CHANGE_HISTORY',
+      payload: entries,
+    };
+  }
+
   if (raw.kind === 'ERROR') {
     if (!isRecord(raw.payload)) {
       return null;
@@ -672,4 +707,54 @@ export function parseHostMessage(raw: unknown): HostMessage | null {
   }
 
   return null;
+}
+
+const VALID_CHANGE_HISTORY_KINDS = new Set<ChangeHistoryKind>([
+  'cheat_peek',
+  'cheat_luck',
+  'cheat_luck_reset',
+  'cheat_stop',
+  'rule_config',
+  'cpu_seat',
+  'host_transfer',
+]);
+
+function parseChangeHistoryEntry(raw: unknown): ChangeHistoryEntry | null {
+  if (!isRecord(raw)) return null;
+  if (
+    !isNonEmptyString(raw.id) ||
+    typeof raw.timestamp !== 'number' ||
+    !Number.isFinite(raw.timestamp) ||
+    !isNonEmptyString(raw.actorPlayerId) ||
+    typeof raw.actorName !== 'string' ||
+    (raw.category !== 'cheat' && raw.category !== 'settings') ||
+    typeof raw.kind !== 'string' ||
+    !VALID_CHANGE_HISTORY_KINDS.has(raw.kind as ChangeHistoryKind) ||
+    typeof raw.phaseLabel !== 'string' ||
+    !isNonEmptyString(raw.settingLabel)
+  ) {
+    return null;
+  }
+  if (raw.targetName !== undefined && typeof raw.targetName !== 'string') {
+    return null;
+  }
+  if (raw.beforeValue !== undefined && typeof raw.beforeValue !== 'string') {
+    return null;
+  }
+  if (raw.afterValue !== undefined && typeof raw.afterValue !== 'string') {
+    return null;
+  }
+  return {
+    id: raw.id,
+    timestamp: raw.timestamp,
+    actorPlayerId: raw.actorPlayerId,
+    actorName: raw.actorName,
+    category: raw.category as ChangeHistoryCategory,
+    kind: raw.kind as ChangeHistoryKind,
+    phaseLabel: raw.phaseLabel,
+    settingLabel: raw.settingLabel,
+    ...(raw.targetName !== undefined ? { targetName: raw.targetName } : {}),
+    ...(raw.beforeValue !== undefined ? { beforeValue: raw.beforeValue } : {}),
+    ...(raw.afterValue !== undefined ? { afterValue: raw.afterValue } : {}),
+  };
 }

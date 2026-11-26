@@ -231,6 +231,25 @@ describe('HostSession の CPU 統合', () => {
     // これ以上 CPU は居ない
     expect(session.removeCpu()).toBe(false);
 
+    // 2体いる状態から特定の CPU(cpu-1) を指定削除し、再追加で空いた ID が埋まる
+    expect(session.addCpu()).toBe(true);
+    expect(session.addCpu()).toBe(true);
+    expect(session.removeCpu('cpu-1')).toBe(true);
+    expect(
+      views
+        .at(-1)!
+        .players.filter((p) => isCpuPlayerId(p.playerId))
+        .map((p) => p.playerId),
+    ).toEqual(['cpu-2']);
+    expect(session.addCpu()).toBe(true);
+    expect(
+      views
+        .at(-1)!
+        .players.filter((p) => isCpuPlayerId(p.playerId))
+        .map((p) => p.playerId)
+        .sort(),
+    ).toEqual(['cpu-1', 'cpu-2']);
+
     session.destroy();
   });
 
@@ -1159,6 +1178,408 @@ describe('HostSession の CPU 統合', () => {
       .at(-1)!.payload;
     expect(g1HostBoostedDraw.myDrawnTile?.kind).not.toBe('4z');
     expect(calcMinShantenAfterDiscard(g1HostBoostedDraw)).toBe(0);
+
+    session.destroy();
+  });
+
+  it('ホスト・ゲストの //cheat と設定変更履歴を記録し、REQUEST_CHANGE_HISTORY による参照・リアルタイム監視・観戦閲覧・ホスト引き継ぎ同期ができる', () => {
+    peerInstances.length = 0;
+    const hostViews: StateView[] = [];
+    const hostHistoryEvents: import('../../types/message').ChangeHistoryEntry[][] = [];
+    const g1Sent: HostMessage[] = [];
+    const g2Sent: HostMessage[] = [];
+    const specSent: HostMessage[] = [];
+
+    const session = new HostSession(
+      'ホスト',
+      { playerCount: 4, gameLength: 'tonpuu', responseTimeoutMs: 0 },
+      {
+        onViewChange: (v) => hostViews.push(v),
+        onStatusChange: () => {},
+        onError: () => {},
+        onChangeHistory: (h) => hostHistoryEvents.push(h),
+      },
+      { cpuCount: 0, cpuDelayMs: 0, cpuScheduler: () => {} },
+    );
+    session.start();
+    const peer = peerInstances.at(-1)!;
+    peer.emit('open', peer.id);
+
+    const makeGuestConn = (peerId: string, sink: HostMessage[]) => ({
+      peer: peerId,
+      open: true,
+      handlers: {} as Record<string, Array<(...args: unknown[]) => void>>,
+      on(event: string, cb: (...args: unknown[]) => void) {
+        this.handlers[event] = this.handlers[event] ?? [];
+        this.handlers[event]!.push(cb);
+      },
+      emit(event: string, ...args: unknown[]) {
+        for (const cb of this.handlers[event] ?? []) cb(...args);
+      },
+      send(msg: unknown) {
+        sink.push(msg as HostMessage);
+      },
+      close() {
+        this.open = false;
+      },
+    });
+
+    // 未JOIN接続からの REQUEST_CHANGE_HISTORY は拒否される
+    const unjoinedSent: HostMessage[] = [];
+    const unjoinedConn = makeGuestConn('unjoined-peer', unjoinedSent);
+    peer.emit('connection', unjoinedConn);
+    unjoinedConn.emit('open');
+    unjoinedConn.emit('data', { kind: 'REQUEST_CHANGE_HISTORY', watch: true });
+    expect(
+      unjoinedSent.some(
+        (m) => m.kind === 'ERROR' && m.payload.code === 'UNAUTHORIZED_ACTION',
+      ),
+    ).toBe(true);
+
+    const g1 = makeGuestConn('hist-guest-1', g1Sent);
+    const g2 = makeGuestConn('hist-guest-2', g2Sent);
+    peer.emit('connection', g1);
+    g1.emit('open');
+    g1.emit('data', { kind: 'JOIN', playerName: 'ゲスト1' });
+    peer.emit('connection', g2);
+    g2.emit('open');
+    g2.emit('data', { kind: 'JOIN', playerName: 'ゲスト2' });
+
+    // 1. ロビー中のルール変更・重複設定のスキップ・CPU追加/削除・再追加
+    expect(session.updateRuleConfig({ redDoraPerFive: 4, tobi: false })).toBe(
+      true,
+    );
+    // 同じ値のみのパッチではノイズ履歴が増えない
+    const countAfterRule = session.getChangeHistory().length;
+    expect(session.updateRuleConfig({ redDoraPerFive: 4, tobi: false })).toBe(
+      true,
+    );
+    expect(session.getChangeHistory()).toHaveLength(countAfterRule);
+
+    expect(session.addCpu()).toBe(true); // CPU 1 (4人目)
+    expect(session.removeCpu('cpu-1')).toBe(true);
+    expect(session.addCpu()).toBe(true); // CPU 1 再追加で4人揃う
+    expect(session.startGame()).toBe(true);
+
+    const g1Id = hostViews.at(-1)!.players.find((p) => p.name === 'ゲスト1')!.playerId;
+    const g2Id = hostViews.at(-1)!.players.find((p) => p.name === 'ゲスト2')!.playerId;
+
+    // 2. ホストおよびゲスト1による //cheat 操作
+    expect(session.setSecretPeek(true)).toBe(true);
+    // 既に ON の状態で再度 true にしても重複記録されない
+    expect(session.setSecretPeek(true)).toBe(true);
+    expect(session.setSecretLuck('good', g2Id)).toBe(true);
+
+    g1.emit('data', { kind: 'SECRET_OPTION', peek: true, luck: 'god' });
+    // 不正な対象ID指定時はエラーとなり履歴が増えない
+    const countBeforeErr = session.getChangeHistory().length;
+    g1.emit('data', {
+      kind: 'SECRET_OPTION',
+      luck: 'god',
+      luckTargetPlayerId: 'missing-player',
+    });
+    expect(session.getChangeHistory()).toHaveLength(countBeforeErr);
+
+    // 3. ゲスト2が REQUEST_CHANGE_HISTORY(watch: true) を送ると全履歴を受け取る
+    g2Sent.length = 0;
+    g1Sent.length = 0;
+    g2.emit('data', { kind: 'REQUEST_CHANGE_HISTORY', watch: true });
+    const initialHistoryMsg = g2Sent.find(
+      (m): m is Extract<HostMessage, { kind: 'CHANGE_HISTORY' }> =>
+        m.kind === 'CHANGE_HISTORY',
+    );
+    expect(initialHistoryMsg).toBeDefined();
+    const history = initialHistoryMsg!.payload;
+    expect(history.map((e) => e.settingLabel)).toEqual([
+      'ルール設定「トビ終了」',
+      'ルール設定「赤ドラ」',
+      'CPUの追加',
+      'CPUの削除',
+      'CPUの追加',
+      '相手手牌の透視（Peek）',
+      'ゲスト2 の配牌・ツモ運（Luck）',
+      '相手手牌の透視（Peek）',
+      'ゲスト1 の配牌・ツモ運（Luck）',
+    ]);
+    expect(history[0]).toMatchObject({
+      category: 'settings',
+      kind: 'rule_config',
+      phaseLabel: 'ロビー',
+      beforeValue: 'ON',
+      afterValue: 'OFF',
+    });
+    expect(history[1]).toMatchObject({
+      category: 'settings',
+      kind: 'rule_config',
+      phaseLabel: 'ロビー',
+      beforeValue: '各1枚',
+      afterValue: '全5赤',
+    });
+    expect(history[7]).toMatchObject({
+      actorPlayerId: g1Id,
+      actorName: 'ゲスト1',
+      category: 'cheat',
+      kind: 'cheat_peek',
+      phaseLabel: '東1局',
+      beforeValue: 'OFF',
+      afterValue: 'ON',
+    });
+    expect(history[8]).toMatchObject({
+      actorPlayerId: g1Id,
+      actorName: 'ゲスト1',
+      category: 'cheat',
+      kind: 'cheat_luck',
+      targetName: 'ゲスト1',
+      beforeValue: '通常',
+      afterValue: '豪運',
+    });
+    // watch していない g1 にはプッシュされない
+    expect(g1Sent).toHaveLength(0);
+
+    // 4. watch 中の g2 へは以降のクリア・変更がリアルタイムでプッシュ配信される
+    g2Sent.length = 0;
+    g1.emit('data', { kind: 'SECRET_OPTION', clearAllLuck: true });
+    const g2Realtime = g2Sent
+      .filter(
+        (m): m is Extract<HostMessage, { kind: 'CHANGE_HISTORY' }> =>
+          m.kind === 'CHANGE_HISTORY',
+      )
+      .at(-1);
+    expect(g2Realtime).toBeDefined();
+    expect(g2Realtime!.payload.at(-1)).toMatchObject({
+      actorPlayerId: g1Id,
+      category: 'cheat',
+      kind: 'cheat_luck_reset',
+      afterValue: '全員 通常',
+    });
+    expect(hostHistoryEvents.at(-1)?.at(-1)?.kind).toBe('cheat_luck_reset');
+
+    // watch: false でリアルタイム監視が停止する
+    g2.emit('data', { kind: 'REQUEST_CHANGE_HISTORY', watch: false });
+    g2Sent.length = 0;
+    expect(session.setSecretLuck('god', g1Id)).toBe(true);
+    expect(
+      g2Sent.some((m) => m.kind === 'CHANGE_HISTORY'),
+    ).toBe(false);
+
+    // 5. 観戦者も REQUEST_CHANGE_HISTORY で履歴を閲覧できる
+    const spec = makeGuestConn('hist-spec', specSent);
+    peer.emit('connection', spec);
+    spec.emit('open');
+    spec.emit('data', {
+      kind: 'JOIN',
+      playerName: '観戦者',
+      preferSpectate: true,
+    });
+    specSent.length = 0;
+    spec.emit('data', { kind: 'REQUEST_CHANGE_HISTORY' });
+    const specHistoryMsg = specSent.find(
+      (m): m is Extract<HostMessage, { kind: 'CHANGE_HISTORY' }> =>
+        m.kind === 'CHANGE_HISTORY',
+    );
+    expect(specHistoryMsg?.payload.length).toBe(session.getChangeHistory().length);
+
+    // 6. ホスト引き継ぎ時も変更履歴・peek・luck が新ホストへ引き継がれる
+    g1Sent.length = 0;
+    expect(
+      session.transferHost(g1Id, { stayAsClient: true, destroyDelayMs: 0 }),
+    ).toBe(true);
+    const handoverMsg = g1Sent.find(
+      (m): m is Extract<HostMessage, { kind: 'HOST_HANDOVER' }> =>
+        m.kind === 'HOST_HANDOVER',
+    );
+    expect(handoverMsg).toBeDefined();
+    expect(handoverMsg!.payload.changeHistory?.at(-1)).toMatchObject({
+      category: 'settings',
+      kind: 'host_transfer',
+      targetName: 'ゲスト1',
+      afterValue: 'ゲスト1',
+    });
+
+    const migratedHost = new HostSession(
+      'ゲスト1',
+      handoverMsg!.payload.state.ruleConfig,
+      {
+        onViewChange: () => {},
+        onStatusChange: () => {},
+        onError: () => {},
+      },
+      {
+        cpuDelayMs: 0,
+        cpuScheduler: () => {},
+        initialSnapshot: handoverMsg!.payload,
+      },
+    );
+    expect(migratedHost.getChangeHistory()).toEqual(
+      handoverMsg!.payload.changeHistory,
+    );
+    expect(migratedHost.getSecretPeek()).toBe(true);
+    expect(migratedHost.getSecretLuck(g1Id)).toBe('god');
+    // 引き継ぎ直後に同じ値で setSecretPeek(true) を呼んでも重複記録されない
+    const beforeReapply = migratedHost.getChangeHistory().length;
+    expect(migratedHost.setSecretPeek(true)).toBe(true);
+    expect(migratedHost.getChangeHistory()).toHaveLength(beforeReapply);
+
+    migratedHost.destroy();
+    session.destroy();
+  });
+
+  it('//stop (clearAllCheat / stopAllSecretEffects) は全プレイヤーの Peek・Luck 効果を標準に戻し、全画面・履歴へ即時反映される', () => {
+    peerInstances.length = 0;
+    const hostViews: StateView[] = [];
+    const hostSecretStates: Array<{
+      peek: boolean;
+      luckByPlayer: Record<string, string>;
+    }> = [];
+    const g1Sent: HostMessage[] = [];
+    const g2Sent: HostMessage[] = [];
+    const specSent: HostMessage[] = [];
+
+    const session = new HostSession(
+      'ホスト',
+      { playerCount: 4, gameLength: 'tonpuu', responseTimeoutMs: 0 },
+      {
+        onViewChange: (v) => hostViews.push(v),
+        onStatusChange: () => {},
+        onError: () => {},
+        onSecretState: (s) => hostSecretStates.push(s),
+      },
+      { cpuCount: 1, cpuDelayMs: 0, cpuScheduler: () => {} },
+    );
+    session.start();
+    const peer = peerInstances.at(-1)!;
+    peer.emit('open', peer.id);
+
+    const makeGuestConn = (peerId: string, sink: HostMessage[]) => ({
+      peer: peerId,
+      open: true,
+      handlers: {} as Record<string, Array<(...args: unknown[]) => void>>,
+      on(event: string, cb: (...args: unknown[]) => void) {
+        this.handlers[event] = this.handlers[event] ?? [];
+        this.handlers[event]!.push(cb);
+      },
+      emit(event: string, ...args: unknown[]) {
+        for (const cb of this.handlers[event] ?? []) cb(...args);
+      },
+      send(msg: unknown) {
+        sink.push(msg as HostMessage);
+      },
+      close() {
+        this.open = false;
+      },
+    });
+
+    const g1 = makeGuestConn('stop-guest-1', g1Sent);
+    const g2 = makeGuestConn('stop-guest-2', g2Sent);
+    const spec = makeGuestConn('stop-spec', specSent);
+    peer.emit('connection', g1);
+    g1.emit('open');
+    g1.emit('data', { kind: 'JOIN', playerName: 'ゲスト1' });
+    peer.emit('connection', g2);
+    g2.emit('open');
+    g2.emit('data', { kind: 'JOIN', playerName: 'ゲスト2' });
+    expect(session.startGame()).toBe(true);
+
+    peer.emit('connection', spec);
+    spec.emit('open');
+    spec.emit('data', {
+      kind: 'JOIN',
+      playerName: '観戦者',
+      preferSpectate: true,
+    });
+
+    const latestHost = hostViews.at(-1)!;
+    const hostId = latestHost.hostPlayerId;
+    const g1Id = latestHost.players.find((p) => p.name === 'ゲスト1')!.playerId;
+    const g2Id = latestHost.players.find((p) => p.name === 'ゲスト2')!.playerId;
+    const cpuId = latestHost.players.find((p) => isCpuPlayerId(p.playerId))!.playerId;
+
+    // ホスト・ゲスト1がそれぞれ Peek ON、さらに複数プレイヤーに Luck を設定する
+    expect(session.setSecretPeek(true)).toBe(true);
+    expect(session.setSecretLuck('god', hostId)).toBe(true);
+    expect(session.setSecretLuck('good', cpuId)).toBe(true);
+    g1.emit('data', { kind: 'SECRET_OPTION', peek: true, luck: 'god' });
+    g2.emit('data', { kind: 'SECRET_OPTION', luck: 'good', luckTargetPlayerId: g2Id });
+    g2.emit('data', { kind: 'REQUEST_CHANGE_HISTORY', watch: true });
+
+    expect(Object.keys(hostViews.at(-1)?.round?.revealedHands ?? {})).toHaveLength(3);
+
+    // 観戦者からの clearAllCheat は拒否され、効果は消えない
+    specSent.length = 0;
+    spec.emit('data', { kind: 'SECRET_OPTION', clearAllCheat: true });
+    expect(
+      specSent.some(
+        (m) => m.kind === 'ERROR' && m.payload.code === 'UNAUTHORIZED_ACTION',
+      ),
+    ).toBe(true);
+    expect(session.getSecretPeek()).toBe(true);
+    expect(session.getSecretLuck(g1Id)).toBe('god');
+
+    // ゲスト2が //stop (clearAllCheat: true) を送信すると、全員の Peek と Luck が標準に戻る
+    g1Sent.length = 0;
+    g2Sent.length = 0;
+    const hostViewCountBefore = hostViews.length;
+    g2.emit('data', { kind: 'SECRET_OPTION', clearAllCheat: true });
+
+    // ホスト自身の Peek 解除と Luck リセットが即反映される
+    expect(session.getSecretPeek()).toBe(false);
+    expect(session.getSecretLuck(hostId)).toBe('normal');
+    expect(session.getSecretLuck(g1Id)).toBe('normal');
+    expect(session.getSecretLuck(g2Id)).toBe('normal');
+    expect(session.getSecretLuck(cpuId)).toBe('normal');
+    expect(hostViews.length).toBeGreaterThan(hostViewCountBefore);
+    expect(hostViews.at(-1)?.round?.revealedHands).toEqual({});
+    expect(hostSecretStates.at(-1)).toEqual({
+      peek: false,
+      luckByPlayer: {
+        [hostId]: 'normal',
+        [g1Id]: 'normal',
+        [g2Id]: 'normal',
+        [cpuId]: 'normal',
+      },
+    });
+
+    // 元々 Peek ON だったゲスト1にも即座に透視解除済みの STATE_VIEW と SECRET_STATE が届く
+    const g1StoppedViews = g1Sent.filter(
+      (m): m is Extract<HostMessage, { kind: 'STATE_VIEW' }> =>
+        m.kind === 'STATE_VIEW',
+    );
+    expect(g1StoppedViews).toHaveLength(1);
+    expect(g1StoppedViews[0]!.payload.round?.revealedHands).toEqual({});
+    const g1StoppedSecret = g1Sent.filter(
+      (m): m is Extract<HostMessage, { kind: 'SECRET_STATE' }> =>
+        m.kind === 'SECRET_STATE',
+    );
+    expect(g1StoppedSecret).toHaveLength(1);
+    expect(g1StoppedSecret[0]!.payload).toEqual({
+      peek: false,
+      luckByPlayer: {
+        [hostId]: 'normal',
+        [g1Id]: 'normal',
+        [g2Id]: 'normal',
+        [cpuId]: 'normal',
+      },
+    });
+
+    // 元々 Peek OFF だった実行者(g2)には STATE_VIEW は飛ばず、SECRET_STATE 1回と CHANGE_HISTORY が届く
+    expect(g2Sent.filter((m) => m.kind === 'STATE_VIEW')).toHaveLength(0);
+    expect(g2Sent.filter((m) => m.kind === 'SECRET_STATE')).toHaveLength(1);
+    const stopHistoryMsg = g2Sent.find(
+      (m): m is Extract<HostMessage, { kind: 'CHANGE_HISTORY' }> =>
+        m.kind === 'CHANGE_HISTORY',
+    );
+    expect(stopHistoryMsg?.payload.at(-1)).toMatchObject({
+      actorPlayerId: g2Id,
+      actorName: 'ゲスト2',
+      category: 'cheat',
+      kind: 'cheat_stop',
+      afterValue: '全員 標準（Peek OFF / Luck 通常）',
+    });
+
+    // すでに全員標準の状態で再度 stopAllSecretEffects() を呼んでも履歴に重複ノイズが積まれない
+    const historyLenAfterStop = session.getChangeHistory().length;
+    expect(session.stopAllSecretEffects()).toBe(true);
+    expect(session.getChangeHistory()).toHaveLength(historyLenAfterStop);
 
     session.destroy();
   });
